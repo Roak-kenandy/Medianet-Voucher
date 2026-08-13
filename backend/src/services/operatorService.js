@@ -4,6 +4,7 @@ import { AppError } from '../utils/errors.js';
 import { logAudit } from './auditService.js';
 import { crmService } from './crmService.js';
 import { buildDailyTrend } from '../utils/chartData.js';
+import { paginationSql } from '../utils/pagination.js';
 
 export async function getOperatorStats(operatorId) {
   const [operator] = await query(
@@ -70,7 +71,7 @@ export async function getOperatorStats(operatorId) {
 }
 
 export async function listAccounts(operatorId, { page = 1, limit = 20, search = '' } = {}) {
-  const offset = (page - 1) * limit;
+  const { page: pageNum, limit: limitNum, clause } = paginationSql(page, limit);
   const filters = ['operator_id = ?'];
   const params = [operatorId];
 
@@ -87,8 +88,8 @@ export async function listAccounts(operatorId, { page = 1, limit = 20, search = 
      FROM voucher_accounts
      ${where}
      ORDER BY created_at DESC
-     LIMIT ? OFFSET ?`,
-    [...params, limit, offset]
+     ${clause}`,
+    params
   );
 
   const [countRow] = await query(
@@ -96,13 +97,15 @@ export async function listAccounts(operatorId, { page = 1, limit = 20, search = 
     params
   );
 
+  const total = Number(countRow.total) || 0;
+
   return {
     accounts,
     pagination: {
-      page,
-      limit,
-      total: countRow.total,
-      totalPages: Math.ceil(countRow.total / limit) || 1,
+      page: pageNum,
+      limit: limitNum,
+      total,
+      totalPages: Math.ceil(total / limitNum) || 1,
     },
   };
 }

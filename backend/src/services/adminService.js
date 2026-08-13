@@ -4,6 +4,7 @@ import { query, getConnection } from '../db/pool.js';
 import { AppError } from '../utils/errors.js';
 import { logAudit } from './auditService.js';
 import { buildDailyTrend } from '../utils/chartData.js';
+import { paginationSql } from '../utils/pagination.js';
 
 export async function getAdminStats() {
   const [stats] = await query(`
@@ -70,7 +71,7 @@ export async function getAdminStats() {
 }
 
 export async function listAdmins({ page = 1, limit = 20, search = '' } = {}) {
-  const offset = (page - 1) * limit;
+  const { page: pageNum, limit: limitNum, clause } = paginationSql(page, limit);
   const filters = [];
   const params = [];
 
@@ -87,8 +88,8 @@ export async function listAdmins({ page = 1, limit = 20, search = '' } = {}) {
      FROM admins
      ${where}
      ORDER BY created_at DESC
-     LIMIT ? OFFSET ?`,
-    [...params, limit, offset]
+     ${clause}`,
+    params
   );
 
   const [countRow] = await query(
@@ -96,13 +97,15 @@ export async function listAdmins({ page = 1, limit = 20, search = '' } = {}) {
     params
   );
 
+  const total = Number(countRow.total) || 0;
+
   return {
     admins,
     pagination: {
-      page,
-      limit,
-      total: countRow.total,
-      totalPages: Math.ceil(countRow.total / limit) || 1,
+      page: pageNum,
+      limit: limitNum,
+      total,
+      totalPages: Math.ceil(total / limitNum) || 1,
     },
   };
 }
@@ -179,7 +182,7 @@ export async function updateAdminStatus(actorAdminId, targetAdminId, isActive, r
 }
 
 export async function listOperators({ page = 1, limit = 20, search = '' } = {}) {
-  const offset = (page - 1) * limit;
+  const { page: pageNum, limit: limitNum, clause } = paginationSql(page, limit);
   const filters = [];
   const params = [];
 
@@ -200,8 +203,8 @@ export async function listOperators({ page = 1, limit = 20, search = '' } = {}) 
      JOIN admins a ON a.id = o.admin_id
      ${where}
      ORDER BY o.created_at DESC
-     LIMIT ? OFFSET ?`,
-    [...params, limit, offset]
+     ${clause}`,
+    params
   );
 
   const [countRow] = await query(
@@ -212,13 +215,15 @@ export async function listOperators({ page = 1, limit = 20, search = '' } = {}) 
     params
   );
 
+  const total = Number(countRow.total) || 0;
+
   return {
     operators,
     pagination: {
-      page,
-      limit,
-      total: countRow.total,
-      totalPages: Math.ceil(countRow.total / limit) || 1,
+      page: pageNum,
+      limit: limitNum,
+      total,
+      totalPages: Math.ceil(total / limitNum) || 1,
     },
   };
 }
