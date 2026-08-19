@@ -18,9 +18,41 @@ CREATE TABLE IF NOT EXISTS packages (
   CONSTRAINT fk_packages_admin FOREIGN KEY (created_by_admin_id) REFERENCES admins(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-ALTER TABLE operators
-  ADD COLUMN IF NOT EXISTS package_id INT UNSIGNED NULL AFTER package_type,
-  ADD COLUMN IF NOT EXISTS notes TEXT NULL AFTER account_quota;
+SET @col_package_id_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'operators'
+    AND COLUMN_NAME = 'package_id'
+);
+
+SET @add_package_id := IF(
+  @col_package_id_exists = 0,
+  'ALTER TABLE operators ADD COLUMN package_id INT UNSIGNED NULL AFTER package_type',
+  'SELECT 1'
+);
+
+PREPARE stmt_add_package_id FROM @add_package_id;
+EXECUTE stmt_add_package_id;
+DEALLOCATE PREPARE stmt_add_package_id;
+
+SET @col_notes_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'operators'
+    AND COLUMN_NAME = 'notes'
+);
+
+SET @add_notes := IF(
+  @col_notes_exists = 0,
+  'ALTER TABLE operators ADD COLUMN notes TEXT NULL AFTER account_quota',
+  'SELECT 1'
+);
+
+PREPARE stmt_add_notes FROM @add_notes;
+EXECUTE stmt_add_notes;
+DEALLOCATE PREPARE stmt_add_notes;
 
 SET @fk_operators_package_exists := (
   SELECT COUNT(*)
