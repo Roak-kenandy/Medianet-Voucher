@@ -7,8 +7,9 @@ import TableToolbar from '../../components/TableToolbar';
 import TablePagination from '../../components/TablePagination';
 import { adminApi } from '../../api/client';
 import { useToast } from '../../context/ToastContext';
-import './admin-shared.css';
 import { useAuth } from '../../context/AuthContext';
+import { hasPermission, ROLE_LABELS } from '../../constants/permissions';
+import './admin-shared.css';
 
 function StatusBadge({ active }) {
   return (
@@ -29,7 +30,7 @@ export default function AdminsTab() {
   const [modalOpen, setModalOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(null);
   const menuAnchorRef = useRef(null);
-  const [form, setForm] = useState({ name: '', email: '', password: '' });
+  const [form, setForm] = useState({ name: '', email: '', password: '', role: 'sales' });
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [confirmTarget, setConfirmTarget] = useState(null);
@@ -55,8 +56,11 @@ export default function AdminsTab() {
     setPage(1);
   };
 
+  const canCreateAdmin = hasPermission(user?.role, 'createAdmin');
+  const canManageAdminStatus = hasPermission(user?.role, 'manageAdminStatus');
+
   const resetForm = () => {
-    setForm({ name: '', email: '', password: '' });
+    setForm({ name: '', email: '', password: '', role: 'sales' });
     setError('');
   };
 
@@ -69,7 +73,7 @@ export default function AdminsTab() {
       await adminApi.createAdmin(form);
       setModalOpen(false);
       resetForm();
-      toast.success('Admin created successfully');
+      toast.success('Staff account created successfully');
       loadAdmins();
     } catch (err) {
       setError(err.message || 'Failed to create admin');
@@ -108,10 +112,12 @@ export default function AdminsTab() {
   return (
     <>
       <div className="tab-toolbar">
-        <button className="btn btn-primary" onClick={() => { resetForm(); setModalOpen(true); }}>
-          <Plus size={18} />
-          Create Admin
-        </button>
+        {canCreateAdmin && (
+          <button className="btn btn-primary" onClick={() => { resetForm(); setModalOpen(true); }}>
+            <Plus size={18} />
+            Create Staff Account
+          </button>
+        )}
       </div>
 
       <div className="card">
@@ -129,14 +135,14 @@ export default function AdminsTab() {
             <div className="empty-state">
               <Shield className="empty-state-icon" size={48} />
               <p className="empty-state-title">
-                {search ? 'No admins match your search' : 'No admins found'}
+                {search ? 'No staff match your search' : 'No staff accounts found'}
               </p>
-              <p>{search ? 'Try a different search term' : 'Create another admin account to share access'}</p>
-              {!search && (
+              <p>{search ? 'Try a different search term' : 'Create staff accounts to share portal access'}</p>
+              {!search && canCreateAdmin && (
                 <div className="empty-state-action">
                   <button className="btn btn-primary" onClick={() => { resetForm(); setModalOpen(true); }}>
                     <Plus size={18} />
-                    Create Admin
+                    Create Staff Account
                   </button>
                 </div>
               )}
@@ -149,6 +155,7 @@ export default function AdminsTab() {
                   <tr>
                     <th>Name</th>
                     <th>Email</th>
+                    <th>Role</th>
                     <th>Status</th>
                     <th>Created</th>
                     <th>Actions</th>
@@ -164,10 +171,15 @@ export default function AdminsTab() {
                         )}
                       </td>
                       <td>{admin.email}</td>
+                      <td>
+                        <span className="badge badge-neutral">
+                          {ROLE_LABELS[admin.role] || admin.role || 'Admin'}
+                        </span>
+                      </td>
                       <td><StatusBadge active={admin.is_active} /></td>
                       <td>{new Date(admin.created_at).toLocaleDateString()}</td>
                       <td>
-                        {user?.id !== admin.id && (
+                        {user?.id !== admin.id && canManageAdminStatus && (
                           <div>
                             <button
                               ref={menuOpen === admin.id ? menuAnchorRef : undefined}
@@ -203,16 +215,31 @@ export default function AdminsTab() {
               total={pagination.total}
               limit={pagination.limit}
               onPageChange={setPage}
-              itemLabel="admins"
+              itemLabel="staff"
             />
             </>
           )}
         </div>
       </div>
 
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="Create Admin">
+      <Modal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title="Create Staff Account"
+        wide
+        footer={(
+          <>
+            <button type="button" className="btn btn-secondary" onClick={() => setModalOpen(false)}>
+              Cancel
+            </button>
+            <button type="submit" form="create-admin-form" className="btn btn-primary" disabled={submitting}>
+              {submitting ? 'Creating...' : 'Create Account'}
+            </button>
+          </>
+        )}
+      >
         {error && <div className="alert alert-error">{error}</div>}
-        <form onSubmit={handleCreate}>
+        <form id="create-admin-form" onSubmit={handleCreate}>
           <div className="form-group">
             <label className="form-label">Full Name</label>
             <input
@@ -230,9 +257,22 @@ export default function AdminsTab() {
               className="form-input"
               value={form.email}
               onChange={(e) => setForm({ ...form, email: e.target.value })}
-              placeholder="admin@medianet.mv"
+              placeholder="staff@medianet.mv"
               required
             />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Role</label>
+            <select
+              className="form-input"
+              value={form.role}
+              onChange={(e) => setForm({ ...form, role: e.target.value })}
+              required
+            >
+              <option value="admin">Admin — full access</option>
+              <option value="sales">Sales — all except creating staff</option>
+              <option value="finance">Finance — all except creating packages</option>
+            </select>
           </div>
           <div className="form-group">
             <label className="form-label">Password</label>
@@ -248,14 +288,6 @@ export default function AdminsTab() {
             <p className="form-hint">
               Must be at least 12 characters with uppercase, lowercase, number, and special character.
             </p>
-          </div>
-          <div className="modal-footer" style={{ padding: '16px 0 0', border: 'none' }}>
-            <button type="button" className="btn btn-secondary" onClick={() => setModalOpen(false)}>
-              Cancel
-            </button>
-            <button type="submit" className="btn btn-primary" disabled={submitting}>
-              {submitting ? 'Creating...' : 'Create Admin'}
-            </button>
           </div>
         </form>
       </Modal>

@@ -16,23 +16,29 @@ export default function ConfirmModal({
   };
 
   return (
-    <Modal open={open} onClose={onClose} title={title}>
-      <p style={{ fontSize: 14, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 0 }}>
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={title}
+      footer={(
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose} disabled={loading}>
+            {cancelLabel}
+          </button>
+          <button
+            type="button"
+            className={`btn ${variant === 'danger' ? 'btn-danger' : 'btn-primary'}`}
+            onClick={handleConfirm}
+            disabled={loading}
+          >
+            {loading ? 'Processing...' : confirmLabel}
+          </button>
+        </>
+      )}
+    >
+      <p style={{ fontSize: 14, color: 'var(--color-text-secondary)', lineHeight: 1.6, margin: 0 }}>
         {message}
       </p>
-      <div className="modal-footer" style={{ padding: '20px 0 0', border: 'none' }}>
-        <button type="button" className="btn btn-secondary" onClick={onClose} disabled={loading}>
-          {cancelLabel}
-        </button>
-        <button
-          type="button"
-          className={`btn ${variant === 'danger' ? 'btn-danger' : 'btn-primary'}`}
-          onClick={handleConfirm}
-          disabled={loading}
-        >
-          {loading ? 'Processing...' : confirmLabel}
-        </button>
-      </div>
     </Modal>
   );
 }

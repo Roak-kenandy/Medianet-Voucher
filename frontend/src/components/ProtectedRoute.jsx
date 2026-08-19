@@ -1,5 +1,6 @@
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { getHomePathForRole } from '../constants/permissions';
 
 export default function ProtectedRoute({ children, allowedRoles }) {
   const { user, loading } = useAuth();
@@ -19,8 +20,7 @@ export default function ProtectedRoute({ children, allowedRoles }) {
   }
 
   if (allowedRoles && !allowedRoles.includes(user.role)) {
-    const redirect = user.role === 'admin' ? '/admin' : '/operator';
-    return <Navigate to={redirect} replace />;
+    return <Navigate to={getHomePathForRole(user.role)} replace />;
   }
 
   return children;

@@ -8,6 +8,8 @@ export function generateRefreshToken() {
   return crypto.randomBytes(64).toString('hex');
 }
 
+import { isStaffRole } from '../constants/permissions.js';
+
 export function sanitizeUser(user, role) {
   const base = {
     id: user.id,
@@ -16,11 +18,24 @@ export function sanitizeUser(user, role) {
     role,
   };
 
+  if (isStaffRole(role)) {
+    return base;
+  }
+
   if (role === 'operator') {
+    const packages = (user.operator_packages || []).map((pkg) => ({
+      id: pkg.id,
+      name: pkg.name,
+    }));
+    const packageNames = packages.map((pkg) => pkg.name);
     return {
       ...base,
       clientName: user.client_name,
-      packageType: user.package_type,
+      packageType: user.package_name || user.package_type,
+      packageNames,
+      packages,
+      packageIds: packages.map((pkg) => pkg.id),
+      packageId: user.package_id,
       accountQuota: user.account_quota,
       accountsCreated: user.accounts_created,
       remainingQuota: Math.max(0, user.account_quota - user.accounts_created),

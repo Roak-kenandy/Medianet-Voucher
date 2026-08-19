@@ -9,6 +9,8 @@ import DonutChart from '../../components/charts/DonutChart';
 import BarChart from '../../components/charts/BarChart';
 import HorizontalBarChart from '../../components/charts/HorizontalBarChart';
 import { adminApi } from '../../api/client';
+import { useAuth } from '../../context/AuthContext';
+import { ROLE_LABELS } from '../../constants/permissions';
 
 const STATUS_ORDER = ['created', 'pending', 'processing', 'failed'];
 
@@ -34,6 +36,7 @@ function StatCard({ label, value, meta, icon: Icon }) {
 }
 
 export default function AdminDashboard() {
+  const { user } = useAuth();
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -56,10 +59,12 @@ export default function AdminDashboard() {
   const activityTotal = charts?.activityTrend?.reduce((sum, row) => sum + row.count, 0) || 0;
 
   return (
-    <Layout sidebar={<Sidebar role="admin" />} header={<Header />}>
+    <Layout sidebar={<Sidebar role={user?.role || 'admin'} />} header={<Header />}>
       <div className="page-header">
         <h1 className="page-title">Dashboard</h1>
-        <p className="page-subtitle">{today} · Admin overview</p>
+        <p className="page-subtitle">
+          {today} · {ROLE_LABELS[user?.role] || 'Admin'} overview
+        </p>
       </div>
 
       {loading ? (

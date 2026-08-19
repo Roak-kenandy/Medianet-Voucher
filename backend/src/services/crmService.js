@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { config } from '../config/index.js';
 import { AppError } from '../utils/errors.js';
-import { getPlanByPackageType } from '../constants/packages.js';
+import { getPlanByPackageId } from './packageService.js';
 
 function normalizePhone(phoneNumber) {
   const digits = String(phoneNumber || '').replace(/\D/g, '');
@@ -41,16 +41,134 @@ class CRMService {
     this.mobileTagName = 'OTT';
   }
 
-  resolvePlan(packageType) {
-    const plan = getPlanByPackageType(packageType);
+  async resolvePlan(packageId) {
+    const plan = await getPlanByPackageId(packageId);
     if (!plan) {
       throw new AppError(
-        `Package "${packageType}" is not configured for CRM provisioning.`,
+        'Selected package is not configured for CRM provisioning.',
         400,
         'PACKAGE_NOT_CONFIGURED'
       );
     }
     return plan;
+  }
+
+  async resolvePlans(packageIds = []) {
+    const uniqueIds = [...new Set(packageIds.map((id) => Number(id)).filter(Boolean))];
+    if (!uniqueIds.length) {
+      throw new AppError('At least one package is required', 400, 'PACKAGE_REQUIRED');
+    }
+
+    const plans = [];
+    for (const packageId of uniqueIds) {
+      plans.push(await this.resolvePlan(packageId));
+    }
+    return plans;
+  }
+
+  async fetchOttProductCatalog() {
+    this.assertConfigured();
+
+    const ottProducts = await this.fetchAllProductsByTag(this.mobileTagName);
+
+    const entries = await Promise.all(
+      ottProducts.map(async (product) => {
+        const prices = await this.fetchOttSegmentPrices(product.id);
+        if (!prices.length) return null;
+
+        return {
+          productId: product.id,
+          name: product.name,
+          sku: product.sku || null,
+          description: product.description || null,
+          tags: (product.tags || []).map((tag) => tag.name),
+          prices,
+        };
+      })
+    );
+
+    return entries.filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** @deprecated alias kept for route compatibility */
+  async fetchServiceRecommendations() {
+    return this.fetchOttProductCatalog();
+  }
+
+  productHasTag(product, tagName) {
+    return (product.tags || []).some((tag) => tag.name === tagName);
+  }
+
+  priceGroupHasOttSegment(priceGroup) {
+    return (priceGroup.segments || []).some((segment) => segment.name === this.mobileTagName);
+  }
+
+  async fetchAllProductsByTag(tagName) {
+    const pageSize = 100;
+    let page = 1;
+    let hasMore = true;
+    const matched = [];
+
+    while (hasMore) {
+      const params = new URLSearchParams({
+        is_variant: 'false',
+        size: String(pageSize),
+        page: String(page),
+        include_tags: 'true',
+        include_total: 'true',
+      });
+
+      const response = await fetch(`${this.baseUrl}/products?${params}`, {
+        method: 'GET',
+        headers: this.headers,
+      });
+
+      const data = await this.handleResponse(response, 'Fetch CRM products');
+      const content = data.content || [];
+
+      for (const product of content) {
+        if (this.productHasTag(product, tagName)) {
+          matched.push(product);
+        }
+      }
+
+      hasMore = Boolean(data.paging?.has_more);
+      page += 1;
+
+      if (page > 100) break;
+    }
+
+    return matched;
+  }
+
+  async fetchOttSegmentPrices(productId) {
+    const response = await fetch(`${this.baseUrl}/products/${productId}/prices`, {
+      method: 'GET',
+      headers: this.headers,
+    });
+
+    const priceGroups = await this.handleResponse(response, 'Fetch CRM product prices');
+    const groups = Array.isArray(priceGroups) ? priceGroups : [];
+    const prices = [];
+
+    for (const group of groups) {
+      if (!this.priceGroupHasOttSegment(group)) continue;
+
+      for (const priceEntry of group.prices || []) {
+        prices.push({
+          priceTermId: priceEntry.id,
+          price: Number(priceEntry.price) || 0,
+          currencyCode: priceEntry.currency_code || this.currencyCode,
+          isDefault: Boolean(group.is_default),
+          label: group.label || null,
+          segmentName: this.mobileTagName,
+          billingModel: group.price_terms?.billing_model || null,
+          billingPeriod: group.price_terms?.billing_period || null,
+        });
+      }
+    }
+
+    return prices;
   }
 
   get headers() {
@@ -366,6 +484,60 @@ class CRMService {
     }
   }
 
+  getServiceProductId(service) {
+    return service?.product?.id || service?.product_id || null;
+  }
+
+  extractServicesFromPayload(data = {}, plans = []) {
+    const productIds = new Set(plans.map((plan) => plan.product_id));
+    const candidates = [];
+
+    if (Array.isArray(data.content)) candidates.push(...data.content);
+    if (Array.isArray(data.services)) candidates.push(...data.services);
+    if (data.id && this.getServiceProductId(data)) candidates.push(data);
+
+    return candidates.filter((service) => {
+      const productId = this.getServiceProductId(service);
+      return productId && productIds.has(productId) && service.id;
+    });
+  }
+
+  async resolveServicesForDeviceAssignment(contactId, plans = [], subscriptionCreateData = null) {
+    const productIds = plans.map((plan) => plan.product_id);
+    const expectedCount = productIds.length;
+
+    const fromCreateResponse = this.extractServicesFromPayload(subscriptionCreateData, plans);
+    if (fromCreateResponse.length >= expectedCount) {
+      return fromCreateResponse;
+    }
+
+    const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    for (let attempt = 1; attempt <= 8; attempt += 1) {
+      const servicesData = await this.fetchContactServices(contactId);
+      const matched = (servicesData.content || []).filter((service) =>
+        productIds.includes(this.getServiceProductId(service))
+      );
+
+      if (matched.length >= expectedCount) {
+        return matched;
+      }
+
+      await delay(350 * attempt);
+    }
+
+    const servicesData = await this.fetchContactServices(contactId);
+    const matched = (servicesData.content || []).filter((service) =>
+      productIds.includes(this.getServiceProductId(service))
+    );
+
+    if (!matched.length) {
+      throw new Error('No CRM services found to assign devices');
+    }
+
+    return matched;
+  }
+
   async fetchContactServices(contactId, subscriptionId = null) {
     let url = `${this.baseUrl}/contacts/${contactId}/services?size=100&page=1&include_future_info=true`;
     if (subscriptionId) {
@@ -395,13 +567,16 @@ class CRMService {
     return this.handleResponse(response, `Assign devices to service ${serviceId}`);
   }
 
-  async assignDevicesToServices(contactId, deviceIds, subscriptionId = null) {
-    const servicesData = await this.fetchContactServices(contactId, subscriptionId);
-    const services = servicesData.content || [];
-
-    if (!services.length) {
-      throw new Error('No CRM services found to assign devices');
-    }
+  async assignDevicesToServices(
+    contactId,
+    deviceIds,
+    { plans = [], subscriptionCreateData = null } = {}
+  ) {
+    const services = await this.resolveServicesForDeviceAssignment(
+      contactId,
+      plans,
+      subscriptionCreateData
+    );
 
     const results = [];
 
@@ -409,6 +584,7 @@ class CRMService {
       const assigned = await this.assignDevicesToService(service.id, deviceIds);
       results.push({
         serviceId: service.id,
+        productId: this.getServiceProductId(service),
         devices: assigned,
       });
     }
@@ -416,7 +592,12 @@ class CRMService {
     return results;
   }
 
-  async addSubscriptionDevice(subscriptionId, deviceIds, contactId) {
+  async addSubscriptionDevice(
+    subscriptionId,
+    deviceIds,
+    contactId,
+    { plans = [], subscriptionCreateData = null } = {}
+  ) {
     const response = await fetch(`${this.baseUrl}/subscriptions/${subscriptionId}/devices`, {
       method: 'POST',
       headers: this.headers,
@@ -426,13 +607,16 @@ class CRMService {
     const data = await this.handleResponse(response, 'Add subscription device');
 
     if (data.id) {
-      return this.assignDevicesToServices(contactId, deviceIds, subscriptionId);
+      return this.assignDevicesToServices(contactId, deviceIds, {
+        plans,
+        subscriptionCreateData,
+      });
     }
 
     throw new Error('Failed to link device to subscription');
   }
 
-  async getAllowedDevices(subscriptionId, contactId) {
+  async getAllowedDevices(subscriptionId, contactId, { plans = [], subscriptionCreateData = null } = {}) {
     let devices = [];
     let source = 'allowed_devices';
 
@@ -484,32 +668,46 @@ class CRMService {
       const assignments = await this.addSubscriptionDevice(
         subscriptionId,
         deviceIds,
-        contactId
+        contactId,
+        { plans, subscriptionCreateData }
       );
       return { deviceIds, assignments };
     }
 
-    const assignments = await this.assignDevicesToServices(
-      contactId,
-      deviceIds,
-      subscriptionId
-    );
+    const assignments = await this.assignDevicesToServices(contactId, deviceIds, {
+      plans,
+      subscriptionCreateData,
+    });
     return { deviceIds, assignments };
   }
 
-  async setupSubscriptionDevices(contactId, subscriptionId, preferredDeviceId = null) {
+  async setupSubscriptionDevices(
+    contactId,
+    subscriptionId,
+    preferredDeviceId = null,
+    { plans = [], subscriptionCreateData = null } = {}
+  ) {
     if (preferredDeviceId) {
       const deviceIds = [{ device_id: preferredDeviceId }];
-      await this.addSubscriptionDevice(subscriptionId, deviceIds, contactId);
+      await this.addSubscriptionDevice(subscriptionId, deviceIds, contactId, {
+        plans,
+        subscriptionCreateData,
+      });
       return { deviceIds };
     }
 
-    let result = await this.getAllowedDevices(subscriptionId, contactId);
+    let result = await this.getAllowedDevices(subscriptionId, contactId, {
+      plans,
+      subscriptionCreateData,
+    });
 
     if (!result.deviceIds.length) {
       const device = await this.createDevice(contactId);
       const deviceIds = [{ device_id: device.id }];
-      await this.addSubscriptionDevice(subscriptionId, deviceIds, contactId);
+      await this.addSubscriptionDevice(subscriptionId, deviceIds, contactId, {
+        plans,
+        subscriptionCreateData,
+      });
       return { deviceIds };
     }
 
@@ -541,7 +739,8 @@ class CRMService {
       deviceSetup = await this.setupSubscriptionDevices(
         contactId,
         subscriptionDetails.subscription_id,
-        preferredDeviceId
+        preferredDeviceId,
+        { plans, subscriptionCreateData: subscription.data }
       );
     }
 
@@ -552,8 +751,8 @@ class CRMService {
     };
   }
 
-  async registerNewUser(phoneNumber, fullName, packageType) {
-    const plan = this.resolvePlan(packageType);
+  async registerNewUser(phoneNumber, fullName, packageIds) {
+    const plans = await this.resolvePlans(packageIds);
     const { firstName, lastName } = splitFullName(fullName);
     const contact = await this.createContact(firstName, lastName, phoneNumber);
     const device = await this.createDevice(contact.id);
@@ -561,7 +760,7 @@ class CRMService {
     const subscription = await this.setupSubscription(
       contact.id,
       account.id,
-      [plan],
+      plans,
       device.id
     );
 
@@ -576,9 +775,9 @@ class CRMService {
     };
   }
 
-  async addSubscriptionForExisting(contactId, accountId, packageType) {
-    const plan = this.resolvePlan(packageType);
-    const subscription = await this.setupSubscription(contactId, accountId, [plan]);
+  async addSubscriptionForExisting(contactId, accountId, packageIds) {
+    const plans = await this.resolvePlans(packageIds);
+    const subscription = await this.setupSubscription(contactId, accountId, plans);
 
     return {
       contactId,
@@ -662,43 +861,19 @@ class CRMService {
   }
 
   /**
-   * Main entry: provision OTT ENTERTAINMENT (1y) for a phone number.
-   * - Rejects if an active subscription already exists
-   * - Adds subscription if contact/account exist without active subscription
-   * - Full registration if no OTT contact exists
+   * Main entry: provision OTT packages for a phone number.
+   * Always creates a new CRM contact, account, device, and subscription(s).
    */
-  async provisionOttAccount(phoneNumber, fullName, packageType) {
+  async provisionOttAccount(phoneNumber, fullName, packageIds) {
     this.assertConfigured();
-    this.resolvePlan(packageType);
+    await this.resolvePlans(packageIds);
 
     const normalizedPhone = normalizePhone(phoneNumber);
     if (!normalizedPhone) {
       throw new AppError('Phone number is required', 400, 'VALIDATION_ERROR');
     }
 
-    const ottRows = await this.getOttContactDetails(normalizedPhone);
-
-    if (this.hasActiveOttSubscription(ottRows)) {
-      throw new AppError(
-        'This phone number already has an active OTT subscription and cannot be registered again.',
-        409,
-        'SUBSCRIPTION_EXISTS'
-      );
-    }
-
-    if (!ottRows.length) {
-      return this.registerNewUser(normalizedPhone, fullName, packageType);
-    }
-
-    const contactId = ottRows[0].contact_id;
-    let accountId = ottRows.find((row) => row.account_id)?.account_id || null;
-
-    if (!accountId) {
-      const account = await this.createAccount(contactId);
-      accountId = account.id;
-    }
-
-    return this.addSubscriptionForExisting(contactId, accountId, packageType);
+    return this.registerNewUser(normalizedPhone, fullName, packageIds);
   }
 }
 

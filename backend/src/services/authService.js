@@ -10,25 +10,52 @@ import {
   sanitizeUser,
 } from '../utils/crypto.js';
 import { logAudit } from './auditService.js';
+import { getOperatorPackages } from './packageService.js';
+
+import { isStaffRole } from '../constants/permissions.js';
 
 const REFRESH_COOKIE = 'refresh_token';
 
 function getTableForRole(role) {
-  return role === 'admin' ? 'admins' : 'operators';
+  if (role === 'operator') return 'operators';
+  if (isStaffRole(role) || role === 'admin') return 'admins';
+  return 'operators';
 }
 
-async function findUserByEmail(role, email) {
-  const table = getTableForRole(role);
+function getRefreshUserType(role) {
+  return role === 'operator' ? 'operator' : 'admin';
+}
+
+function resolveStaffRole(user) {
+  return user?.role || 'admin';
+}
+
+async function findStaffByEmail(email) {
   const rows = await query(
-    `SELECT * FROM ${table} WHERE email = ? AND is_active = 1 LIMIT 1`,
+    `SELECT * FROM admins WHERE email = ? AND is_active = 1 LIMIT 1`,
     [email.toLowerCase().trim()]
   );
   return rows[0] || null;
 }
 
 export async function findUserById(role, id) {
-  const table = getTableForRole(role);
-  const rows = await query(`SELECT * FROM ${table} WHERE id = ? LIMIT 1`, [id]);
+  if (role === 'operator') {
+    const rows = await query(
+      `SELECT o.*
+       FROM operators o
+       WHERE o.id = ? LIMIT 1`,
+      [id]
+    );
+    const user = rows[0];
+    if (!user) return null;
+
+    const packages = await getOperatorPackages(id);
+    user.operator_packages = packages;
+    user.package_name = packages.map((pkg) => pkg.name).join(', ') || user.package_type;
+    return user;
+  }
+
+  const rows = await query(`SELECT * FROM admins WHERE id = ? LIMIT 1`, [id]);
   return rows[0] || null;
 }
 
@@ -111,10 +138,16 @@ function clearRefreshCookie(res) {
 async function resolveUserByEmail(email) {
   const normalizedEmail = email.toLowerCase().trim();
 
-  const admin = await findUserByEmail('admin', normalizedEmail);
-  if (admin) return { user: admin, role: 'admin' };
+  const staffUser = await findStaffByEmail(normalizedEmail);
+  if (staffUser) {
+    return { user: staffUser, role: resolveStaffRole(staffUser) };
+  }
 
-  const operator = await findUserByEmail('operator', normalizedEmail);
+  const rows = await query(
+    `SELECT * FROM operators WHERE email = ? AND is_active = 1 LIMIT 1`,
+    [normalizedEmail]
+  );
+  const operator = rows[0];
   if (operator) return { user: operator, role: 'operator' };
 
   return null;
@@ -127,7 +160,8 @@ export async function login({ email, password }, reqMeta = {}) {
     throw new AppError('Invalid email or password', 401, 'INVALID_CREDENTIALS');
   }
 
-  const { user, role } = resolved;
+  const { user: rawUser, role } = resolved;
+  const user = role === 'operator' ? await findUserById('operator', rawUser.id) : rawUser;
 
   if (isAccountLocked(user)) {
     throw new AppError(
@@ -155,10 +189,10 @@ export async function login({ email, password }, reqMeta = {}) {
 
   const accessToken = signAccessToken(user, role);
   const refreshToken = generateRefreshToken();
-  await storeRefreshToken(role, user.id, refreshToken);
+  await storeRefreshToken(getRefreshUserType(role), user.id, refreshToken);
 
   await logAudit({
-    actorType: role,
+    actorType: isStaffRole(role) ? 'admin' : role,
     actorId: user.id,
     action: 'LOGIN_SUCCESS',
     ipAddress: reqMeta.ipAddress,
@@ -195,18 +229,21 @@ export async function refreshSession(refreshToken) {
     throw new AppError('User account inactive', 401, 'UNAUTHORIZED');
   }
 
+  const role =
+    stored.user_type === 'operator' ? 'operator' : resolveStaffRole(user);
+
   // Rotate refresh token
   await query(`UPDATE refresh_tokens SET revoked_at = NOW() WHERE id = ?`, [stored.id]);
 
   const newRefreshToken = generateRefreshToken();
   await storeRefreshToken(stored.user_type, stored.user_id, newRefreshToken);
 
-  const accessToken = signAccessToken(user, stored.user_type);
+  const accessToken = signAccessToken(user, role);
 
   return {
     accessToken,
     refreshToken: newRefreshToken,
-    user: sanitizeUser(user, stored.user_type),
+    user: sanitizeUser(user, role),
   };
 }
 

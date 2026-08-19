@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate, Navigate } from 'react-router-dom';
 import { Eye, EyeOff, Lock, Mail } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { getHomePathForRole } from '../constants/permissions';
 import Logo from '../components/Logo';
 import './LoginPage.css';
 
@@ -24,7 +25,7 @@ export default function LoginPage() {
   }
 
   if (user) {
-    return <Navigate to={user.role === 'admin' ? '/admin' : '/operator'} replace />;
+    return <Navigate to={getHomePathForRole(user.role)} replace />;
   }
 
   const handleSubmit = async (e) => {
@@ -34,7 +35,7 @@ export default function LoginPage() {
 
     try {
       const loggedInUser = await login({ email, password });
-      navigate(loggedInUser.role === 'admin' ? '/admin' : '/operator');
+      navigate(getHomePathForRole(loggedInUser.role));
     } catch (err) {
       setError(err.message || 'Login failed. Please try again.');
     } finally {

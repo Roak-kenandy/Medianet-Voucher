@@ -9,14 +9,17 @@ import {
   List,
   HelpCircle,
   Settings,
+  Package,
 } from 'lucide-react';
+import { isStaffRole } from '../constants/permissions';
 import Logo from './Logo';
 import './Sidebar.css';
 
 const adminNav = [
   { to: '/admin', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/admin/operators', label: 'Operators', icon: Users },
-  { to: '/admin/admins', label: 'Admins', icon: Shield },
+  { to: '/admin/packages', label: 'Packages', icon: Package },
+  { to: '/admin/admins', label: 'Staff', icon: Shield },
   { to: '/admin/reports', label: 'Reports', icon: FileBarChart },
 ];
 
@@ -29,12 +32,20 @@ const operatorNav = [
 ];
 
 const footerNav = (role) => [
-  { to: role === 'admin' ? '/admin/help' : '/operator/help', label: 'Help Center', icon: HelpCircle },
-  { to: role === 'admin' ? '/admin/settings' : '/operator/settings', label: 'Settings', icon: Settings },
+  {
+    to: isStaffRole(role) ? '/admin/help' : '/operator/help',
+    label: 'Help Center',
+    icon: HelpCircle,
+  },
+  {
+    to: isStaffRole(role) ? '/admin/settings' : '/operator/settings',
+    label: 'Settings',
+    icon: Settings,
+  },
 ];
 
 export default function Sidebar({ role, onNavigate }) {
-  const navItems = role === 'admin' ? adminNav : operatorNav;
+  const navItems = isStaffRole(role) ? adminNav : operatorNav;
 
   return (
     <nav className="sidebar">

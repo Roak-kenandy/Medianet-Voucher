@@ -5,17 +5,23 @@ import { logAudit } from './auditService.js';
 import { crmService } from './crmService.js';
 import { buildDailyTrend } from '../utils/chartData.js';
 import { paginationSql } from '../utils/pagination.js';
+import { getOperatorPackageIds, getOperatorPackages } from './packageService.js';
 
 export async function getOperatorStats(operatorId) {
   const [operator] = await query(
-    `SELECT id, client_name, package_type, account_quota, accounts_created, is_active
-     FROM operators WHERE id = ? LIMIT 1`,
+    `SELECT o.id, o.client_name, o.package_id, o.package_type, o.account_quota, o.accounts_created, o.is_active
+     FROM operators o
+     WHERE o.id = ? LIMIT 1`,
     [operatorId]
   );
 
   if (!operator) {
     throw new AppError('Operator not found', 404, 'NOT_FOUND');
   }
+
+  const packages = await getOperatorPackages(operatorId);
+  const packageNames = packages.map((pkg) => pkg.name);
+  const packageType = packageNames.length ? packageNames.join(', ') : operator.package_type;
 
   const [statusCounts] = await query(
     `SELECT
@@ -51,7 +57,10 @@ export async function getOperatorStats(operatorId) {
 
   return {
     clientName: operator.client_name,
-    packageType: operator.package_type,
+    packageType,
+    packageNames,
+    packages: packages.map((pkg) => ({ id: pkg.id, name: pkg.name })),
+    packageIds: packages.map((pkg) => pkg.id),
     accountQuota: total,
     accountsCreated: used,
     remainingQuota: remaining,
@@ -110,14 +119,14 @@ export async function listAccounts(operatorId, { page = 1, limit = 20, search = 
   };
 }
 
-async function provisionAccountInCrm(connection, voucherAccountId, phoneNumber, fullName, packageType) {
+async function provisionAccountInCrm(connection, voucherAccountId, phoneNumber, fullName, packageIds) {
   await connection.execute(
     `UPDATE voucher_accounts SET status = 'processing' WHERE id = ?`,
     [voucherAccountId]
   );
 
   try {
-    const result = await crmService.provisionOttAccount(phoneNumber, fullName, packageType);
+    const result = await crmService.provisionOttAccount(phoneNumber, fullName, packageIds);
     const externalRef =
       result.subscriptionId || result.contactId || null;
 
@@ -142,7 +151,7 @@ async function provisionAccountInCrm(connection, voucherAccountId, phoneNumber, 
   }
 }
 
-async function createAndProvisionAccounts(connection, operatorId, accounts, packageType) {
+async function createAndProvisionAccounts(connection, operatorId, accounts, packageIds) {
   const results = [];
 
   for (const account of accounts) {
@@ -158,7 +167,7 @@ async function createAndProvisionAccounts(connection, operatorId, accounts, pack
       voucherAccountId,
       account.phoneNumber.trim(),
       account.fullName.trim(),
-      packageType
+      packageIds
     );
 
     results.push({
@@ -198,7 +207,7 @@ export async function createBulkAccounts(operatorId, accounts, reqMeta = {}) {
     await connection.beginTransaction();
 
     const [operatorRows] = await connection.execute(
-      `SELECT id, account_quota, accounts_created, is_active, client_name, package_type
+      `SELECT id, account_quota, accounts_created, is_active, client_name, package_id, package_type
        FROM operators WHERE id = ? FOR UPDATE`,
       [operatorId]
     );
@@ -210,6 +219,11 @@ export async function createBulkAccounts(operatorId, accounts, reqMeta = {}) {
 
     if (!operator.is_active) {
       throw new AppError('Operator account is inactive', 403, 'FORBIDDEN');
+    }
+
+    const packageIds = await getOperatorPackageIds(operatorId, { activeOnly: true, connection });
+    if (!packageIds.length) {
+      throw new AppError('Operator has no packages assigned', 400, 'PACKAGE_NOT_ASSIGNED');
     }
 
     const remaining = operator.account_quota - operator.accounts_created;
@@ -225,7 +239,7 @@ export async function createBulkAccounts(operatorId, accounts, reqMeta = {}) {
       connection,
       operatorId,
       accounts,
-      operator.package_type
+      packageIds
     );
     const successCount = created.filter((item) => item.status === 'created').length;
 

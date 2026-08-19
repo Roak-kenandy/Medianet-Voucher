@@ -15,6 +15,12 @@ import CreateAccountPage from './pages/operator/CreateAccountPage';
 import BulkUploadPage from './pages/operator/BulkUploadPage';
 import AccountsPage from './pages/operator/AccountsPage';
 import OperatorReportsPage from './pages/operator/OperatorReportsPage';
+import PackagesPage from './pages/admin/PackagesPage';
+import { STAFF_ROLES } from './constants/permissions';
+
+const staffRoute = (element) => (
+  <ProtectedRoute allowedRoles={STAFF_ROLES}>{element}</ProtectedRoute>
+);
 
 export default function App() {
   return (
@@ -25,12 +31,13 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
 
-          <Route path="/admin" element={<ProtectedRoute allowedRoles={['admin']}><AdminDashboard /></ProtectedRoute>} />
-          <Route path="/admin/operators" element={<ProtectedRoute allowedRoles={['admin']}><OperatorsPage /></ProtectedRoute>} />
-          <Route path="/admin/admins" element={<ProtectedRoute allowedRoles={['admin']}><AdminsPage /></ProtectedRoute>} />
-          <Route path="/admin/reports" element={<ProtectedRoute allowedRoles={['admin']}><ReportsPage /></ProtectedRoute>} />
-          <Route path="/admin/help" element={<ProtectedRoute allowedRoles={['admin']}><HelpCenterPage /></ProtectedRoute>} />
-          <Route path="/admin/settings" element={<ProtectedRoute allowedRoles={['admin']}><SettingsPage /></ProtectedRoute>} />
+          <Route path="/admin" element={staffRoute(<AdminDashboard />)} />
+          <Route path="/admin/operators" element={staffRoute(<OperatorsPage />)} />
+          <Route path="/admin/packages" element={staffRoute(<PackagesPage />)} />
+          <Route path="/admin/admins" element={staffRoute(<AdminsPage />)} />
+          <Route path="/admin/reports" element={staffRoute(<ReportsPage />)} />
+          <Route path="/admin/help" element={staffRoute(<HelpCenterPage />)} />
+          <Route path="/admin/settings" element={staffRoute(<SettingsPage />)} />
           <Route path="/admin/users" element={<Navigate to="/admin/operators" replace />} />
 
           <Route path="/operator" element={<ProtectedRoute allowedRoles={['operator']}><OperatorDashboard /></ProtectedRoute>} />

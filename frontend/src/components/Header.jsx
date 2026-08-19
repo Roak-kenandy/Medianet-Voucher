@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LogOut, ChevronDown, Menu, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { isStaffRole, ROLE_LABELS } from '../constants/permissions';
 import './Header.css';
 
 export default function Header({ onMenuToggle, sidebarOpen = false }) {
@@ -60,6 +61,9 @@ export default function Header({ onMenuToggle, sidebarOpen = false }) {
             <div className="header-dropdown-info">
               <p className="header-dropdown-name">{user?.name}</p>
               <p className="header-dropdown-email">{user?.email}</p>
+              {isStaffRole(user?.role) && (
+                <p className="header-dropdown-meta">{ROLE_LABELS[user.role]} account</p>
+              )}
               {user?.role === 'operator' && (
                 <p className="header-dropdown-meta">{user.clientName}</p>
               )}

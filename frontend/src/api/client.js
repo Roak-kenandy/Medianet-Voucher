@@ -112,7 +112,20 @@ export const adminApi = {
       body: JSON.stringify({ isActive }),
     }),
   getOperators: (params = {}) => apiRequest(`/admin/operators${buildQuery(params)}`),
-  getPackages: () => apiRequest('/admin/packages').then((data) => data.packages),
+  getPackages: () => apiRequest('/admin/packages/active').then((data) => data.packages),
+  getPackagesList: (params = {}) => apiRequest(`/admin/packages${buildQuery(params)}`),
+  getCrmRecommendations: () =>
+    apiRequest('/admin/packages/crm-recommendations').then((data) => data.recommendations),
+  createPackage: (payload) =>
+    apiRequest('/admin/packages', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updatePackageStatus: (id, isActive) =>
+    apiRequest(`/admin/packages/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ isActive }),
+    }),
   createOperator: (payload) =>
     apiRequest('/admin/operators', {
       method: 'POST',

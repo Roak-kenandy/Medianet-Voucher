@@ -4,12 +4,13 @@ import Layout from '../../components/Layout';
 import Sidebar from '../../components/Sidebar';
 import Header from '../../components/Header';
 import { useAuth } from '../../context/AuthContext';
+import { isStaffRole, ROLE_LABELS } from '../../constants/permissions';
 import '../admin/admin-shared.css';
 
 export default function SettingsPage() {
   const { pathname } = useLocation();
-  const role = pathname.startsWith('/admin') ? 'admin' : 'operator';
   const { user } = useAuth();
+  const role = user?.role || (pathname.startsWith('/admin') ? 'admin' : 'operator');
 
   return (
     <Layout sidebar={<Sidebar role={role} />} header={<Header />}>
@@ -32,6 +33,12 @@ export default function SettingsPage() {
               <span className="settings-label">Email</span>
               <span>{user?.email}</span>
             </div>
+            {isStaffRole(role) && (
+              <div className="settings-row">
+                <span className="settings-label">Role</span>
+                <span className="badge badge-info">{ROLE_LABELS[role] || role}</span>
+              </div>
+            )}
             {role === 'operator' && (
               <>
                 <div className="settings-row">
@@ -39,8 +46,12 @@ export default function SettingsPage() {
                   <span>{user?.clientName}</span>
                 </div>
                 <div className="settings-row">
-                  <span className="settings-label">Package</span>
-                  <span className="badge badge-info">{user?.packageType || 'OTT ENTERTAINMENT (1y)'}</span>
+                  <span className="settings-label">Packages</span>
+                  <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {(user?.packageNames?.length ? user.packageNames : [user?.packageType].filter(Boolean)).map((name) => (
+                      <span key={name} className="badge badge-info">{name}</span>
+                    ))}
+                  </span>
                 </div>
               </>
             )}

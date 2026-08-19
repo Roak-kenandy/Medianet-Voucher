@@ -1,5 +1,6 @@
 import { query } from '../db/pool.js';
 import { AppError } from '../utils/errors.js';
+import { getOperatorPackages } from './packageService.js';
 
 function buildDateFilters(startDate, endDate, column = 'va.created_at') {
   const conditions = [];
@@ -19,14 +20,18 @@ function buildDateFilters(startDate, endDate, column = 'va.created_at') {
 
 export async function generateOperatorReport(operatorId, { startDate, endDate } = {}) {
   const [operator] = await query(
-    `SELECT id, client_name, package_type, email, account_quota, accounts_created
-     FROM operators WHERE id = ? LIMIT 1`,
+    `SELECT o.id, o.client_name, o.package_type, o.email, o.account_quota, o.accounts_created
+     FROM operators o
+     WHERE o.id = ? LIMIT 1`,
     [operatorId]
   );
 
   if (!operator) {
     throw new AppError('Operator not found', 404, 'NOT_FOUND');
   }
+
+  const packages = await getOperatorPackages(operatorId);
+  const packageType = packages.map((pkg) => pkg.name).join(', ') || operator.package_type;
 
   const { conditions, params, clause } = buildDateFilters(startDate, endDate);
   const dateWhere = clause ? `AND ${clause}` : '';
@@ -62,7 +67,7 @@ export async function generateOperatorReport(operatorId, { startDate, endDate } 
     filters: { startDate, endDate },
     summary: {
       clientName: operator.client_name,
-      packageType: operator.package_type,
+      packageType,
       email: operator.email,
       accountQuota: operator.account_quota,
       accountsCreated: operator.accounts_created,

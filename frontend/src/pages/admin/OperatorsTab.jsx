@@ -6,16 +6,20 @@ import ActionMenu from '../../components/ActionMenu';
 import TableToolbar from '../../components/TableToolbar';
 import TablePagination from '../../components/TablePagination';
 import { adminApi } from '../../api/client';
-import { DEFAULT_PACKAGE, formatPackageLabel } from '../../constants/packages';
+import { formatPackageLabel } from '../../constants/packages';
 import { useToast } from '../../context/ToastContext';
+import { useAuth } from '../../context/AuthContext';
+import { hasPermission } from '../../constants/permissions';
+import { Link } from 'react-router-dom';
 import './admin-shared.css';
 
 const emptyForm = () => ({
   clientName: '',
-  packageType: DEFAULT_PACKAGE,
+  packageIds: [],
   email: '',
   password: '',
   accountQuota: 500,
+  notes: '',
   isActive: true,
 });
 
@@ -27,7 +31,29 @@ function StatusBadge({ active }) {
   );
 }
 
+function PackageBadges({ operator }) {
+  const names = operator.package_names?.length
+    ? operator.package_names
+    : (operator.package_name || operator.package_type || '')
+        .split(',')
+        .map((name) => name.trim())
+        .filter(Boolean);
+
+  if (!names.length) return '—';
+
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+      {names.map((name) => (
+        <span key={name} className="badge badge-info">
+          {formatPackageLabel(name)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export default function OperatorsTab() {
+  const { user } = useAuth();
   const toast = useToast();
   const [operators, setOperators] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 1 });
@@ -60,7 +86,13 @@ export default function OperatorsTab() {
 
   useEffect(() => {
     loadOperators();
-    adminApi.getPackages().then(setPackages).catch(() => setPackages([]));
+    adminApi.getPackages().then((items) => {
+      setPackages(items);
+      setCreateForm((prev) => ({
+        ...prev,
+        packageIds: prev.packageIds.length ? prev.packageIds : items[0]?.id ? [items[0].id] : [],
+      }));
+    }).catch(() => setPackages([]));
   }, [page, search]);
 
   const handleSearchChange = (value) => {
@@ -69,17 +101,29 @@ export default function OperatorsTab() {
   };
 
   const resetCreateForm = () => {
-    setCreateForm(emptyForm());
+    setCreateForm({
+      ...emptyForm(),
+      packageIds: packages[0]?.id ? [packages[0].id] : [],
+    });
     setCreateError('');
   };
 
   const openEditModal = (operator) => {
+    const packageIds = operator.package_ids?.length
+      ? operator.package_ids
+      : operator.package_id
+        ? [operator.package_id]
+        : packages[0]?.id
+          ? [packages[0].id]
+          : [];
+
     setEditForm({
       clientName: operator.client_name,
-      packageType: operator.package_type || DEFAULT_PACKAGE,
+      packageIds,
       email: operator.email,
       password: '',
       accountQuota: operator.account_quota,
+      notes: operator.notes || '',
       isActive: Boolean(operator.is_active),
     });
     setEditError('');
@@ -87,9 +131,24 @@ export default function OperatorsTab() {
     setMenuOpen(null);
   };
 
+  const togglePackageId = (form, setForm, packageId) => {
+    const id = Number(packageId);
+    const current = form.packageIds.map(Number);
+    const next = current.includes(id)
+      ? current.filter((item) => item !== id)
+      : [...current, id];
+    setForm({ ...form, packageIds: next });
+  };
+
   const handleCreate = async (e) => {
     e.preventDefault();
     setCreateError('');
+
+    if (!createForm.packageIds.length) {
+      setCreateError('Select at least one package');
+      return;
+    }
+
     setSubmitting(true);
 
     try {
@@ -111,6 +170,12 @@ export default function OperatorsTab() {
   const handleEdit = async (e) => {
     e.preventDefault();
     setEditError('');
+
+    if (!editForm.packageIds.length) {
+      setEditError('Select at least one package');
+      return;
+    }
+
     setSubmitting(true);
 
     try {
@@ -152,8 +217,10 @@ export default function OperatorsTab() {
     }
   };
 
+  const canCreatePackage = hasPermission(user?.role, 'createPackage');
+
   const operatorFormFields = (form, setForm, { isEdit = false } = {}) => (
-    <>
+    <div className="form-grid">
       <div className="form-group">
         <label className="form-label">Client Name</label>
         <input
@@ -164,19 +231,33 @@ export default function OperatorsTab() {
           required
         />
       </div>
-      <div className="form-group">
-        <label className="form-label">Package</label>
-        <select
-          className="form-input"
-          value={form.packageType}
-          onChange={(e) => setForm({ ...form, packageType: e.target.value })}
-          required
-        >
-          {(packages.length ? packages : [{ value: form.packageType, label: form.packageType }]).map((pkg) => (
-            <option key={pkg.value} value={pkg.value}>{pkg.label}</option>
-          ))}
-        </select>
-        <p className="form-hint">Each operator can be assigned a different package for account provisioning.</p>
+      <div className="form-group form-group-full">
+        <label className="form-label">Packages</label>
+        {!packages.length ? (
+          <p className="form-hint">
+            No active packages.{' '}
+            {canCreatePackage ? (
+              <Link to="/admin/packages">Create a package</Link>
+            ) : (
+              'Ask an Admin or Sales user to create a package'
+            )}{' '}
+            first.
+          </p>
+        ) : (
+          <div className="package-checkbox-list">
+            {packages.map((pkg) => (
+              <label key={pkg.id} className="package-checkbox-item">
+                <input
+                  type="checkbox"
+                  checked={form.packageIds.map(Number).includes(Number(pkg.id))}
+                  onChange={() => togglePackageId(form, setForm, pkg.id)}
+                />
+                <span>{pkg.label || pkg.name}</span>
+              </label>
+            ))}
+          </div>
+        )}
+        <p className="form-hint">Select one or more packages. All selected packages are provisioned when this operator creates an account.</p>
       </div>
       <div className="form-group">
         <label className="form-label">Email</label>
@@ -204,11 +285,6 @@ export default function OperatorsTab() {
           required={!isEdit}
           minLength={isEdit ? undefined : 12}
         />
-        <p className="form-hint">
-          {isEdit
-            ? 'Only fill in if you want to reset the operator password.'
-            : 'Must be at least 12 characters with uppercase, lowercase, number, and special character.'}
-        </p>
       </div>
       <div className="form-group">
         <label className="form-label">Account Creation Quota</label>
@@ -240,7 +316,18 @@ export default function OperatorsTab() {
           </select>
         </div>
       )}
-    </>
+      <div className="form-group form-group-full">
+        <label className="form-label">Notes</label>
+        <textarea
+          className="form-input"
+          value={form.notes}
+          onChange={(e) => setForm({ ...form, notes: e.target.value })}
+          placeholder="Internal notes about this operator (optional)"
+          rows={2}
+        />
+        <p className="form-hint">Use notes for contract details, billing references, or support context.</p>
+      </div>
+    </div>
   );
 
   return (
@@ -286,7 +373,8 @@ export default function OperatorsTab() {
                 <thead>
                   <tr>
                     <th>Client Name</th>
-                    <th>Package</th>
+                    <th>Packages</th>
+                    <th>Notes</th>
                     <th>Email</th>
                     <th>Quota</th>
                     <th>Used</th>
@@ -300,10 +388,9 @@ export default function OperatorsTab() {
                   {operators.map((op) => (
                     <tr key={op.id}>
                       <td style={{ fontWeight: 500 }}>{op.client_name}</td>
-                      <td>
-                        <span className="badge badge-info">
-                          {formatPackageLabel(op.package_type)}
-                        </span>
+                      <td><PackageBadges operator={op} /></td>
+                      <td style={{ maxWidth: 220, fontSize: 13, color: 'var(--color-text-secondary)' }} title={op.notes || ''}>
+                        {op.notes ? (op.notes.length > 60 ? `${op.notes.slice(0, 60)}…` : op.notes) : '—'}
                       </td>
                       <td>{op.email}</td>
                       <td>{op.account_quota.toLocaleString()}</td>
@@ -359,36 +446,60 @@ export default function OperatorsTab() {
         </div>
       </div>
 
-      <Modal open={createModalOpen} onClose={() => setCreateModalOpen(false)} title="Create Operator">
-        {createError && <div className="alert alert-error">{createError}</div>}
-        <form onSubmit={handleCreate}>
-          {operatorFormFields(createForm, setCreateForm)}
-          <div className="modal-footer" style={{ padding: '16px 0 0', border: 'none' }}>
+      <Modal
+        open={createModalOpen}
+        onClose={() => setCreateModalOpen(false)}
+        title="Create Operator"
+        wide
+        footer={(
+          <>
             <button type="button" className="btn btn-secondary" onClick={() => setCreateModalOpen(false)}>
               Cancel
             </button>
-            <button type="submit" className="btn btn-primary" disabled={submitting}>
+            <button
+              type="submit"
+              form="create-operator-form"
+              className="btn btn-primary"
+              disabled={submitting || !packages.length}
+            >
               {submitting ? 'Creating...' : 'Create Operator'}
             </button>
-          </div>
+          </>
+        )}
+      >
+        {createError && <div className="alert alert-error">{createError}</div>}
+        <form id="create-operator-form" onSubmit={handleCreate}>
+          {operatorFormFields(createForm, setCreateForm)}
         </form>
       </Modal>
 
-      <Modal open={!!editModal} onClose={() => setEditModal(null)} title="Edit Operator">
+      <Modal
+        open={!!editModal}
+        onClose={() => setEditModal(null)}
+        title="Edit Operator"
+        wide
+        footer={(
+          <>
+            <button type="button" className="btn btn-secondary" onClick={() => setEditModal(null)}>
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="edit-operator-form"
+              className="btn btn-primary"
+              disabled={submitting || !packages.length}
+            >
+              {submitting ? 'Saving...' : 'Save Changes'}
+            </button>
+          </>
+        )}
+      >
         {editError && <div className="alert alert-error">{editError}</div>}
-        <form onSubmit={handleEdit}>
+        <form id="edit-operator-form" onSubmit={handleEdit}>
           <p style={{ marginBottom: 16, color: 'var(--color-text-secondary)' }}>
             Update details for <strong>{editModal?.client_name}</strong>.
           </p>
           {operatorFormFields(editForm, setEditForm, { isEdit: true })}
-          <div className="modal-footer" style={{ padding: '16px 0 0', border: 'none' }}>
-            <button type="button" className="btn btn-secondary" onClick={() => setEditModal(null)}>
-              Cancel
-            </button>
-            <button type="submit" className="btn btn-primary" disabled={submitting}>
-              {submitting ? 'Saving...' : 'Save Changes'}
-            </button>
-          </div>
         </form>
       </Modal>
 

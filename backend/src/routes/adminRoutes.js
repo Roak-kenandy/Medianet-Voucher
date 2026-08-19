@@ -1,8 +1,8 @@
 import { Router } from 'express';
-import { authenticate, requireRole } from '../middleware/auth.js';
+import { authenticate, requireStaffRole, requirePermission } from '../middleware/auth.js';
 import { asyncHandler, success } from '../utils/errors.js';
 import { getClientMeta } from '../services/auditService.js';
-import { PACKAGE_TYPES } from '../constants/packages.js';
+import { crmService } from '../services/crmService.js';
 import {
   getAdminStats,
   listAdmins,
@@ -13,11 +13,18 @@ import {
   updateOperatorStatus,
   updateOperatorQuota,
   updateOperator,
+  getActivePackages,
 } from '../services/adminService.js';
+import {
+  listPackages,
+  createPackage,
+  updatePackageStatus,
+} from '../services/packageService.js';
 import { generateReport, reportToCsv } from '../services/reportService.js';
 import {
   createAdminSchema,
   createOperatorSchema,
+  createPackageSchema,
   updateOperatorSchema,
   updateQuotaSchema,
   reportQuerySchema,
@@ -26,11 +33,63 @@ import {
 
 const router = Router();
 
-router.use(authenticate, requireRole('admin'));
+router.use(authenticate, requireStaffRole());
 
-router.get('/packages', (_req, res) => {
-  success(res, { packages: PACKAGE_TYPES });
-});
+router.get(
+  '/packages',
+  asyncHandler(async (req, res) => {
+    const queryParams = listQuerySchema.parse(req.query);
+    const result = await listPackages(queryParams);
+    success(res, result);
+  })
+);
+
+router.get(
+  '/packages/active',
+  asyncHandler(async (_req, res) => {
+    const packages = await getActivePackages();
+    success(res, {
+      packages: packages.map((pkg) => ({
+        id: pkg.id,
+        value: pkg.id,
+        label: pkg.name,
+        name: pkg.name,
+        priceAmount: Number(pkg.price_amount),
+        currencyCode: pkg.currency_code,
+      })),
+    });
+  })
+);
+
+router.get(
+  '/packages/crm-recommendations',
+  requirePermission('createPackage'),
+  asyncHandler(async (_req, res) => {
+    const recommendations = await crmService.fetchOttProductCatalog();
+    success(res, { recommendations });
+  })
+);
+
+router.post(
+  '/packages',
+  requirePermission('createPackage'),
+  asyncHandler(async (req, res) => {
+    const data = createPackageSchema.parse(req.body);
+    const pkg = await createPackage(req.user.id, data, getClientMeta(req));
+    success(res, pkg, 201);
+  })
+);
+
+router.patch(
+  '/packages/:id/status',
+  requirePermission('managePackageStatus'),
+  asyncHandler(async (req, res) => {
+    const packageId = parseInt(req.params.id, 10);
+    const isActive = Boolean(req.body.isActive);
+    const result = await updatePackageStatus(req.user.id, packageId, isActive, getClientMeta(req));
+    success(res, result);
+  })
+);
 
 router.get(
   '/stats',
@@ -51,15 +110,17 @@ router.get(
 
 router.post(
   '/admins',
+  requirePermission('createAdmin'),
   asyncHandler(async (req, res) => {
     const data = createAdminSchema.parse(req.body);
-    const admin = await createAdmin(req.user.id, data, getClientMeta(req));
+    const admin = await createAdmin(req.user.id, req.user.role, data, getClientMeta(req));
     success(res, admin, 201);
   })
 );
 
 router.patch(
   '/admins/:id/status',
+  requirePermission('manageAdminStatus'),
   asyncHandler(async (req, res) => {
     const targetId = parseInt(req.params.id, 10);
     const isActive = Boolean(req.body.isActive);

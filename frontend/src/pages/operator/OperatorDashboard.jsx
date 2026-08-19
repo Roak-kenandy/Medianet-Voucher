@@ -85,9 +85,9 @@ export default function OperatorDashboard() {
         <h1 className="page-title">Dashboard</h1>
         <p className="page-subtitle">
           {today} · {user?.clientName || stats?.clientName}
-          {stats?.packageType && (
-            <span className="badge badge-info" style={{ marginLeft: 8 }}>{stats.packageType}</span>
-          )}
+          {(stats?.packageNames?.length ? stats.packageNames : stats?.packageType ? [stats.packageType] : []).map((name) => (
+            <span key={name} className="badge badge-info" style={{ marginLeft: 8 }}>{name}</span>
+          ))}
         </p>
       </div>
 
@@ -148,10 +148,12 @@ export default function OperatorDashboard() {
           <div className="stats-grid">
             <div className="stat-card">
               <div className="stat-card-header">
-                <span className="stat-card-label">Package</span>
+                <span className="stat-card-label">Packages</span>
                 <div className="stat-card-icon"><Package size={20} /></div>
               </div>
-              <div className="stat-card-value" style={{ fontSize: 18 }}>{stats?.packageType || 'OTT'}</div>
+              <div className="stat-card-value" style={{ fontSize: 16, lineHeight: 1.4 }}>
+                {(stats?.packageNames?.length ? stats.packageNames : [stats?.packageType || 'OTT']).join(', ')}
+              </div>
             </div>
             <div className="stat-card">
               <div className="stat-card-header">

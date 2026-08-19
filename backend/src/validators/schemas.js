@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { PACKAGE_VALUES } from '../constants/packages.js';
 
 const emailSchema = z.string().email('Invalid email address').max(255);
 const passwordSchema = z
@@ -22,6 +21,12 @@ const phoneSchema = z
       .regex(/^[79][0-9]{6}$/, 'Maldives mobile numbers must start with 7 or 9')
   );
 
+const packageIdSchema = z.coerce.number().int().positive('Package is required');
+const packageIdsSchema = z
+  .array(packageIdSchema)
+  .min(1, 'At least one package is required')
+  .max(20, 'Cannot assign more than 20 packages');
+
 export const loginSchema = z.object({
   email: emailSchema,
   password: z.string().min(1, 'Password is required').max(128),
@@ -31,11 +36,12 @@ export const createAdminSchema = z.object({
   name: z.string().trim().min(2, 'Name is required').max(120),
   email: emailSchema,
   password: passwordSchema,
+  role: z.enum(['admin', 'sales', 'finance']).optional().default('admin'),
 });
 
 export const createOperatorSchema = z.object({
   clientName: z.string().trim().min(2, 'Client name is required').max(200),
-  packageType: z.enum(PACKAGE_VALUES, { required_error: 'Package is required' }),
+  packageIds: packageIdsSchema,
   email: emailSchema,
   password: passwordSchema,
   accountQuota: z
@@ -43,11 +49,12 @@ export const createOperatorSchema = z.object({
     .int('Account quota must be a whole number')
     .min(1, 'Account quota must be at least 1')
     .max(100000, 'Account quota cannot exceed 100,000'),
+  notes: z.string().trim().max(2000).optional().default(''),
 });
 
 export const updateOperatorSchema = z.object({
   clientName: z.string().trim().min(2, 'Client name is required').max(200),
-  packageType: z.enum(PACKAGE_VALUES, { required_error: 'Package is required' }),
+  packageIds: packageIdsSchema,
   email: emailSchema,
   password: z
     .string()
@@ -69,6 +76,17 @@ export const updateOperatorSchema = z.object({
     .min(1, 'Account quota must be at least 1')
     .max(100000, 'Account quota cannot exceed 100,000'),
   isActive: z.boolean(),
+  notes: z.string().trim().max(2000).optional().default(''),
+});
+
+export const createPackageSchema = z.object({
+  name: z.string().trim().min(2, 'Package name is required').max(200),
+  sku: z.string().trim().max(100).optional(),
+  productId: z.string().uuid('Invalid CRM product ID'),
+  priceTermId: z.string().uuid('Invalid CRM price term ID'),
+  priceAmount: z.coerce.number().min(0, 'Price must be zero or greater'),
+  currencyCode: z.string().trim().length(3).default('MVR'),
+  description: z.string().trim().max(2000).optional(),
 });
 
 export const updateQuotaSchema = z.object({

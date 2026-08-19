@@ -1,11 +1,5 @@
-export const DEFAULT_PACKAGE = 'OTT ENTERTAINMENT (1y)';
-
-export const PACKAGE_TYPES = [
-  { value: DEFAULT_PACKAGE, label: DEFAULT_PACKAGE },
-];
-
 export function formatPackageLabel(value) {
-  if (!value) return DEFAULT_PACKAGE;
+  if (!value) return '—';
   return value;
 }
 

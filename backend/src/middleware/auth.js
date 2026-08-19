@@ -10,6 +10,7 @@ import {
 } from '../services/authService.js';
 import { sanitizeUser } from '../utils/crypto.js';
 import { AppError } from '../utils/errors.js';
+import { isStaffRole, hasPermission, STAFF_ROLES } from '../constants/permissions.js';
 
 export function authenticate(req, _res, next) {
   const authHeader = req.headers.authorization;
@@ -42,6 +43,26 @@ export function requireRole(...roles) {
     next();
   };
 }
+
+export function requireStaffRole() {
+  return (req, _res, next) => {
+    if (!req.user || !isStaffRole(req.user.role)) {
+      return next(new AppError('Access denied', 403, 'FORBIDDEN'));
+    }
+    next();
+  };
+}
+
+export function requirePermission(permission) {
+  return (req, _res, next) => {
+    if (!req.user || !hasPermission(req.user.role, permission)) {
+      return next(new AppError('Access denied', 403, 'FORBIDDEN'));
+    }
+    next();
+  };
+}
+
+export { STAFF_ROLES, isStaffRole, hasPermission };
 
 export const authController = {
   async login(req, res, next) {
@@ -98,13 +119,16 @@ export const authController = {
 
   async me(req, res, next) {
     try {
-      const user = await findUserById(req.user.role, req.user.id);
+      const lookupRole = req.user.role === 'operator' ? 'operator' : 'admin';
+      const user = await findUserById(lookupRole, req.user.id);
       if (!user || !user.is_active) {
         throw new AppError('User not found', 401, 'UNAUTHORIZED');
       }
+      const role =
+        req.user.role === 'operator' ? 'operator' : user.role || 'admin';
       return res.json({
         success: true,
-        data: { user: sanitizeUser(user, req.user.role) },
+        data: { user: sanitizeUser(user, role) },
       });
     } catch (err) {
       next(err);

@@ -10,9 +10,11 @@ import TablePagination from '../../components/TablePagination';
 import { REPORT_TYPES } from '../../constants/packages';
 import { formatColumnLabel, formatSummaryLabel, formatCellValue, downloadCsv } from '../../utils/reports';
 import { getDefaultReportDateRange } from '../../utils/dates';
+import { useAuth } from '../../context/AuthContext';
 import './admin-shared.css';
 
 export default function ReportsPage() {
+  const { user } = useAuth();
   const toast = useToast();
   const defaultRange = getDefaultReportDateRange();
   const [operators, setOperators] = useState([]);
@@ -82,7 +84,7 @@ export default function ReportsPage() {
   };
 
   return (
-    <Layout sidebar={<Sidebar role="admin" />} header={<Header />}>
+    <Layout sidebar={<Sidebar role={user?.role || 'admin'} />} header={<Header />}>
       <div className="page-header">
         <h1 className="page-title">Reports</h1>
         <p className="page-subtitle">Generate client-wise, period, and package breakdown reports</p>
@@ -130,7 +132,7 @@ export default function ReportsPage() {
                 >
                   <option value="">All packages</option>
                   {packages.map((p) => (
-                    <option key={p.value} value={p.value}>{p.label}</option>
+                    <option key={p.id} value={p.label || p.name}>{p.label || p.name}</option>
                   ))}
                 </select>
               </div>

@@ -2,9 +2,20 @@ import bcrypt from 'bcrypt';
 import { config } from '../config/index.js';
 import { query, getConnection } from '../db/pool.js';
 import { AppError } from '../utils/errors.js';
+import { hasPermission } from '../constants/permissions.js';
 import { logAudit } from './auditService.js';
 import { buildDailyTrend } from '../utils/chartData.js';
 import { paginationSql } from '../utils/pagination.js';
+import {
+  assertPackagesAssignable,
+  getActivePackages,
+  getOperatorPackagesByOperatorIds,
+  syncOperatorPackages,
+} from './packageService.js';
+
+function formatPackageSummary(plans = []) {
+  return plans.map((plan) => plan.name).join(', ');
+}
 
 export async function getAdminStats() {
   const [stats] = await query(`
@@ -84,7 +95,7 @@ export async function listAdmins({ page = 1, limit = 20, search = '' } = {}) {
   const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
 
   const admins = await query(
-    `SELECT id, name, email, is_active, created_at, updated_at
+    `SELECT id, name, email, role, is_active, created_at, updated_at
      FROM admins
      ${where}
      ORDER BY created_at DESC
@@ -125,16 +136,21 @@ async function emailExistsInSystem(email, excludeOperatorId = null) {
   return operators.length > 0;
 }
 
-export async function createAdmin(actorAdminId, data, reqMeta = {}) {
+export async function createAdmin(actorAdminId, actorRole, data, reqMeta = {}) {
+  if (!hasPermission(actorRole, 'createAdmin')) {
+    throw new AppError('Access denied', 403, 'FORBIDDEN');
+  }
+
   if (await emailExistsInSystem(data.email)) {
     throw new AppError('An account with this email already exists', 409, 'EMAIL_EXISTS');
   }
 
+  const staffRole = data.role || 'admin';
   const passwordHash = await bcrypt.hash(data.password, config.security.bcryptRounds);
 
   const result = await query(
-    `INSERT INTO admins (name, email, password_hash) VALUES (?, ?, ?)`,
-    [data.name.trim(), data.email.toLowerCase().trim(), passwordHash]
+    `INSERT INTO admins (name, email, role, password_hash) VALUES (?, ?, ?, ?)`,
+    [data.name.trim(), data.email.toLowerCase().trim(), staffRole, passwordHash]
   );
 
   await logAudit({
@@ -145,13 +161,14 @@ export async function createAdmin(actorAdminId, data, reqMeta = {}) {
     resourceId: result.insertId,
     ipAddress: reqMeta.ipAddress,
     userAgent: reqMeta.userAgent,
-    metadata: { name: data.name.trim() },
+    metadata: { name: data.name.trim(), role: staffRole },
   });
 
   return {
     id: result.insertId,
     name: data.name.trim(),
     email: data.email.toLowerCase().trim(),
+    role: staffRole,
     isActive: true,
   };
 }
@@ -187,20 +204,22 @@ export async function listOperators({ page = 1, limit = 20, search = '' } = {}) 
   const params = [];
 
   if (search) {
-    filters.push('(o.client_name LIKE ? OR o.email LIKE ? OR o.package_type LIKE ?)');
+    filters.push('(o.client_name LIKE ? OR o.email LIKE ? OR p.name LIKE ? OR o.notes LIKE ? OR o.package_type LIKE ?)');
     const term = `%${search}%`;
-    params.push(term, term, term);
+    params.push(term, term, term, term, term);
   }
 
   const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
 
   const operators = await query(
-    `SELECT
-       o.id, o.client_name, o.package_type, o.email, o.account_quota, o.accounts_created,
+    `SELECT DISTINCT
+       o.id, o.client_name, o.package_id, o.package_type, o.notes, o.email, o.account_quota, o.accounts_created,
        o.is_active, o.created_at, o.updated_at,
        a.name AS created_by_name
      FROM operators o
      JOIN admins a ON a.id = o.admin_id
+     LEFT JOIN operator_packages op ON op.operator_id = o.id
+     LEFT JOIN packages p ON p.id = op.package_id
      ${where}
      ORDER BY o.created_at DESC
      ${clause}`,
@@ -208,17 +227,31 @@ export async function listOperators({ page = 1, limit = 20, search = '' } = {}) 
   );
 
   const [countRow] = await query(
-    `SELECT COUNT(*) AS total
+    `SELECT COUNT(DISTINCT o.id) AS total
      FROM operators o
      JOIN admins a ON a.id = o.admin_id
+     LEFT JOIN operator_packages op ON op.operator_id = o.id
+     LEFT JOIN packages p ON p.id = op.package_id
      ${where}`,
     params
   );
 
   const total = Number(countRow.total) || 0;
+  const packagesMap = await getOperatorPackagesByOperatorIds(operators.map((op) => op.id));
+
+  const enrichedOperators = operators.map((operator) => {
+    const packages = packagesMap.get(operator.id) || [];
+    return {
+      ...operator,
+      packages,
+      package_ids: packages.map((pkg) => pkg.id),
+      package_names: packages.map((pkg) => pkg.name),
+      package_name: packages.map((pkg) => pkg.name).join(', ') || operator.package_type,
+    };
+  });
 
   return {
-    operators,
+    operators: enrichedOperators,
     pagination: {
       page: pageNum,
       limit: limitNum,
@@ -233,41 +266,70 @@ export async function createOperator(adminId, data, reqMeta = {}) {
     throw new AppError('An account with this email already exists', 409, 'EMAIL_EXISTS');
   }
 
+  const plans = await assertPackagesAssignable(data.packageIds);
   const passwordHash = await bcrypt.hash(data.password, config.security.bcryptRounds);
+  const packageSummary = formatPackageSummary(plans);
+  const primaryPackageId = plans[0].id;
 
-  const result = await query(
-    `INSERT INTO operators (admin_id, client_name, package_type, email, password_hash, account_quota)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [
-      adminId,
-      data.clientName.trim(),
-      data.packageType,
-      data.email.toLowerCase().trim(),
-      passwordHash,
-      data.accountQuota,
-    ]
-  );
+  const connection = await getConnection();
 
-  await logAudit({
-    actorType: 'admin',
-    actorId: adminId,
-    action: 'OPERATOR_CREATED',
-    resourceType: 'operator',
-    resourceId: result.insertId,
-    ipAddress: reqMeta.ipAddress,
-    userAgent: reqMeta.userAgent,
-    metadata: { clientName: data.clientName, packageType: data.packageType, accountQuota: data.accountQuota },
-  });
+  try {
+    await connection.beginTransaction();
 
-  return {
-    id: result.insertId,
-    clientName: data.clientName,
-    packageType: data.packageType,
-    email: data.email.toLowerCase().trim(),
-    accountQuota: data.accountQuota,
-    accountsCreated: 0,
-    isActive: true,
-  };
+    const [result] = await connection.execute(
+      `INSERT INTO operators (admin_id, client_name, package_type, package_id, notes, email, password_hash, account_quota)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        adminId,
+        data.clientName.trim(),
+        packageSummary,
+        primaryPackageId,
+        data.notes?.trim() || null,
+        data.email.toLowerCase().trim(),
+        passwordHash,
+        data.accountQuota,
+      ]
+    );
+
+    const operatorId = result.insertId;
+    await syncOperatorPackages(operatorId, data.packageIds, connection);
+
+    await connection.commit();
+
+    await logAudit({
+      actorType: 'admin',
+      actorId: adminId,
+      action: 'OPERATOR_CREATED',
+      resourceType: 'operator',
+      resourceId: operatorId,
+      ipAddress: reqMeta.ipAddress,
+      userAgent: reqMeta.userAgent,
+      metadata: {
+        clientName: data.clientName,
+        packageIds: data.packageIds,
+        packageNames: plans.map((plan) => plan.name),
+        accountQuota: data.accountQuota,
+      },
+    });
+
+    return {
+      id: operatorId,
+      clientName: data.clientName,
+      packageIds: data.packageIds,
+      packageType: packageSummary,
+      packages: plans.map((plan) => ({ id: plan.id, name: plan.name })),
+      notes: data.notes?.trim() || null,
+      email: data.email.toLowerCase().trim(),
+      accountQuota: data.accountQuota,
+      accountsCreated: 0,
+      isActive: true,
+    };
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
 }
 
 export async function updateOperatorStatus(adminId, operatorId, isActive, reqMeta = {}) {
@@ -327,7 +389,7 @@ export async function updateOperatorQuota(adminId, operatorId, accountQuota, req
 
 export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
   const [operator] = await query(
-    `SELECT id, client_name, package_type, email, account_quota, accounts_created, is_active
+    `SELECT id, client_name, package_type, package_id, email, account_quota, accounts_created, is_active
      FROM operators WHERE id = ? LIMIT 1`,
     [operatorId]
   );
@@ -336,6 +398,9 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
     throw new AppError('Operator not found', 404, 'NOT_FOUND');
   }
 
+  const plans = await assertPackagesAssignable(data.packageIds);
+  const packageSummary = formatPackageSummary(plans);
+  const primaryPackageId = plans[0].id;
   const normalizedEmail = data.email.toLowerCase().trim();
 
   if (normalizedEmail !== operator.email && (await emailExistsInSystem(normalizedEmail, operatorId))) {
@@ -350,57 +415,79 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
     );
   }
 
-  const fields = [
-    data.clientName.trim(),
-    data.packageType,
-    normalizedEmail,
-    data.accountQuota,
-    data.isActive ? 1 : 0,
-    operatorId,
-  ];
+  const connection = await getConnection();
 
-  let sql = `
-    UPDATE operators
-    SET client_name = ?, package_type = ?, email = ?, account_quota = ?, is_active = ?
-    WHERE id = ?
-  `;
+  try {
+    await connection.beginTransaction();
 
-  if (data.password?.trim()) {
-    const passwordHash = await bcrypt.hash(data.password, config.security.bcryptRounds);
-    sql = `
+    const fields = [
+      data.clientName.trim(),
+      packageSummary,
+      primaryPackageId,
+      data.notes?.trim() || null,
+      normalizedEmail,
+      data.accountQuota,
+      data.isActive ? 1 : 0,
+      operatorId,
+    ];
+
+    let sql = `
       UPDATE operators
-      SET client_name = ?, package_type = ?, email = ?, account_quota = ?, is_active = ?, password_hash = ?
+      SET client_name = ?, package_type = ?, package_id = ?, notes = ?, email = ?, account_quota = ?, is_active = ?
       WHERE id = ?
     `;
-    fields.splice(5, 0, passwordHash);
-  }
 
-  await query(sql, fields);
+    if (data.password?.trim()) {
+      const passwordHash = await bcrypt.hash(data.password, config.security.bcryptRounds);
+      sql = `
+        UPDATE operators
+        SET client_name = ?, package_type = ?, package_id = ?, notes = ?, email = ?, account_quota = ?, is_active = ?, password_hash = ?
+        WHERE id = ?
+      `;
+      fields.splice(7, 0, passwordHash);
+    }
 
-  await logAudit({
-    actorType: 'admin',
-    actorId: adminId,
-    action: 'OPERATOR_UPDATED',
-    resourceType: 'operator',
-    resourceId: operatorId,
-    ipAddress: reqMeta.ipAddress,
-    userAgent: reqMeta.userAgent,
-    metadata: {
+    await connection.execute(sql, fields);
+    await syncOperatorPackages(operatorId, data.packageIds, connection);
+
+    await connection.commit();
+
+    await logAudit({
+      actorType: 'admin',
+      actorId: adminId,
+      action: 'OPERATOR_UPDATED',
+      resourceType: 'operator',
+      resourceId: operatorId,
+      ipAddress: reqMeta.ipAddress,
+      userAgent: reqMeta.userAgent,
+      metadata: {
+        clientName: data.clientName.trim(),
+        packageIds: data.packageIds,
+        packageNames: plans.map((plan) => plan.name),
+        accountQuota: data.accountQuota,
+        isActive: data.isActive,
+        passwordChanged: Boolean(data.password?.trim()),
+      },
+    });
+
+    return {
+      id: operatorId,
       clientName: data.clientName.trim(),
-      packageType: data.packageType,
+      packageIds: data.packageIds,
+      packageType: packageSummary,
+      packages: plans.map((plan) => ({ id: plan.id, name: plan.name })),
+      notes: data.notes?.trim() || null,
+      email: normalizedEmail,
       accountQuota: data.accountQuota,
+      accountsCreated: operator.accounts_created,
       isActive: data.isActive,
-      passwordChanged: Boolean(data.password?.trim()),
-    },
-  });
-
-  return {
-    id: operatorId,
-    clientName: data.clientName.trim(),
-    packageType: data.packageType,
-    email: normalizedEmail,
-    accountQuota: data.accountQuota,
-    accountsCreated: operator.accounts_created,
-    isActive: data.isActive,
-  };
+    };
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
 }
+
+export { getActivePackages };

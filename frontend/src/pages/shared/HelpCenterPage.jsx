@@ -3,15 +3,25 @@ import { HelpCircle, Mail, BookOpen, MessageCircle } from 'lucide-react';
 import Layout from '../../components/Layout';
 import Sidebar from '../../components/Sidebar';
 import Header from '../../components/Header';
+import { useAuth } from '../../context/AuthContext';
+import { isStaffRole } from '../../constants/permissions';
 
 const ADMIN_FAQ = [
   {
-    q: 'How do I create an operator?',
-    a: 'Go to Operators in the sidebar, click Create Operator, fill in client name, package (e.g. OTT ENTERTAINMENT (1y)), email, password, and account quota.',
+    q: 'What are the staff roles?',
+    a: 'Admin has full access. Sales can manage operators, packages, and reports but cannot create staff accounts. Finance can manage operators, staff, and reports but cannot create or change packages.',
   },
   {
-    q: 'How do I add another admin?',
-    a: 'Open Admins in the sidebar and click Create Admin. Each admin has full portal access.',
+    q: 'How do I create a package?',
+    a: 'Go to Packages in the sidebar, click Create Package, load the CRM catalog (OTT-tagged products), pick a service and OTT-segment price tier, then save. Finance users can view packages but cannot create them.',
+  },
+  {
+    q: 'How do I create an operator?',
+    a: 'Go to Operators, click Create Operator, select one or more packages from the admin-created list, fill in client details, quota, and optional notes, then save.',
+  },
+  {
+    q: 'How do I add another staff account?',
+    a: 'Open Staff in the sidebar and click Create Staff Account. Only Admin users can create new staff accounts and assign Admin, Sales, or Finance roles.',
   },
   {
     q: 'How do I generate reports?',
@@ -29,8 +39,8 @@ const OPERATOR_FAQ = [
     a: 'Go to Bulk Upload. You can add up to 10 accounts at a time or import a CSV using the template. After submit, you will see per-row results showing which accounts succeeded or failed and why.',
   },
   {
-    q: 'What package is provisioned?',
-    a: 'Your administrator assigns your package (currently OTT ENTERTAINMENT (1y)). All accounts you create use that package automatically.',
+    q: 'What packages are provisioned?',
+    a: 'Your administrator assigns one or more packages to your operator account. When you create an account, all assigned packages are provisioned in CRM automatically.',
   },
   {
     q: 'How do I download my report?',
@@ -42,14 +52,15 @@ const OPERATOR_FAQ = [
   },
   {
     q: 'Why did an account fail?',
-    a: 'Open Accounts and check the Details column for failed rows. Common reasons include an existing active subscription for that phone number. Contact support if you need help resolving a failure.',
+    a: 'Open Accounts and check the Details column for failed rows. Common reasons include invalid phone numbers or CRM provisioning errors. Contact support if you need help resolving a failure.',
   },
 ];
 
 export default function HelpCenterPage() {
   const { pathname } = useLocation();
-  const role = pathname.startsWith('/admin') ? 'admin' : 'operator';
-  const faqs = role === 'admin' ? ADMIN_FAQ : OPERATOR_FAQ;
+  const { user } = useAuth();
+  const role = user?.role || (pathname.startsWith('/admin') ? 'admin' : 'operator');
+  const faqs = isStaffRole(role) || role === 'admin' ? ADMIN_FAQ : OPERATOR_FAQ;
 
   return (
     <Layout sidebar={<Sidebar role={role} />} header={<Header />}>
