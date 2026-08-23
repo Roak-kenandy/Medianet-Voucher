@@ -64,6 +64,8 @@
   border-radius: var(--radius-md);
   padding: 20px 24px;
   box-shadow: var(--shadow-sm);
+  min-width: 0;
+  overflow: hidden;
 }
 
 .stat-card-header {
@@ -96,6 +98,15 @@
   color: var(--color-text);
   line-height: 1.1;
   letter-spacing: -0.02em;
+}
+
+.stat-card-value.is-text {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.45;
+  letter-spacing: 0;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .stat-card-meta {

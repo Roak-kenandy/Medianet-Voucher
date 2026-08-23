@@ -151,7 +151,10 @@ export default function OperatorDashboard() {
                 <span className="stat-card-label">Packages</span>
                 <div className="stat-card-icon"><Package size={20} /></div>
               </div>
-              <div className="stat-card-value" style={{ fontSize: 16, lineHeight: 1.4 }}>
+              <div
+                className="stat-card-value is-text"
+                title={(stats?.packageNames?.length ? stats.packageNames : [stats?.packageType || 'OTT']).join(', ')}
+              >
                 {(stats?.packageNames?.length ? stats.packageNames : [stats?.packageType || 'OTT']).join(', ')}
               </div>
             </div>

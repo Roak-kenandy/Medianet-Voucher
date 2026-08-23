@@ -49,6 +49,17 @@ export function formatSummaryLabel(key) {
   return SUMMARY_LABELS[key] || formatColumnLabel(key);
 }
 
+const TEXT_SUMMARY_KEYS = new Set(['clientName', 'packageType', 'email']);
+
+export function isTextSummaryKey(key) {
+  return TEXT_SUMMARY_KEYS.has(key);
+}
+
+export function formatSummaryValue(key, value) {
+  if (key === 'packageType') return formatPackageLabel(value);
+  return String(value ?? '');
+}
+
 export function formatCellValue(key, value) {
   if (key === 'isActive') return value ? 'Yes' : 'No';
   if (key === 'packageType') return formatPackageLabel(value);

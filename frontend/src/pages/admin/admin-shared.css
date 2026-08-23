@@ -51,6 +51,8 @@
 
 .reports-summary .stat-card {
   min-height: 96px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .reports-summary .stat-card-label {
@@ -59,6 +61,27 @@
   color: var(--color-text-secondary);
   text-transform: none;
   letter-spacing: 0;
+  margin-bottom: 8px;
+}
+
+.reports-summary .stat-card-value {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+.reports-summary .stat-card-value.is-text {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.45;
+  letter-spacing: 0;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.reports-summary .stat-card-value.is-text.is-compact {
+  font-size: 14px;
 }
 
 .reports-table th {

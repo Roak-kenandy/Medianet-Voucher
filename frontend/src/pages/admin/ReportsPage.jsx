@@ -8,7 +8,7 @@ import { useToast } from '../../context/ToastContext';
 import TableToolbar, { useClientTable } from '../../components/TableToolbar';
 import TablePagination from '../../components/TablePagination';
 import { REPORT_TYPES } from '../../constants/packages';
-import { formatColumnLabel, formatSummaryLabel, formatCellValue, downloadCsv } from '../../utils/reports';
+import { formatColumnLabel, formatSummaryLabel, formatCellValue, formatSummaryValue, isTextSummaryKey, downloadCsv } from '../../utils/reports';
 import { getDefaultReportDateRange } from '../../utils/dates';
 import { useAuth } from '../../context/AuthContext';
 import './admin-shared.css';
@@ -175,12 +175,21 @@ export default function ReportsPage() {
 
       {report?.summary && (
         <div className="reports-summary">
-          {Object.entries(report.summary).map(([key, val]) => (
-            <div className="stat-card" key={key}>
-              <div className="stat-card-label">{formatSummaryLabel(key)}</div>
-              <div className="stat-card-value">{val}</div>
-            </div>
-          ))}
+          {Object.entries(report.summary).map(([key, val]) => {
+            const textValue = formatSummaryValue(key, val);
+            const isText = isTextSummaryKey(key);
+            return (
+              <div className="stat-card" key={key}>
+                <div className="stat-card-label">{formatSummaryLabel(key)}</div>
+                <div
+                  className={`stat-card-value${isText ? ' is-text' : ''}${isText && String(textValue).length > 36 ? ' is-compact' : ''}`}
+                  title={isText ? textValue : undefined}
+                >
+                  {textValue}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 

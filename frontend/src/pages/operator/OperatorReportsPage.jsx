@@ -7,7 +7,7 @@ import { operatorApi } from '../../api/client';
 import { useToast } from '../../context/ToastContext';
 import TableToolbar, { useClientTable } from '../../components/TableToolbar';
 import TablePagination from '../../components/TablePagination';
-import { formatColumnLabel, formatSummaryLabel, formatCellValue, downloadCsv } from '../../utils/reports';
+import { formatColumnLabel, formatSummaryLabel, formatCellValue, formatSummaryValue, isTextSummaryKey, downloadCsv } from '../../utils/reports';
 import { getDefaultReportDateRange } from '../../utils/dates';
 import '../admin/admin-shared.css';
 
@@ -112,14 +112,21 @@ export default function OperatorReportsPage() {
 
       {report?.summary && (
         <div className="reports-summary">
-          {Object.entries(report.summary).map(([key, val]) => (
-            <div className="stat-card" key={key}>
-              <div className="stat-card-label">{formatSummaryLabel(key)}</div>
-              <div className="stat-card-value" style={key === 'email' ? { fontSize: 16, wordBreak: 'break-all' } : undefined}>
-                {val}
+          {Object.entries(report.summary).map(([key, val]) => {
+            const textValue = formatSummaryValue(key, val);
+            const isText = isTextSummaryKey(key);
+            return (
+              <div className="stat-card" key={key}>
+                <div className="stat-card-label">{formatSummaryLabel(key)}</div>
+                <div
+                  className={`stat-card-value${isText ? ' is-text' : ''}${isText && String(textValue).length > 36 ? ' is-compact' : ''}`}
+                  title={isText ? textValue : undefined}
+                >
+                  {textValue}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
