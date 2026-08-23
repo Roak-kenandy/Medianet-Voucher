@@ -7,6 +7,35 @@ import { buildDailyTrend } from '../utils/chartData.js';
 import { paginationSql } from '../utils/pagination.js';
 import { getOperatorPackageIds, getOperatorPackages } from './packageService.js';
 
+async function resolveAccountPackageIds(operatorId, packageIds, connection) {
+  const allowedIds = await getOperatorPackageIds(operatorId, { activeOnly: true, connection });
+
+  if (!allowedIds.length) {
+    throw new AppError('Operator has no packages assigned', 400, 'PACKAGE_NOT_ASSIGNED');
+  }
+
+  const requested = [...new Set((packageIds || []).map((id) => Number(id)).filter(Boolean))];
+
+  if (allowedIds.length === 1) {
+    const onlyId = allowedIds[0];
+    if (requested.length && !requested.every((id) => id === onlyId)) {
+      throw new AppError('Selected package is not assigned to this operator', 400, 'PACKAGE_NOT_ALLOWED');
+    }
+    return [onlyId];
+  }
+
+  if (!requested.length) {
+    throw new AppError('Select at least one package before creating an account', 400, 'PACKAGE_REQUIRED');
+  }
+
+  const invalid = requested.filter((id) => !allowedIds.includes(id));
+  if (invalid.length) {
+    throw new AppError('Selected package is not assigned to this operator', 400, 'PACKAGE_NOT_ALLOWED');
+  }
+
+  return requested;
+}
+
 export async function getOperatorStats(operatorId) {
   const [operator] = await query(
     `SELECT o.id, o.client_name, o.package_id, o.package_type, o.account_quota, o.accounts_created, o.is_active
@@ -81,11 +110,11 @@ export async function getOperatorStats(operatorId) {
 
 export async function listAccounts(operatorId, { page = 1, limit = 20, search = '' } = {}) {
   const { page: pageNum, limit: limitNum, clause } = paginationSql(page, limit);
-  const filters = ['operator_id = ?'];
+  const filters = ['va.operator_id = ?'];
   const params = [operatorId];
 
   if (search) {
-    filters.push('(full_name LIKE ? OR phone_number LIKE ? OR status LIKE ?)');
+    filters.push('(va.full_name LIKE ? OR va.phone_number LIKE ? OR va.status LIKE ?)');
     const term = `%${search}%`;
     params.push(term, term, term);
   }
@@ -93,16 +122,22 @@ export async function listAccounts(operatorId, { page = 1, limit = 20, search = 
   const where = `WHERE ${filters.join(' AND ')}`;
 
   const accounts = await query(
-    `SELECT id, full_name, phone_number, status, external_ref, error_message, created_at
-     FROM voucher_accounts
+    `SELECT va.id, va.full_name, va.phone_number, va.status, va.external_ref, va.error_message,
+            va.created_at, va.package_id,
+            GROUP_CONCAT(DISTINCT p.name ORDER BY p.name SEPARATOR ', ') AS package_names
+     FROM voucher_accounts va
+     LEFT JOIN voucher_account_packages vap ON vap.voucher_account_id = va.id
+     LEFT JOIN packages p ON p.id = COALESCE(vap.package_id, va.package_id)
      ${where}
-     ORDER BY created_at DESC
+     GROUP BY va.id, va.full_name, va.phone_number, va.status, va.external_ref, va.error_message,
+              va.created_at, va.package_id
+     ORDER BY va.created_at DESC
      ${clause}`,
     params
   );
 
   const [countRow] = await query(
-    `SELECT COUNT(*) AS total FROM voucher_accounts ${where}`,
+    `SELECT COUNT(*) AS total FROM voucher_accounts va ${where}`,
     params
   );
 
@@ -155,13 +190,22 @@ async function createAndProvisionAccounts(connection, operatorId, accounts, pack
   const results = [];
 
   for (const account of accounts) {
+    const primaryPackageId = packageIds[0];
     const [insertResult] = await connection.execute(
-      `INSERT INTO voucher_accounts (operator_id, full_name, phone_number, status)
-       VALUES (?, ?, ?, 'pending')`,
-      [operatorId, account.fullName.trim(), account.phoneNumber.trim()]
+      `INSERT INTO voucher_accounts (operator_id, package_id, full_name, phone_number, status)
+       VALUES (?, ?, ?, ?, 'pending')`,
+      [operatorId, primaryPackageId, account.fullName.trim(), account.phoneNumber.trim()]
     );
 
     const voucherAccountId = insertResult.insertId;
+
+    for (const packageId of packageIds) {
+      await connection.execute(
+        `INSERT INTO voucher_account_packages (voucher_account_id, package_id) VALUES (?, ?)`,
+        [voucherAccountId, packageId]
+      );
+    }
+
     const provision = await provisionAccountInCrm(
       connection,
       voucherAccountId,
@@ -174,6 +218,7 @@ async function createAndProvisionAccounts(connection, operatorId, accounts, pack
       id: voucherAccountId,
       fullName: account.fullName.trim(),
       phoneNumber: account.phoneNumber.trim(),
+      packageIds,
       status: provision.success ? 'created' : 'failed',
       externalRef: provision.externalRef || null,
       errorMessage: provision.error || null,
@@ -185,10 +230,10 @@ async function createAndProvisionAccounts(connection, operatorId, accounts, pack
 }
 
 export async function createSingleAccount(operatorId, account, reqMeta = {}) {
-  return createBulkAccounts(operatorId, [account], reqMeta);
+  return createBulkAccounts(operatorId, [account], reqMeta, account.packageIds);
 }
 
-export async function createBulkAccounts(operatorId, accounts, reqMeta = {}) {
+export async function createBulkAccounts(operatorId, accounts, reqMeta = {}, packageIds) {
   if (accounts.length === 0) {
     throw new AppError('At least one account is required', 400, 'VALIDATION_ERROR');
   }
@@ -221,10 +266,11 @@ export async function createBulkAccounts(operatorId, accounts, reqMeta = {}) {
       throw new AppError('Operator account is inactive', 403, 'FORBIDDEN');
     }
 
-    const packageIds = await getOperatorPackageIds(operatorId, { activeOnly: true, connection });
-    if (!packageIds.length) {
-      throw new AppError('Operator has no packages assigned', 400, 'PACKAGE_NOT_ASSIGNED');
-    }
+    const resolvedPackageIds = await resolveAccountPackageIds(
+      operatorId,
+      packageIds ?? accounts[0]?.packageIds,
+      connection
+    );
 
     const remaining = operator.account_quota - operator.accounts_created;
     if (accounts.length > remaining) {
@@ -239,7 +285,7 @@ export async function createBulkAccounts(operatorId, accounts, reqMeta = {}) {
       connection,
       operatorId,
       accounts,
-      packageIds
+      resolvedPackageIds
     );
     const successCount = created.filter((item) => item.status === 'created').length;
 
@@ -274,6 +320,7 @@ export async function createBulkAccounts(operatorId, accounts, reqMeta = {}) {
         count: accounts.length,
         successCount,
         failedCount: created.length - successCount,
+        packageIds: resolvedPackageIds,
       },
     });
 

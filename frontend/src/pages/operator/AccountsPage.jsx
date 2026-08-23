@@ -62,23 +62,15 @@ function AccountCard({ acc, packageLabel }) {
 }
 
 export default function AccountsPage() {
-  const [data, setData] = useState({ accounts: [], pagination: {}, packageType: '' });
+  const [data, setData] = useState({ accounts: [], pagination: {} });
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([
-      operatorApi.getAccounts({ page, limit: 20, search }),
-      operatorApi.getStats(),
-    ])
-      .then(([accountsData, stats]) => {
-        setData({
-          ...accountsData,
-          packageType: stats.packageType,
-        });
-      })
+    operatorApi.getAccounts({ page, limit: 20, search })
+      .then((accountsData) => setData(accountsData))
       .finally(() => setLoading(false));
   }, [page, search]);
 
@@ -88,7 +80,9 @@ export default function AccountsPage() {
   };
 
   const { accounts, pagination } = data;
-  const packageLabel = formatPackageLabel(data.packageType);
+
+  const accountPackageLabel = (acc) =>
+    acc.package_names || acc.package_name || formatPackageLabel('');
 
   return (
     <Layout sidebar={<Sidebar role="operator" />} header={<Header />}>
@@ -143,7 +137,7 @@ export default function AccountsPage() {
                         <td style={{ fontWeight: 500 }}>{acc.full_name}</td>
                         <td>{acc.phone_number}</td>
                         <td>
-                          <span className="badge badge-info">{packageLabel}</span>
+                          <span className="badge badge-info">{accountPackageLabel(acc)}</span>
                         </td>
                         <td><StatusBadge status={acc.status} /></td>
                         <td>
@@ -168,7 +162,7 @@ export default function AccountsPage() {
 
               <div className="data-cards">
                 {accounts.map((acc) => (
-                  <AccountCard key={acc.id} acc={acc} packageLabel={packageLabel} />
+                  <AccountCard key={acc.id} acc={acc} packageLabel={accountPackageLabel(acc)} />
                 ))}
               </div>
 

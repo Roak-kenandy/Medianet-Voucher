@@ -108,11 +108,18 @@ export const reportQuerySchema = z.object({
 export const createAccountSchema = z.object({
   fullName: z.string().trim().min(2, 'Name is required').max(200),
   phoneNumber: phoneSchema,
+  packageIds: packageIdsSchema.optional(),
 });
 
 export const bulkAccountsSchema = z.object({
+  packageIds: packageIdsSchema.optional(),
   accounts: z
-    .array(createAccountSchema)
+    .array(
+      z.object({
+        fullName: z.string().trim().min(2, 'Name is required').max(200),
+        phoneNumber: phoneSchema,
+      })
+    )
     .min(1, 'At least one account is required')
     .max(10, 'Maximum 10 accounts per bulk upload'),
 });

@@ -257,7 +257,7 @@ export default function OperatorsTab() {
             ))}
           </div>
         )}
-        <p className="form-hint">Select one or more packages. All selected packages are provisioned when this operator creates an account.</p>
+        <p className="form-hint">Select one or more packages. The operator chooses which package(s) to use when creating each account.</p>
       </div>
       <div className="form-group">
         <label className="form-label">Email</label>

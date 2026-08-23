@@ -26,16 +26,32 @@ function ResultStatusBadge({ status }) {
   );
 }
 
+function togglePackageId(currentIds, packageId) {
+  const id = Number(packageId);
+  const current = currentIds.map(Number);
+  return current.includes(id)
+    ? current.filter((item) => item !== id)
+    : [...current, id];
+}
+
 export default function BulkUploadPage() {
   const toast = useToast();
   const [rows, setRows] = useState([emptyRow(), emptyRow(), emptyRow()]);
+  const [packages, setPackages] = useState([]);
+  const [packageIds, setPackageIds] = useState([]);
   const [remaining, setRemaining] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [results, setResults] = useState(null);
 
   useEffect(() => {
-    operatorApi.getStats().then((s) => setRemaining(s.remainingQuota));
+    operatorApi.getStats().then((s) => {
+      setRemaining(s.remainingQuota);
+      setPackages(s.packages || []);
+      if (s.packages?.length === 1) {
+        setPackageIds([s.packages[0].id]);
+      }
+    });
   }, []);
 
   const filledRows = rows.filter((r) => r.fullName.trim() || r.phoneNumber.trim());
@@ -84,9 +100,17 @@ export default function BulkUploadPage() {
       return;
     }
 
+    if (packages.length > 1 && !packageIds.length) {
+      setError('Select at least one package before uploading accounts');
+      return;
+    }
+
     setSubmitting(true);
     try {
-      const result = await operatorApi.createBulkAccounts(accounts);
+      const result = await operatorApi.createBulkAccounts(
+        accounts,
+        packageIds.length ? packageIds.map(Number) : undefined
+      );
       setRemaining(result.remainingQuota);
       setResults(result.created);
 
@@ -191,6 +215,35 @@ export default function BulkUploadPage() {
           )}
 
           <form onSubmit={handleSubmit}>
+            {packages.length > 1 && (
+              <div className="form-group" style={{ marginBottom: 20 }}>
+                <label className="form-label">Packages</label>
+                <div className="package-checkbox-list">
+                  {packages.map((pkg) => (
+                    <label key={pkg.id} className="package-checkbox-item">
+                      <input
+                        type="checkbox"
+                        checked={packageIds.map(Number).includes(Number(pkg.id))}
+                        onChange={() => setPackageIds((prev) => togglePackageId(prev, pkg.id))}
+                        disabled={remaining === 0}
+                      />
+                      <span>{pkg.name}</span>
+                    </label>
+                  ))}
+                </div>
+                <p className="form-hint">All accounts in this upload use the selected package(s).</p>
+              </div>
+            )}
+
+            {packages.length === 1 && (
+              <div className="form-group" style={{ marginBottom: 20 }}>
+                <label className="form-label">Package</label>
+                <p style={{ fontSize: 14, margin: 0 }}>
+                  <span className="badge badge-info">{packages[0].name}</span>
+                </p>
+              </div>
+            )}
+
             <div className="table-wrapper">
               <table className="table">
                 <thead>
@@ -258,7 +311,7 @@ export default function BulkUploadPage() {
               <button
                 type="submit"
                 className="btn btn-primary"
-                disabled={submitting || remaining === 0 || filledRows.length === 0}
+                disabled={submitting || remaining === 0 || filledRows.length === 0 || (packages.length > 1 && !packageIds.length)}
               >
                 <Upload size={16} />
                 {submitting ? 'Uploading...' : `Submit ${filledRows.length} Account(s)`}

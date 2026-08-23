@@ -32,15 +32,15 @@ const ADMIN_FAQ = [
 const OPERATOR_FAQ = [
   {
     q: 'How do I create a single account?',
-    a: 'Navigate to Create Account, enter the customer full name and their 7-digit Maldives mobile number (starts with 7 or 9, no +960), then submit. Your remaining quota is shown on the page.',
+    a: 'Navigate to Create Account. If you have multiple assigned packages, select one or more first. Enter the customer full name and their 7-digit Maldives mobile number (starts with 7 or 9, no +960), then submit. Your remaining quota is shown on the page.',
   },
   {
     q: 'How does bulk upload work?',
-    a: 'Go to Bulk Upload. You can add up to 10 accounts at a time or import a CSV using the template. After submit, you will see per-row results showing which accounts succeeded or failed and why.',
+    a: 'Go to Bulk Upload. If you have multiple assigned packages, choose one or more for the whole batch. You can add up to 10 accounts at a time or import a CSV using the template. After submit, you will see per-row results showing which accounts succeeded or failed and why.',
   },
   {
     q: 'What packages are provisioned?',
-    a: 'Your administrator assigns one or more packages to your operator account. When you create an account, all assigned packages are provisioned in CRM automatically.',
+    a: 'Your administrator may assign one or more packages to your operator account. When creating an account, you choose which of your assigned packages to provision — one or several. Only your selection is sent to CRM for that account.',
   },
   {
     q: 'How do I download my report?',

@@ -175,10 +175,10 @@ export const operatorApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  createBulkAccounts: (accounts) =>
+  createBulkAccounts: (accounts, packageIds) =>
     apiRequest('/operator/accounts/bulk', {
       method: 'POST',
-      body: JSON.stringify({ accounts }),
+      body: JSON.stringify({ accounts, packageIds }),
     }),
   generateReport: (params) => {
     const qs = new URLSearchParams(

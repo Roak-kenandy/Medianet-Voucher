@@ -55,8 +55,8 @@ router.post(
   '/accounts/bulk',
   createAccountLimiter,
   asyncHandler(async (req, res) => {
-    const { accounts } = bulkAccountsSchema.parse(req.body);
-    const result = await createBulkAccounts(req.user.id, accounts, getClientMeta(req));
+    const { accounts, packageIds } = bulkAccountsSchema.parse(req.body);
+    const result = await createBulkAccounts(req.user.id, accounts, getClientMeta(req), packageIds);
     success(res, result, 201);
   })
 );
