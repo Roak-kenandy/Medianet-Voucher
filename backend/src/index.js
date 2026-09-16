@@ -11,7 +11,13 @@ import adminRoutes from './routes/adminRoutes.js';
 import operatorRoutes from './routes/operatorRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
 
-validateSecurityConfig();
+try {
+  validateSecurityConfig();
+} catch (err) {
+  console.error('[Startup] API cannot start — fix production .env and restart:');
+  console.error(err.message);
+  process.exit(1);
+}
 
 const app = express();
 
