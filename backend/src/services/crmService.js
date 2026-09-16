@@ -29,6 +29,40 @@ function splitFullName(fullName) {
   };
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function formatCrmError(data = {}) {
+  const message = data.message || data.error || 'Unknown error';
+  const parameters = (data.parameters || []).filter(Boolean);
+  if (!parameters.length) {
+    return message;
+  }
+  return `${message} (${parameters.join(', ')})`;
+}
+
+function isRetryableSubscriptionError(status, data = {}) {
+  if (status >= 500) {
+    return true;
+  }
+
+  const message = String(data.message || data.error || '').toLowerCase();
+  if (message.includes('internal server error')) {
+    return true;
+  }
+
+  if (status !== 400) {
+    return false;
+  }
+
+  const parameters = (data.parameters || []).map((value) => String(value).toLowerCase());
+  return (
+    message.includes('invalid value') &&
+    parameters.some((value) => value.includes('price term'))
+  );
+}
+
 class CRMService {
   constructor() {
     this.apiKey = config.crm.apiKey;
@@ -527,15 +561,11 @@ class CRMService {
           return { success: true, data };
         }
 
-        const errorMessage = data?.message || data?.error || `HTTP ${response.status}`;
+        const errorMessage = formatCrmError(data);
         lastError = errorMessage;
 
-        const shouldRetry =
-          response.status >= 500 ||
-          String(errorMessage).toLowerCase().includes('internal server error');
-
-        if (shouldRetry && attempt < maxAttempts) {
-          await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+        if (isRetryableSubscriptionError(response.status, data) && attempt < maxAttempts) {
+          await delay(750 * attempt);
           continue;
         }
 
@@ -814,6 +844,9 @@ class CRMService {
     if (!paymentResult.success) {
       throw new Error(`Payment failed: ${paymentResult.message}`);
     }
+
+    // CRM rejects price_terms_id immediately after payment until the account balance settles.
+    await delay(1500);
 
     const subscription = await this.createSubscription(contactId, accountId, plans);
     if (!subscription?.success) {
