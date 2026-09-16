@@ -15,8 +15,8 @@ export default function PackagesPage() {
         <h1 className="page-title">Packages</h1>
         <p className="page-subtitle">
           {canCreatePackage
-            ? 'Create and manage CRM-linked packages for operator assignment'
-            : 'View CRM-linked packages used for operator assignment'}
+            ? 'Create and manage packages for operator assignment'
+            : 'View packages used for operator assignment'}
         </p>
       </div>
       <PackagesTab />

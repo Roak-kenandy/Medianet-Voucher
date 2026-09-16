@@ -21,7 +21,7 @@ export async function listPackages({ page = 1, limit = 20, search = '', activeOn
   const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
 
   const packages = await query(
-    `SELECT id, name, sku, product_id, price_term_id, price_amount, currency_code,
+    `SELECT id, name, service_tag, sku, product_id, price_term_id, price_amount, currency_code,
             description, is_active, created_at, updated_at
      FROM packages
      ${where}
@@ -46,7 +46,7 @@ export async function listPackages({ page = 1, limit = 20, search = '', activeOn
 
 export async function getActivePackages() {
   return query(
-    `SELECT id, name, sku, product_id, price_term_id, price_amount, currency_code, description
+    `SELECT id, name, service_tag, sku, product_id, price_term_id, price_amount, currency_code, description
      FROM packages
      WHERE is_active = 1
      ORDER BY name ASC`
@@ -55,7 +55,7 @@ export async function getActivePackages() {
 
 export async function getPackageById(packageId) {
   const [pkg] = await query(
-    `SELECT id, name, sku, product_id, price_term_id, price_amount, currency_code, description, is_active
+    `SELECT id, name, service_tag, sku, product_id, price_term_id, price_amount, currency_code, description, is_active
      FROM packages WHERE id = ? LIMIT 1`,
     [packageId]
   );
@@ -76,6 +76,7 @@ export async function getPlanByPackageId(packageId) {
     price_term_id: pkg.price_term_id,
     priceAmount: Number(pkg.price_amount),
     currencyCode: pkg.currency_code,
+    serviceTag: pkg.service_tag || 'OTT',
   };
 }
 
@@ -94,15 +95,16 @@ export async function createPackage(adminId, data, reqMeta = {}) {
   );
 
   if (existing.length) {
-    throw new AppError('This CRM product and price combination already exists', 409, 'PACKAGE_EXISTS');
+    throw new AppError('This product and price combination already exists', 409, 'PACKAGE_EXISTS');
   }
 
   const result = await query(
     `INSERT INTO packages
-       (name, sku, product_id, price_term_id, price_amount, currency_code, description, created_by_admin_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       (name, service_tag, sku, product_id, price_term_id, price_amount, currency_code, description, created_by_admin_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       data.name.trim(),
+      data.serviceTag || 'OTT',
       data.sku?.trim() || null,
       data.productId,
       data.priceTermId,
@@ -121,7 +123,7 @@ export async function createPackage(adminId, data, reqMeta = {}) {
     resourceId: result.insertId,
     ipAddress: reqMeta.ipAddress,
     userAgent: reqMeta.userAgent,
-    metadata: { name: data.name, productId: data.productId, priceTermId: data.priceTermId },
+    metadata: { name: data.name, productId: data.productId, priceTermId: data.priceTermId, serviceTag: data.serviceTag },
   });
 
   return getPackageById(result.insertId);
@@ -146,7 +148,7 @@ export async function getOperatorPackages(operatorId, { connection = null } = {}
     : query;
 
   return runner(
-    `SELECT p.id, p.name, p.sku, p.product_id, p.price_term_id, p.price_amount, p.currency_code, p.is_active
+    `SELECT p.id, p.name, p.service_tag, p.sku, p.product_id, p.price_term_id, p.price_amount, p.currency_code, p.is_active
      FROM operator_packages op
      INNER JOIN packages p ON p.id = op.package_id
      WHERE op.operator_id = ?
@@ -159,6 +161,47 @@ export async function getOperatorPackageIds(operatorId, { activeOnly = true, con
   const packages = await getOperatorPackages(operatorId, { connection });
   const filtered = activeOnly ? packages.filter((pkg) => pkg.is_active) : packages;
   return filtered.map((pkg) => pkg.id);
+}
+
+export async function sumPackagePrices(packageIds = [], { connection = null } = {}) {
+  const uniqueIds = [...new Set(packageIds.map((id) => Number(id)).filter(Boolean))];
+  if (!uniqueIds.length) {
+    return { total: 0, currencyCode: 'MVR', packages: [] };
+  }
+
+  const runner = connection
+    ? (sql, params) => connection.execute(sql, params).then(([rows]) => rows)
+    : query;
+
+  const placeholders = uniqueIds.map(() => '?').join(', ');
+  const rows = await runner(
+    `SELECT id, name, price_amount, currency_code, is_active
+     FROM packages
+     WHERE id IN (${placeholders})`,
+    uniqueIds
+  );
+
+  if (rows.length !== uniqueIds.length) {
+    throw new AppError('One or more packages are invalid', 400, 'PACKAGE_NOT_FOUND');
+  }
+
+  const inactive = rows.filter((row) => !row.is_active);
+  if (inactive.length) {
+    throw new AppError('One or more packages are inactive', 400, 'PACKAGE_INACTIVE');
+  }
+
+  const total = rows.reduce((sum, row) => sum + Number(row.price_amount), 0);
+
+  return {
+    total: Math.round(total * 100) / 100,
+    currencyCode: rows[0]?.currency_code || 'MVR',
+    packages: rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      priceAmount: Number(row.price_amount),
+      currencyCode: row.currency_code,
+    })),
+  };
 }
 
 export async function syncOperatorPackages(operatorId, packageIds, connection = null) {
@@ -182,7 +225,7 @@ export async function getOperatorPackagesByOperatorIds(operatorIds = []) {
 
   const placeholders = operatorIds.map(() => '?').join(', ');
   const rows = await query(
-    `SELECT op.operator_id, p.id, p.name, p.sku, p.price_amount, p.currency_code, p.is_active
+    `SELECT op.operator_id, p.id, p.name, p.service_tag, p.sku, p.price_amount, p.currency_code, p.is_active
      FROM operator_packages op
      INNER JOIN packages p ON p.id = op.package_id
      WHERE op.operator_id IN (${placeholders})
@@ -196,6 +239,7 @@ export async function getOperatorPackagesByOperatorIds(operatorIds = []) {
     map.get(row.operator_id).push({
       id: row.id,
       name: row.name,
+      serviceTag: row.service_tag || 'OTT',
       sku: row.sku,
       priceAmount: Number(row.price_amount),
       currencyCode: row.currency_code,

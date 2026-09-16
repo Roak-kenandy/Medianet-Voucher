@@ -23,7 +23,7 @@ async function seed() {
 
   console.log('Seed admin created:');
   console.log(`  Email: ${config.seed.adminEmail}`);
-  console.log(`  Password: ${config.seed.adminPassword}`);
+  console.log('  Password: (from SEED_ADMIN_PASSWORD — not logged for security)');
   console.log('Change the password after first login.');
 
   await pool.end();

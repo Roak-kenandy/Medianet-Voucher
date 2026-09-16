@@ -10,6 +10,9 @@ import {
   HelpCircle,
   Settings,
   Package,
+  Wallet,
+  Receipt,
+  CircleDollarSign,
 } from 'lucide-react';
 import { isStaffRole } from '../constants/permissions';
 import Logo from './Logo';
@@ -25,10 +28,13 @@ const adminNav = [
 
 const operatorNav = [
   { to: '/operator', label: 'Dashboard', icon: LayoutDashboard, end: true },
+  { to: '/operator/wallet', label: 'Wallet', icon: Wallet },
   { to: '/operator/create', label: 'Create Account', icon: UserPlus },
+  { to: '/operator/customer-topup', label: 'Customer Top-up', icon: CircleDollarSign },
   { to: '/operator/bulk', label: 'Bulk Upload', icon: Upload },
   { to: '/operator/accounts', label: 'Accounts', icon: List },
-  { to: '/operator/reports', label: 'Reports', icon: FileBarChart },
+  { to: '/operator/transactions', label: 'Transaction Reports', icon: Receipt },
+  { to: '/operator/reports', label: 'Account Reports', icon: FileBarChart },
 ];
 
 const footerNav = (role) => [

@@ -35,6 +35,23 @@ export function authenticate(req, _res, next) {
   }
 }
 
+export function ensureActiveAccount(req, _res, next) {
+  if (!req.user?.id || !req.user?.role) {
+    return next(new AppError('Authentication required', 401, 'UNAUTHORIZED'));
+  }
+
+  const lookupRole = req.user.role === 'operator' ? 'operator' : 'admin';
+
+  findUserById(lookupRole, req.user.id)
+    .then((user) => {
+      if (!user || !user.is_active) {
+        return next(new AppError('Account is inactive or not found', 401, 'UNAUTHORIZED'));
+      }
+      next();
+    })
+    .catch(next);
+}
+
 export function requireRole(...roles) {
   return (req, _res, next) => {
     if (!req.user || !roles.includes(req.user.role)) {

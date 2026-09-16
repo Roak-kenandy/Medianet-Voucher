@@ -12,6 +12,9 @@ import {
   getOperatorPackagesByOperatorIds,
   syncOperatorPackages,
 } from './packageService.js';
+import {
+  assertPackagesMatchServiceScope,
+} from '../constants/serviceTags.js';
 
 function formatPackageSummary(plans = []) {
   return plans.map((plan) => plan.name).join(', ');
@@ -43,7 +46,7 @@ export async function getAdminStats() {
   `);
 
   const operatorAccounts = await query(`
-    SELECT client_name AS clientName, accounts_created AS accountsCreated, account_quota AS accountQuota
+    SELECT client_name AS clientName, accounts_created AS accountsCreated, wallet_balance AS walletBalance
     FROM operators
     ORDER BY accounts_created DESC
     LIMIT 8
@@ -67,11 +70,7 @@ export async function getAdminStats() {
       operatorAccounts: operatorAccounts.map((row) => ({
         clientName: row.clientName,
         accountsCreated: Number(row.accountsCreated) || 0,
-        accountQuota: Number(row.accountQuota) || 0,
-        percentUsed:
-          row.accountQuota > 0
-            ? Math.round((row.accountsCreated / row.accountQuota) * 100)
-            : 0,
+        walletBalance: Number(row.walletBalance) || 0,
       })),
       operatorStatus: [
         { label: 'Active', count: Number(operatorStatus[0]?.active) || 0 },
@@ -213,7 +212,8 @@ export async function listOperators({ page = 1, limit = 20, search = '' } = {}) 
 
   const operators = await query(
     `SELECT DISTINCT
-       o.id, o.client_name, o.package_id, o.package_type, o.notes, o.email, o.account_quota, o.accounts_created,
+       o.id, o.client_name, o.package_id, o.package_type, o.service_scope, o.notes, o.email, o.wallet_balance,
+       o.wallet_commission_type, o.wallet_commission_value, o.accounts_created,
        o.is_active, o.created_at, o.updated_at,
        a.name AS created_by_name
      FROM operators o
@@ -267,6 +267,7 @@ export async function createOperator(adminId, data, reqMeta = {}) {
   }
 
   const plans = await assertPackagesAssignable(data.packageIds);
+  assertPackagesMatchServiceScope(plans, data.serviceScope || 'BOTH');
   const passwordHash = await bcrypt.hash(data.password, config.security.bcryptRounds);
   const packageSummary = formatPackageSummary(plans);
   const primaryPackageId = plans[0].id;
@@ -277,17 +278,21 @@ export async function createOperator(adminId, data, reqMeta = {}) {
     await connection.beginTransaction();
 
     const [result] = await connection.execute(
-      `INSERT INTO operators (admin_id, client_name, package_type, package_id, notes, email, password_hash, account_quota)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO operators
+         (admin_id, client_name, package_type, service_scope, package_id, notes, email, password_hash,
+          account_quota, wallet_balance, wallet_commission_type, wallet_commission_value)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`,
       [
         adminId,
         data.clientName.trim(),
         packageSummary,
+        data.serviceScope || 'BOTH',
         primaryPackageId,
         data.notes?.trim() || null,
         data.email.toLowerCase().trim(),
         passwordHash,
-        data.accountQuota,
+        data.walletCommissionType,
+        data.walletCommissionValue,
       ]
     );
 
@@ -308,19 +313,24 @@ export async function createOperator(adminId, data, reqMeta = {}) {
         clientName: data.clientName,
         packageIds: data.packageIds,
         packageNames: plans.map((plan) => plan.name),
-        accountQuota: data.accountQuota,
+        walletCommissionType: data.walletCommissionType,
+        walletCommissionValue: data.walletCommissionValue,
+        serviceScope: data.serviceScope || 'BOTH',
       },
     });
 
     return {
       id: operatorId,
       clientName: data.clientName,
+      serviceScope: data.serviceScope || 'BOTH',
       packageIds: data.packageIds,
       packageType: packageSummary,
       packages: plans.map((plan) => ({ id: plan.id, name: plan.name })),
       notes: data.notes?.trim() || null,
       email: data.email.toLowerCase().trim(),
-      accountQuota: data.accountQuota,
+      walletBalance: 0,
+      walletCommissionType: data.walletCommissionType,
+      walletCommissionValue: data.walletCommissionValue,
       accountsCreated: 0,
       isActive: true,
     };
@@ -389,7 +399,7 @@ export async function updateOperatorQuota(adminId, operatorId, accountQuota, req
 
 export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
   const [operator] = await query(
-    `SELECT id, client_name, package_type, package_id, email, account_quota, accounts_created, is_active
+    `SELECT id, client_name, package_type, package_id, email, accounts_created, is_active
      FROM operators WHERE id = ? LIMIT 1`,
     [operatorId]
   );
@@ -399,20 +409,13 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
   }
 
   const plans = await assertPackagesAssignable(data.packageIds);
+  assertPackagesMatchServiceScope(plans, data.serviceScope || 'BOTH');
   const packageSummary = formatPackageSummary(plans);
   const primaryPackageId = plans[0].id;
   const normalizedEmail = data.email.toLowerCase().trim();
 
   if (normalizedEmail !== operator.email && (await emailExistsInSystem(normalizedEmail, operatorId))) {
     throw new AppError('An account with this email already exists', 409, 'EMAIL_EXISTS');
-  }
-
-  if (data.accountQuota < operator.accounts_created) {
-    throw new AppError(
-      `Quota cannot be less than accounts already created (${operator.accounts_created})`,
-      400,
-      'QUOTA_TOO_LOW'
-    );
   }
 
   const connection = await getConnection();
@@ -423,17 +426,20 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
     const fields = [
       data.clientName.trim(),
       packageSummary,
+      data.serviceScope || 'BOTH',
       primaryPackageId,
       data.notes?.trim() || null,
       normalizedEmail,
-      data.accountQuota,
+      data.walletCommissionType,
+      data.walletCommissionValue,
       data.isActive ? 1 : 0,
       operatorId,
     ];
 
     let sql = `
       UPDATE operators
-      SET client_name = ?, package_type = ?, package_id = ?, notes = ?, email = ?, account_quota = ?, is_active = ?
+      SET client_name = ?, package_type = ?, service_scope = ?, package_id = ?, notes = ?, email = ?,
+          wallet_commission_type = ?, wallet_commission_value = ?, is_active = ?
       WHERE id = ?
     `;
 
@@ -441,10 +447,11 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
       const passwordHash = await bcrypt.hash(data.password, config.security.bcryptRounds);
       sql = `
         UPDATE operators
-        SET client_name = ?, package_type = ?, package_id = ?, notes = ?, email = ?, account_quota = ?, is_active = ?, password_hash = ?
+        SET client_name = ?, package_type = ?, service_scope = ?, package_id = ?, notes = ?, email = ?,
+            wallet_commission_type = ?, wallet_commission_value = ?, is_active = ?, password_hash = ?
         WHERE id = ?
       `;
-      fields.splice(7, 0, passwordHash);
+      fields.splice(9, 0, passwordHash);
     }
 
     await connection.execute(sql, fields);
@@ -464,11 +471,18 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
         clientName: data.clientName.trim(),
         packageIds: data.packageIds,
         packageNames: plans.map((plan) => plan.name),
-        accountQuota: data.accountQuota,
+        walletCommissionType: data.walletCommissionType,
+        walletCommissionValue: data.walletCommissionValue,
+        serviceScope: data.serviceScope || 'BOTH',
         isActive: data.isActive,
         passwordChanged: Boolean(data.password?.trim()),
       },
     });
+
+    const [updated] = await query(
+      `SELECT wallet_balance FROM operators WHERE id = ? LIMIT 1`,
+      [operatorId]
+    );
 
     return {
       id: operatorId,
@@ -478,7 +492,9 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
       packages: plans.map((plan) => ({ id: plan.id, name: plan.name })),
       notes: data.notes?.trim() || null,
       email: normalizedEmail,
-      accountQuota: data.accountQuota,
+      walletBalance: Number(updated?.wallet_balance) || 0,
+      walletCommissionType: data.walletCommissionType,
+      walletCommissionValue: data.walletCommissionValue,
       accountsCreated: operator.accounts_created,
       isActive: data.isActive,
     };

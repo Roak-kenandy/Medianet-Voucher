@@ -1,4 +1,5 @@
 import { formatPackageLabel } from '../constants/packages';
+import { formatMoney } from './money';
 
 const COLUMN_LABELS = {
   operatorId: 'Operator ID',
@@ -23,6 +24,18 @@ const COLUMN_LABELS = {
   phoneNumber: 'Phone Number',
   status: 'Status',
   createdAt: 'Created At',
+  time: 'Date & Time',
+  reference: 'Reference',
+  operator: 'Operator',
+  operatorEmail: 'Operator Email',
+  amountPaid: 'Amount Paid',
+  gstAmount: 'GST',
+  afterGst: 'After GST',
+  commission: 'Commission',
+  credited: 'Credited',
+  gstRatePercent: 'GST Rate %',
+  processedBy: 'Processed By',
+  paymentRef: 'Payment Reference',
 };
 
 const SUMMARY_LABELS = {
@@ -32,13 +45,22 @@ const SUMMARY_LABELS = {
   clientName: 'Client',
   packageType: 'Package',
   email: 'Email',
-  accountQuota: 'Account Quota',
-  accountsCreated: 'Accounts Used',
-  remainingQuota: 'Remaining Quota',
+  walletBalance: 'Wallet Balance',
+  currencyCode: 'Currency',
+  accountsCreated: 'Accounts Created',
+  spentInPeriod: 'Spent In Period',
   recordsInPeriod: 'Records In Period',
   createdInPeriod: 'Created In Period',
   pendingInPeriod: 'Pending In Period',
   failedInPeriod: 'Failed In Period',
+  totalRecords: 'Transactions',
+  totalAmountPaid: 'Total Paid',
+  totalAfterGst: 'Total After GST',
+  totalGstAmount: 'Total GST',
+  totalCommission: 'Total Commission',
+  totalCredited: 'Total Credited',
+  uniqueOperators: 'Operators',
+  gstRatePercent: 'GST Rate %',
 };
 
 export function formatColumnLabel(key) {
@@ -49,20 +71,42 @@ export function formatSummaryLabel(key) {
   return SUMMARY_LABELS[key] || formatColumnLabel(key);
 }
 
-const TEXT_SUMMARY_KEYS = new Set(['clientName', 'packageType', 'email']);
+const MONEY_SUMMARY_KEYS = new Set([
+  'walletBalance',
+  'spentInPeriod',
+  'totalAmountPaid',
+  'totalAfterGst',
+  'totalGstAmount',
+  'totalCommission',
+  'totalCredited',
+]);
+
+const TEXT_SUMMARY_KEYS = new Set(['clientName', 'packageType', 'email', 'currencyCode']);
 
 export function isTextSummaryKey(key) {
   return TEXT_SUMMARY_KEYS.has(key);
 }
 
-export function formatSummaryValue(key, value) {
+export function formatSummaryValue(key, value, currencyCode = 'MVR') {
   if (key === 'packageType') return formatPackageLabel(value);
+  if (MONEY_SUMMARY_KEYS.has(key)) return formatMoney(value, currencyCode);
+  if (key === 'gstRatePercent') return value != null ? `${value}%` : '—';
   return String(value ?? '');
 }
 
-export function formatCellValue(key, value) {
+const MONEY_COLUMN_KEYS = new Set([
+  'amountPaid',
+  'afterGst',
+  'credited',
+  'gstAmount',
+  'commission',
+]);
+
+export function formatCellValue(key, value, currencyCode = 'MVR') {
   if (key === 'isActive') return value ? 'Yes' : 'No';
   if (key === 'packageType') return formatPackageLabel(value);
+  if (MONEY_COLUMN_KEYS.has(key)) return formatMoney(value, currencyCode);
+  if (key === 'gstRatePercent') return value != null ? `${value}%` : '—';
   if (key === 'createdAt' && value) {
     return new Date(value).toLocaleString();
   }

@@ -69,8 +69,8 @@ export default function OperatorReportsPage() {
   return (
     <Layout sidebar={<Sidebar role="operator" />} header={<Header />}>
       <div className="page-header">
-        <h1 className="page-title">Reports</h1>
-        <p className="page-subtitle">Download your account activity and quota summary</p>
+        <h1 className="page-title">Account Reports</h1>
+        <p className="page-subtitle">Account creation activity by date range</p>
       </div>
 
       <div className="card reports-panel" style={{ marginBottom: 24 }}>
@@ -150,34 +150,34 @@ export default function OperatorReportsPage() {
               <div className="empty-state"><p>No rows match your search</p></div>
             ) : (
               <>
-              <div className="table-wrapper reports-table">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      {columns.map((c) => (
-                        <th key={c}>{formatColumnLabel(c)}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pagedRows.map((row, i) => (
-                      <tr key={i}>
+                <div className="table-wrapper reports-table">
+                  <table className="table">
+                    <thead>
+                      <tr>
                         {columns.map((c) => (
-                          <td key={c}>{formatCellValue(c, row[c])}</td>
+                          <th key={c}>{formatColumnLabel(c)}</th>
                         ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <TablePagination
-                page={tablePagination.page}
-                totalPages={tablePagination.totalPages}
-                total={tablePagination.total}
-                limit={tablePagination.limit}
-                onPageChange={setTablePage}
-                itemLabel="rows"
-              />
+                    </thead>
+                    <tbody>
+                      {pagedRows.map((row, i) => (
+                        <tr key={i}>
+                          {columns.map((c) => (
+                            <td key={c}>{formatCellValue(c, row[c])}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <TablePagination
+                  page={tablePagination.page}
+                  totalPages={tablePagination.totalPages}
+                  total={tablePagination.total}
+                  limit={tablePagination.limit}
+                  onPageChange={setTablePage}
+                  itemLabel="rows"
+                />
               </>
             )}
           </div>

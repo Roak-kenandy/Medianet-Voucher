@@ -3,12 +3,20 @@ import { Download, FileBarChart } from 'lucide-react';
 import Layout from '../../components/Layout';
 import Sidebar from '../../components/Sidebar';
 import Header from '../../components/Header';
+import TopupReportResults from '../../components/admin/TopupReportResults';
 import { adminApi } from '../../api/client';
 import { useToast } from '../../context/ToastContext';
 import TableToolbar, { useClientTable } from '../../components/TableToolbar';
 import TablePagination from '../../components/TablePagination';
 import { REPORT_TYPES } from '../../constants/packages';
-import { formatColumnLabel, formatSummaryLabel, formatCellValue, formatSummaryValue, isTextSummaryKey, downloadCsv } from '../../utils/reports';
+import {
+  formatColumnLabel,
+  formatSummaryLabel,
+  formatCellValue,
+  formatSummaryValue,
+  isTextSummaryKey,
+  downloadCsv,
+} from '../../utils/reports';
 import { getDefaultReportDateRange } from '../../utils/dates';
 import { useAuth } from '../../context/AuthContext';
 import './admin-shared.css';
@@ -20,7 +28,7 @@ export default function ReportsPage() {
   const [operators, setOperators] = useState([]);
   const [packages, setPackages] = useState([]);
   const [filters, setFilters] = useState({
-    reportType: 'client_summary',
+    reportType: 'dealer_topup',
     operatorId: '',
     packageType: '',
     startDate: defaultRange.startDate,
@@ -51,7 +59,7 @@ export default function ReportsPage() {
       setReport(data);
       setTableSearch('');
       setTablePage(1);
-      toast.success(`Report generated — ${data.rows?.length || 0} row(s)`);
+      toast.success(`Report generated — ${data.rows?.length || 0} transaction(s)`);
     } catch (err) {
       toast.error(err.message || 'Failed to generate report');
     } finally {
@@ -59,24 +67,31 @@ export default function ReportsPage() {
     }
   };
 
+  const isTopupReport = filters.reportType === 'dealer_topup';
+  const showPackageFilter = filters.reportType !== 'package_breakdown' && !isTopupReport;
+  const showOperatorFilter = filters.reportType !== 'package_breakdown';
+
   const exportCsv = async () => {
     try {
       const csv = await adminApi.exportReport(buildParams());
-      downloadCsv(csv, `report-${filters.reportType}.csv`);
+      downloadCsv(
+        csv,
+        isTopupReport ? 'operator-topup-report.csv' : `report-${filters.reportType}.csv`
+      );
       toast.success('Report exported successfully');
     } catch (err) {
       toast.error(err.message || 'Export failed');
     }
   };
 
-  const columns = report?.rows?.[0] ? Object.keys(report.rows[0]) : [];
+  const reportCurrency = report?.summary?.currencyCode || 'MVR';
+  const columns = !isTopupReport && report?.rows?.[0] ? Object.keys(report.rows[0]) : [];
   const { rows: pagedRows, pagination: tablePagination } = useClientTable(report?.rows || [], {
     search: tableSearch,
     page: tablePage,
     limit: 20,
     columns,
   });
-  const showPackageFilter = filters.reportType !== 'package_breakdown';
 
   const handleTableSearchChange = (value) => {
     setTableSearch(value);
@@ -87,7 +102,9 @@ export default function ReportsPage() {
     <Layout sidebar={<Sidebar role={user?.role || 'admin'} />} header={<Header />}>
       <div className="page-header">
         <h1 className="page-title">Reports</h1>
-        <p className="page-subtitle">Generate client-wise, period, and package breakdown reports</p>
+        <p className="page-subtitle">
+          Operator top-up, client summary, account activity, and package breakdown reports
+        </p>
       </div>
 
       <div className="card reports-panel" style={{ marginBottom: 24 }}>
@@ -106,15 +123,15 @@ export default function ReportsPage() {
               </select>
             </div>
 
-            {filters.reportType !== 'package_breakdown' && (
+            {showOperatorFilter && (
               <div className="form-group">
-                <label className="form-label">Client / Operator</label>
+                <label className="form-label">Operator</label>
                 <select
                   className="form-input"
                   value={filters.operatorId}
                   onChange={(e) => setFilters({ ...filters, operatorId: e.target.value })}
                 >
-                  <option value="">All clients</option>
+                  <option value="">All operators</option>
                   {operators.map((o) => (
                     <option key={o.id} value={o.id}>{o.client_name}</option>
                   ))}
@@ -164,19 +181,30 @@ export default function ReportsPage() {
               <FileBarChart size={18} />
               {loading ? 'Generating...' : 'Generate Report'}
             </button>
-            {report?.rows?.length > 0 && (
+            {(report?.rows?.length > 0 || report?.summary) && (
               <button className="btn btn-secondary" onClick={exportCsv}>
-                <Download size={18} /> Export CSV
+                <Download size={18} />
+                {isTopupReport ? 'Download Excel (CSV)' : 'Export CSV'}
               </button>
             )}
           </div>
         </div>
       </div>
 
-      {report?.summary && (
+      {isTopupReport && report && (
+        <TopupReportResults
+          report={report}
+          search={tableSearch}
+          onSearchChange={handleTableSearchChange}
+          page={tablePage}
+          onPageChange={setTablePage}
+        />
+      )}
+
+      {!isTopupReport && report?.summary && (
         <div className="reports-summary">
           {Object.entries(report.summary).map(([key, val]) => {
-            const textValue = formatSummaryValue(key, val);
+            const textValue = formatSummaryValue(key, val, reportCurrency);
             const isText = isTextSummaryKey(key);
             return (
               <div className="stat-card" key={key}>
@@ -193,7 +221,7 @@ export default function ReportsPage() {
         </div>
       )}
 
-      {report && (
+      {!isTopupReport && report && (
         <div className="card">
           <div className="card-header">
             <h3 className="card-title">Results</h3>
@@ -213,34 +241,34 @@ export default function ReportsPage() {
               <div className="empty-state"><p>No rows match your search</p></div>
             ) : (
               <>
-              <div className="table-wrapper reports-table">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      {columns.map((c) => (
-                        <th key={c}>{formatColumnLabel(c)}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pagedRows.map((row, i) => (
-                      <tr key={i}>
+                <div className="table-wrapper reports-table">
+                  <table className="table">
+                    <thead>
+                      <tr>
                         {columns.map((c) => (
-                          <td key={c}>{formatCellValue(c, row[c])}</td>
+                          <th key={c}>{formatColumnLabel(c)}</th>
                         ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <TablePagination
-                page={tablePagination.page}
-                totalPages={tablePagination.totalPages}
-                total={tablePagination.total}
-                limit={tablePagination.limit}
-                onPageChange={setTablePage}
-                itemLabel="rows"
-              />
+                    </thead>
+                    <tbody>
+                      {pagedRows.map((row, i) => (
+                        <tr key={i}>
+                          {columns.map((c) => (
+                            <td key={c}>{formatCellValue(c, row[c], reportCurrency)}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <TablePagination
+                  page={tablePagination.page}
+                  totalPages={tablePagination.totalPages}
+                  total={tablePagination.total}
+                  limit={tablePagination.limit}
+                  onPageChange={setTablePage}
+                  itemLabel="rows"
+                />
               </>
             )}
           </div>

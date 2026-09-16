@@ -131,6 +131,17 @@
   display: none;
 }
 
+@media (max-width: 1024px) {
+  .app-content {
+    padding: 24px 20px;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 16px;
+  }
+}
+
 @media (max-width: 768px) {
   .sidebar-backdrop {
     display: block;

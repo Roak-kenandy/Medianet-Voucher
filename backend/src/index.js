@@ -2,18 +2,28 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
-import { config } from './config/index.js';
+import { config, isProduction } from './config/index.js';
+import { validateSecurityConfig } from './config/securityValidation.js';
 import { errorHandler } from './utils/errors.js';
 import { globalLimiter } from './middleware/rateLimit.js';
 import authRoutes from './routes/authRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
 import operatorRoutes from './routes/operatorRoutes.js';
+import paymentRoutes from './routes/paymentRoutes.js';
+
+validateSecurityConfig();
 
 const app = express();
 
 app.set('trust proxy', 1);
 
-app.use(helmet());
+app.use(
+  helmet({
+    hsts: isProduction ? { maxAge: 31536000, includeSubDomains: true, preload: true } : false,
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: { policy: 'same-site' },
+  })
+);
 app.use(
   cors({
     origin: config.corsOrigin,
@@ -31,6 +41,7 @@ app.get('/api/health', (_req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/operator', operatorRoutes);
+app.use('/api/payments', paymentRoutes);
 
 app.use((_req, res) => {
   res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Route not found' });

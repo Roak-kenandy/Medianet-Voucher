@@ -1,6 +1,13 @@
 import { query } from '../db/pool.js';
+import {
+  generateDealerTopupReport,
+  dealerTopupReportToCsv,
+} from './dealerTopupReportService.js';
 
 export async function generateReport({ operatorId, packageType, startDate, endDate, reportType }) {
+  if (reportType === 'dealer_topup') {
+    return generateDealerTopupReport({ operatorId, startDate, endDate });
+  }
   if (reportType === 'accounts_by_period') {
     return accountsByPeriodReport({ operatorId, packageType, startDate, endDate });
   }
@@ -176,6 +183,10 @@ function buildPeriodSubquery(startDate, endDate) {
 }
 
 export function reportToCsv(report) {
+  if (report.reportType === 'dealer_topup') {
+    return dealerTopupReportToCsv(report);
+  }
+
   if (!report.rows?.length) return 'No data';
 
   const headers = Object.keys(report.rows[0]);

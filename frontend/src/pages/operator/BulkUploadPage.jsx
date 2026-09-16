@@ -7,6 +7,7 @@ import Header from '../../components/Header';
 import { operatorApi } from '../../api/client';
 import { useToast } from '../../context/ToastContext';
 import { sanitizePhoneInput, getPhoneValidationMessage, PHONE_HINT, PHONE_TEMPLATE_EXAMPLES } from '../../utils/phone';
+import { formatMoney, sumPackagePrices } from '../../utils/money';
 
 const MAX_BULK = 10;
 
@@ -39,14 +40,16 @@ export default function BulkUploadPage() {
   const [rows, setRows] = useState([emptyRow(), emptyRow(), emptyRow()]);
   const [packages, setPackages] = useState([]);
   const [packageIds, setPackageIds] = useState([]);
-  const [remaining, setRemaining] = useState(null);
+  const [walletBalance, setWalletBalance] = useState(null);
+  const [currencyCode, setCurrencyCode] = useState('MVR');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [results, setResults] = useState(null);
 
   useEffect(() => {
     operatorApi.getStats().then((s) => {
-      setRemaining(s.remainingQuota);
+      setWalletBalance(s.walletBalance);
+      setCurrencyCode(s.currencyCode || 'MVR');
       setPackages(s.packages || []);
       if (s.packages?.length === 1) {
         setPackageIds([s.packages[0].id]);
@@ -55,7 +58,17 @@ export default function BulkUploadPage() {
   }, []);
 
   const filledRows = rows.filter((r) => r.fullName.trim() || r.phoneNumber.trim());
-  const canAddMore = rows.length < MAX_BULK && rows.length < (remaining ?? MAX_BULK);
+  const canAddMore = rows.length < MAX_BULK;
+
+  const activePackageIds = packageIds.length
+    ? packageIds
+    : packages.length === 1
+      ? [packages[0].id]
+      : [];
+
+  const unitCost = sumPackagePrices(packages, activePackageIds);
+  const totalCost = unitCost * filledRows.length;
+  const canAfford = walletBalance == null || totalCost === 0 || walletBalance >= totalCost;
 
   const addRow = () => {
     if (rows.length >= MAX_BULK) return;
@@ -111,7 +124,7 @@ export default function BulkUploadPage() {
         accounts,
         packageIds.length ? packageIds.map(Number) : undefined
       );
-      setRemaining(result.remainingQuota);
+      setWalletBalance(result.walletBalance);
       setResults(result.created);
 
       const successCount = result.created.filter((r) => r.status === 'created').length;
@@ -179,16 +192,16 @@ export default function BulkUploadPage() {
 
   return (
     <Layout sidebar={<Sidebar role="operator" />} header={<Header />}>
-      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+      <div className="page-header-row">
         <div>
           <h1 className="page-title">Bulk Upload</h1>
           <p className="page-subtitle">
             Upload up to {MAX_BULK} accounts at a time
-            {remaining !== null && ` · ${remaining.toLocaleString()} quota remaining`}
+            {walletBalance !== null && ` · Wallet ${formatMoney(walletBalance, currencyCode)}`}
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-secondary" onClick={downloadTemplate}>
+        <div className="page-header-actions">
+          <button type="button" className="btn btn-secondary" onClick={downloadTemplate}>
             <Download size={16} /> Template
           </button>
           <label className="btn btn-secondary" style={{ cursor: 'pointer' }}>
@@ -208,9 +221,16 @@ export default function BulkUploadPage() {
         <div className="card-body">
           {error && <div className="alert alert-error">{error}</div>}
 
-          {remaining === 0 && (
+          {!canAfford && filledRows.length > 0 && (
             <div className="alert alert-info">
-              You have reached your account creation quota.
+              Insufficient wallet balance for {filledRows.length} account(s) ({formatMoney(totalCost, currencyCode)} required).{' '}
+              <Link to="/operator/wallet">Top up your wallet</Link>
+            </div>
+          )}
+
+          {unitCost > 0 && filledRows.length > 0 && (
+            <div className="alert alert-info" style={{ background: 'var(--color-bg)' }}>
+              Estimated cost: {formatMoney(totalCost, currencyCode)} ({formatMoney(unitCost, currencyCode)} × {filledRows.length} account(s))
             </div>
           )}
 
@@ -225,7 +245,7 @@ export default function BulkUploadPage() {
                         type="checkbox"
                         checked={packageIds.map(Number).includes(Number(pkg.id))}
                         onChange={() => setPackageIds((prev) => togglePackageId(prev, pkg.id))}
-                        disabled={remaining === 0}
+                        disabled={!canAfford}
                       />
                       <span>{pkg.name}</span>
                     </label>
@@ -264,7 +284,7 @@ export default function BulkUploadPage() {
                           value={row.fullName}
                           onChange={(e) => updateRow(row.key, 'fullName', e.target.value)}
                           placeholder="Customer name"
-                          disabled={remaining === 0}
+                          disabled={!canAfford}
                         />
                       </td>
                       <td>
@@ -279,7 +299,7 @@ export default function BulkUploadPage() {
                           maxLength={7}
                           pattern="[79][0-9]{6}"
                           aria-label={`Phone number row ${idx + 1}`}
-                          disabled={remaining === 0}
+                          disabled={!canAfford}
                         />
                       </td>
                       <td>
@@ -304,14 +324,14 @@ export default function BulkUploadPage() {
                 type="button"
                 className="btn btn-secondary"
                 onClick={addRow}
-                disabled={!canAddMore || remaining === 0}
+                disabled={!canAddMore || !canAfford}
               >
                 <Plus size={16} /> Add Row
               </button>
               <button
                 type="submit"
                 className="btn btn-primary"
-                disabled={submitting || remaining === 0 || filledRows.length === 0 || (packages.length > 1 && !packageIds.length)}
+                disabled={submitting || !canAfford || filledRows.length === 0 || (packages.length > 1 && !packageIds.length)}
               >
                 <Upload size={16} />
                 {submitting ? 'Uploading...' : `Submit ${filledRows.length} Account(s)`}

@@ -1,3 +1,4 @@
+import { config } from '../config/index.js';
 import { query } from '../db/pool.js';
 import { AppError } from '../utils/errors.js';
 import { getOperatorPackages } from './packageService.js';
@@ -20,7 +21,7 @@ function buildDateFilters(startDate, endDate, column = 'va.created_at') {
 
 export async function generateOperatorReport(operatorId, { startDate, endDate } = {}) {
   const [operator] = await query(
-    `SELECT o.id, o.client_name, o.package_type, o.email, o.account_quota, o.accounts_created
+    `SELECT o.id, o.client_name, o.package_type, o.email, o.wallet_balance, o.accounts_created
      FROM operators o
      WHERE o.id = ? LIMIT 1`,
     [operatorId]
@@ -41,6 +42,7 @@ export async function generateOperatorReport(operatorId, { startDate, endDate } 
        full_name AS fullName,
        phone_number AS phoneNumber,
        status,
+       amount_charged AS amountCharged,
        created_at AS createdAt
      FROM voucher_accounts va
      WHERE operator_id = ? ${dateWhere}
@@ -53,13 +55,14 @@ export async function generateOperatorReport(operatorId, { startDate, endDate } 
        COUNT(*) AS total,
        SUM(CASE WHEN status = 'created' THEN 1 ELSE 0 END) AS created,
        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
-       SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
+       SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+       COALESCE(SUM(CASE WHEN status = 'created' THEN amount_charged ELSE 0 END), 0) AS spent
      FROM voucher_accounts va
      WHERE operator_id = ? ${dateWhere}`,
     [operatorId, ...params]
   );
 
-  const remaining = Math.max(0, operator.account_quota - operator.accounts_created);
+  const walletBalance = Math.round(Number(operator.wallet_balance) * 100) / 100;
 
   return {
     reportType: 'operator_activity',
@@ -69,16 +72,18 @@ export async function generateOperatorReport(operatorId, { startDate, endDate } 
       clientName: operator.client_name,
       packageType,
       email: operator.email,
-      accountQuota: operator.account_quota,
+      walletBalance,
+      currencyCode: config.wallet.currencyCode,
       accountsCreated: operator.accounts_created,
-      remainingQuota: remaining,
       recordsInPeriod: Number(statusCounts.total),
       createdInPeriod: Number(statusCounts.created),
       pendingInPeriod: Number(statusCounts.pending),
       failedInPeriod: Number(statusCounts.failed),
+      spentInPeriod: Math.round(Number(statusCounts.spent) * 100) / 100,
     },
     rows: rows.map((row) => ({
       ...row,
+      amountCharged: row.amountCharged != null ? Number(row.amountCharged) : null,
       createdAt: row.createdAt ? new Date(row.createdAt).toISOString() : '',
     })),
   };
@@ -89,9 +94,9 @@ export function operatorReportToCsv(report) {
     'Operator Activity Report',
     `Client,${report.summary.clientName}`,
     `Package,${report.summary.packageType}`,
-    `Quota,${report.summary.accountQuota}`,
-    `Used,${report.summary.accountsCreated}`,
-    `Remaining,${report.summary.remainingQuota}`,
+    `Wallet Balance,${report.summary.walletBalance}`,
+    `Accounts Created,${report.summary.accountsCreated}`,
+    `Spent In Period,${report.summary.spentInPeriod}`,
     `Period Records,${report.summary.recordsInPeriod}`,
     '',
   ];
@@ -101,11 +106,11 @@ export function operatorReportToCsv(report) {
     return lines.join('\n');
   }
 
-  const headers = ['Full Name', 'Phone Number', 'Status', 'Created At'];
+  const headers = ['Full Name', 'Phone Number', 'Status', 'Amount Charged', 'Created At'];
   lines.push(headers.join(','));
   report.rows.forEach((row) => {
     lines.push(
-      [row.fullName, row.phoneNumber, row.status, row.createdAt]
+      [row.fullName, row.phoneNumber, row.status, row.amountCharged ?? '', row.createdAt]
         .map((val) => `"${String(val ?? '').replace(/"/g, '""')}"`)
         .join(',')
     );

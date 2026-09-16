@@ -36,9 +36,9 @@ export function sanitizeUser(user, role) {
       packages,
       packageIds: packages.map((pkg) => pkg.id),
       packageId: user.package_id,
-      accountQuota: user.account_quota,
+      walletBalance: Math.round(Number(user.wallet_balance) * 100) / 100,
+      currencyCode: user.currency_code || undefined,
       accountsCreated: user.accounts_created,
-      remainingQuota: Math.max(0, user.account_quota - user.accounts_created),
     };
   }
 

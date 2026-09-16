@@ -212,6 +212,29 @@ export async function refreshSession(refreshToken) {
   }
 
   const tokenHash = hashToken(refreshToken);
+
+  const reusedRows = await query(
+    `SELECT user_type, user_id FROM refresh_tokens
+     WHERE token_hash = ? AND revoked_at IS NOT NULL
+     LIMIT 1`,
+    [tokenHash]
+  );
+
+  if (reusedRows[0]) {
+    await query(
+      `UPDATE refresh_tokens SET revoked_at = NOW()
+       WHERE user_type = ? AND user_id = ? AND revoked_at IS NULL`,
+      [reusedRows[0].user_type, reusedRows[0].user_id]
+    );
+    await logAudit({
+      actorType: reusedRows[0].user_type,
+      actorId: reusedRows[0].user_id,
+      action: 'REFRESH_TOKEN_REUSE_DETECTED',
+      metadata: { reason: 'revoked_token_reused' },
+    });
+    throw new AppError('Session expired. Please log in again.', 401, 'SESSION_REVOKED');
+  }
+
   const rows = await query(
     `SELECT * FROM refresh_tokens
      WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > NOW()

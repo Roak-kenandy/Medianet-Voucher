@@ -11,6 +11,7 @@ import { formatPackageLabel } from '../../constants/packages';
 
 function StatusBadge({ status }) {
   const map = {
+    registered: 'badge-neutral',
     pending: 'badge-warning',
     processing: 'badge-info',
     created: 'badge-success',

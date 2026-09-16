@@ -1,0 +1,315 @@
+/* Cross-cutting responsive layout — mobile, tablet, desktop */
+
+/* Page headers with side actions (Bulk Upload, etc.) */
+.page-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 28px;
+}
+
+.page-header-row .page-header,
+.page-header-row > div:first-child {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.page-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Horizontal scroll hint for wide tables */
+.table-wrapper {
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+
+.table-scroll-container {
+  position: relative;
+}
+
+.table-scroll-container::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 24px;
+  pointer-events: none;
+  background: linear-gradient(to left, rgba(255, 255, 255, 0.95), transparent);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+@media (max-width: 768px) {
+  .table-scroll-container::after {
+    opacity: 1;
+  }
+
+  .operators-table {
+    min-width: 900px;
+  }
+
+  .table th,
+  .table td {
+    padding: 10px 12px;
+    font-size: 13px;
+  }
+}
+
+/* Page tabs — scroll on narrow screens */
+.page-tabs {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  flex-wrap: nowrap;
+  padding-bottom: 2px;
+}
+
+.page-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.page-tab {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Tablet */
+@media (max-width: 1024px) {
+  .page-title {
+    font-size: 24px;
+  }
+
+  .stat-card-value {
+    font-size: 28px;
+  }
+
+  .card-header,
+  .card-body {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .page-header-row {
+    margin-bottom: 20px;
+  }
+
+  .page-title {
+    font-size: 22px;
+  }
+
+  .page-subtitle {
+    font-size: 13px;
+  }
+
+  .page-header-actions {
+    width: 100%;
+  }
+
+  .page-header-actions .btn {
+    flex: 1;
+    min-width: 0;
+    justify-content: center;
+  }
+
+  .stats-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .stat-card {
+    padding: 16px 18px;
+  }
+
+  .stat-card-value {
+    font-size: 26px;
+  }
+
+  .quick-actions {
+    flex-direction: column;
+  }
+
+  .quick-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .card-header {
+    padding: 16px 18px;
+  }
+
+  .card-body {
+    padding: 18px;
+  }
+
+  .card-header .card-title {
+    font-size: 15px;
+  }
+
+  .workflow-step-header {
+    padding: 14px 18px;
+    flex-wrap: wrap;
+  }
+
+  .workflow-step-body {
+    padding: 18px;
+  }
+
+  .workflow-header-wallet {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .wallet-pending-banner {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .wallet-pending-banner-actions {
+    width: 100%;
+  }
+
+  .wallet-pending-banner-actions .btn {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .wallet-payment-status-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .service-type-picker {
+    display: flex;
+    width: 100%;
+  }
+
+  .service-type-option {
+    flex: 1;
+    text-align: center;
+    padding: 10px 12px;
+  }
+
+  .package-picker-single {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .reports-actions {
+    flex-direction: column;
+  }
+
+  .reports-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .success-panel-actions {
+    flex-direction: column;
+  }
+
+  .success-panel-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .settings-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .header-dropdown {
+    width: min(260px, calc(100vw - 32px));
+    right: 0;
+  }
+
+  .topup-report-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .topup-report-summary-value {
+    font-size: 18px;
+  }
+
+  .wallet-balance-value {
+    font-size: 26px;
+  }
+
+  .operator-kpi-wallet-value {
+    font-size: 28px;
+  }
+
+  .operator-spend-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .operator-spend-amount {
+    text-align: left;
+  }
+}
+
+/* Small phones */
+@media (max-width: 480px) {
+  .page-title {
+    font-size: 20px;
+  }
+
+  .btn {
+    padding: 10px 14px;
+    font-size: 13px;
+  }
+
+  .btn-lg {
+    padding: 12px 18px;
+    font-size: 14px;
+  }
+
+  .topup-report-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .wallet-topup-total-value {
+    font-size: 20px;
+  }
+
+  .workflow-summary-top-value {
+    font-size: 26px;
+  }
+
+  .operator-kpi-card-value {
+    font-size: 24px;
+  }
+}
+
+/* Safe areas (notched phones) */
+@supports (padding: max(0px)) {
+  .app-content {
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+    padding-bottom: max(20px, env(safe-area-inset-bottom));
+  }
+
+  .toast-container {
+    bottom: max(20px, env(safe-area-inset-bottom));
+    right: max(16px, env(safe-area-inset-right));
+    left: max(16px, env(safe-area-inset-left));
+  }
+
+  .login-page {
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+    padding-bottom: max(24px, env(safe-area-inset-bottom));
+  }
+}

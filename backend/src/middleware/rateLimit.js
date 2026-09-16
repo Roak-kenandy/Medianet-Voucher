@@ -36,3 +36,39 @@ export const createAccountLimiter = rateLimit({
     message: 'Too many account creation requests. Please slow down.',
   },
 });
+
+export const walletTopupLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    code: 'RATE_LIMIT',
+    message: 'Too many wallet top-up attempts. Please try again later.',
+  },
+});
+
+export const walletStatusLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    code: 'RATE_LIMIT',
+    message: 'Too many payment status checks. Please wait a moment.',
+  },
+});
+
+export const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    code: 'RATE_LIMIT',
+    message: 'Too many webhook requests.',
+  },
+});

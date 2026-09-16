@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate, requireStaffRole, requirePermission } from '../middleware/auth.js';
+import { authenticate, ensureActiveAccount, requireStaffRole, requirePermission } from '../middleware/auth.js';
 import { asyncHandler, success } from '../utils/errors.js';
 import { getClientMeta } from '../services/auditService.js';
 import { crmService } from '../services/crmService.js';
@@ -11,10 +11,15 @@ import {
   listOperators,
   createOperator,
   updateOperatorStatus,
-  updateOperatorQuota,
   updateOperator,
   getActivePackages,
 } from '../services/adminService.js';
+import {
+  getOperatorWallet,
+  adminAdjustWallet,
+  completeTopup,
+  listWalletTransactions,
+} from '../services/walletService.js';
 import {
   listPackages,
   createPackage,
@@ -26,14 +31,14 @@ import {
   createOperatorSchema,
   createPackageSchema,
   updateOperatorSchema,
-  updateQuotaSchema,
+  walletAdjustSchema,
   reportQuerySchema,
   listQuerySchema,
 } from '../validators/schemas.js';
 
 const router = Router();
 
-router.use(authenticate, requireStaffRole());
+router.use(authenticate, ensureActiveAccount, requireStaffRole());
 
 router.get(
   '/packages',
@@ -54,6 +59,7 @@ router.get(
         value: pkg.id,
         label: pkg.name,
         name: pkg.name,
+        serviceTag: pkg.service_tag || 'OTT',
         priceAmount: Number(pkg.price_amount),
         currencyCode: pkg.currency_code,
       })),
@@ -64,9 +70,10 @@ router.get(
 router.get(
   '/packages/crm-recommendations',
   requirePermission('createPackage'),
-  asyncHandler(async (_req, res) => {
-    const recommendations = await crmService.fetchOttProductCatalog();
-    success(res, { recommendations });
+  asyncHandler(async (req, res) => {
+    const serviceTag = req.query.serviceTag === 'MEDIANET_TV' ? 'MEDIANET_TV' : 'OTT';
+    const recommendations = await crmService.fetchProductCatalog(serviceTag);
+    success(res, { recommendations, serviceTag });
   })
 );
 
@@ -140,6 +147,7 @@ router.get(
 
 router.post(
   '/operators',
+  requirePermission('manageOperators'),
   asyncHandler(async (req, res) => {
     const data = createOperatorSchema.parse(req.body);
     const operator = await createOperator(req.user.id, data, getClientMeta(req));
@@ -149,6 +157,7 @@ router.post(
 
 router.patch(
   '/operators/:id/status',
+  requirePermission('manageOperators'),
   asyncHandler(async (req, res) => {
     const operatorId = parseInt(req.params.id, 10);
     const isActive = Boolean(req.body.isActive);
@@ -157,18 +166,53 @@ router.patch(
   })
 );
 
-router.patch(
-  '/operators/:id/quota',
+router.get(
+  '/operators/:id/wallet',
   asyncHandler(async (req, res) => {
     const operatorId = parseInt(req.params.id, 10);
-    const { accountQuota } = updateQuotaSchema.parse(req.body);
-    const result = await updateOperatorQuota(req.user.id, operatorId, accountQuota, getClientMeta(req));
+    const wallet = await getOperatorWallet(operatorId);
+    success(res, wallet);
+  })
+);
+
+router.get(
+  '/operators/:id/wallet/transactions',
+  asyncHandler(async (req, res) => {
+    const operatorId = parseInt(req.params.id, 10);
+    const queryParams = listQuerySchema.parse(req.query);
+    const result = await listWalletTransactions(operatorId, queryParams);
+    success(res, result);
+  })
+);
+
+router.post(
+  '/operators/:id/wallet/adjust',
+  requirePermission('adjustWallet'),
+  asyncHandler(async (req, res) => {
+    const operatorId = parseInt(req.params.id, 10);
+    const { amount, description } = walletAdjustSchema.parse(req.body);
+    const result = await adminAdjustWallet(req.user.id, operatorId, amount, description, getClientMeta(req));
+    success(res, result);
+  })
+);
+
+router.post(
+  '/operators/:id/wallet/topups/:transactionId/complete',
+  requirePermission('completeTopup'),
+  asyncHandler(async (req, res) => {
+    const transactionId = parseInt(req.params.transactionId, 10);
+    const paymentRef = req.body.paymentRef ? String(req.body.paymentRef) : null;
+    const result = await completeTopup(transactionId, paymentRef, getClientMeta(req), {
+      type: 'admin',
+      id: req.user.id,
+    });
     success(res, result);
   })
 );
 
 router.patch(
   '/operators/:id',
+  requirePermission('manageOperators'),
   asyncHandler(async (req, res) => {
     const operatorId = parseInt(req.params.id, 10);
     const data = updateOperatorSchema.parse(req.body);

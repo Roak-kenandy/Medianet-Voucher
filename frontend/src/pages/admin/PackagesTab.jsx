@@ -7,6 +7,7 @@ import { adminApi } from '../../api/client';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import { hasPermission } from '../../constants/permissions';
+import { SERVICE_TAGS, getServiceTagLabel } from '../../constants/serviceTags';
 import './admin-shared.css';
 
 function StatusBadge({ active }) {
@@ -19,6 +20,7 @@ function StatusBadge({ active }) {
 
 const emptyForm = () => ({
   name: '',
+  serviceTag: 'OTT',
   sku: '',
   productId: '',
   priceTermId: '',
@@ -37,6 +39,7 @@ export default function PackagesTab() {
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [crmLoading, setCrmLoading] = useState(false);
+  const [catalogServiceTag, setCatalogServiceTag] = useState('OTT');
   const [recommendations, setRecommendations] = useState([]);
   const [form, setForm] = useState(emptyForm());
   const [error, setError] = useState('');
@@ -68,18 +71,19 @@ export default function PackagesTab() {
     setError('');
   };
 
-  const loadCrmCatalog = async () => {
+  const loadCrmCatalog = async (serviceTag = catalogServiceTag) => {
     setCrmLoading(true);
     setError('');
     try {
-      const items = await adminApi.getCrmRecommendations();
+      const items = await adminApi.getCrmRecommendations(serviceTag);
       setRecommendations(items);
+      setForm((prev) => ({ ...prev, serviceTag, productId: '', priceTermId: '', priceAmount: '' }));
       if (!items.length) {
-        toast.warning('No CRM packages returned');
+        toast.warning(`No packages returned for ${getServiceTagLabel(serviceTag)}`);
       }
     } catch (err) {
-      setError(err.message || 'Failed to load CRM catalog');
-      toast.error(err.message || 'Failed to load CRM catalog');
+      setError(err.message || 'Failed to load service catalog');
+      toast.error(err.message || 'Failed to load service catalog');
     } finally {
       setCrmLoading(false);
     }
@@ -195,7 +199,7 @@ export default function PackagesTab() {
               <p className="empty-state-title">
                 {search ? 'No packages match your search' : 'No packages yet'}
               </p>
-              <p>{search ? 'Try a different search term' : (canCreatePackage ? 'Create packages from the CRM catalog to assign them to operators' : 'View packages assigned to operators')}</p>
+              <p>{search ? 'Try a different search term' : (canCreatePackage ? 'Create packages from the service catalog to assign them to operators' : 'View packages assigned to operators')}</p>
               {!search && canCreatePackage && (
                 <div className="empty-state-action">
                   <button className="btn btn-primary" onClick={() => { resetForm(); setModalOpen(true); }}>
@@ -212,9 +216,10 @@ export default function PackagesTab() {
                   <thead>
                     <tr>
                       <th>Name</th>
+                      <th>Service</th>
                       <th>SKU</th>
                       <th>Price</th>
-                      <th>CRM Product ID</th>
+                      <th>Product ID</th>
                       <th>Price Term ID</th>
                       <th>Status</th>
                       {canManagePackageStatus && <th>Actions</th>}
@@ -224,6 +229,7 @@ export default function PackagesTab() {
                     {packages.map((pkg) => (
                       <tr key={pkg.id}>
                         <td style={{ fontWeight: 500 }}>{pkg.name}</td>
+                        <td><span className="badge badge-info">{getServiceTagLabel(pkg.service_tag || 'OTT')}</span></td>
                         <td>{pkg.sku || '—'}</td>
                         <td>{Number(pkg.price_amount).toLocaleString()} {pkg.currency_code}</td>
                         <td style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{pkg.product_id}</td>
@@ -283,24 +289,43 @@ export default function PackagesTab() {
         {error && <div className="alert alert-error">{error}</div>}
 
         <div style={{ marginBottom: 20 }}>
+          <div className="form-group">
+            <label className="form-label">Package Tag</label>
+            <select
+              className="form-input"
+              value={catalogServiceTag}
+              onChange={(e) => {
+                setCatalogServiceTag(e.target.value);
+                setRecommendations([]);
+                setForm((prev) => ({ ...prev, serviceTag: e.target.value, productId: '', priceTermId: '' }));
+              }}
+            >
+              {SERVICE_TAGS.map((tag) => (
+                <option key={tag.key} value={tag.key}>{tag.label}</option>
+              ))}
+            </select>
+          </div>
           <button
             type="button"
             className="btn btn-secondary"
-            onClick={loadCrmCatalog}
+            onClick={() => loadCrmCatalog(catalogServiceTag)}
             disabled={crmLoading}
           >
             <RefreshCw size={16} />
-            {crmLoading ? 'Loading CRM catalog...' : 'Load from CRM'}
+            {crmLoading ? 'Loading catalog...' : 'Load catalog'}
           </button>
           <p className="form-hint" style={{ marginTop: 8 }}>
-            Loads all CRM products tagged <strong>OTT</strong> (paginated), then fetches price tiers where segment name is <strong>OTT</strong>. Product ID = service <code>id</code>; Price Term ID = <code>prices[].id</code> under the OTT segment.
+            Loads {SERVICE_TAGS.find((t) => t.key === catalogServiceTag)?.label} products
+            {catalogServiceTag === 'OTT'
+              ? ' with OTT pricing and Retail sales model.'
+              : ' with Retail pricing.'}
           </p>
         </div>
 
         <form id="create-package-form" onSubmit={handleCreate}>
           <div className="form-grid">
             <div className="form-group form-group-full">
-              <label className="form-label">CRM Service</label>
+              <label className="form-label">Service</label>
               <select
                 className="form-input"
                 value={form.productId}
@@ -309,7 +334,7 @@ export default function PackagesTab() {
                 disabled={!recommendations.length}
               >
                 <option value="">
-                  {recommendations.length ? 'Select a CRM service' : 'Load CRM catalog first'}
+                  {recommendations.length ? 'Select a service' : 'Load catalog first'}
                 </option>
                 {recommendations.map((item) => (
                   <option key={item.productId} value={item.productId}>
@@ -332,6 +357,7 @@ export default function PackagesTab() {
                 {priceOptions.map((price) => (
                   <option key={price.priceTermId} value={price.priceTermId}>
                     {price.price} {price.currencyCode}
+                    {price.salesModelName ? ` · ${price.salesModelName}` : ''}
                     {price.label ? ` · ${price.label}` : ''}
                     {price.segmentName ? ` · ${price.segmentName}` : ''}
                     {price.isDefault ? ' (default)' : ''}

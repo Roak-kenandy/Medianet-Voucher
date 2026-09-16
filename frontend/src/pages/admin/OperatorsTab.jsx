@@ -7,21 +7,37 @@ import TableToolbar from '../../components/TableToolbar';
 import TablePagination from '../../components/TablePagination';
 import { adminApi } from '../../api/client';
 import { formatPackageLabel } from '../../constants/packages';
+import { formatMoney } from '../../utils/money';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import { hasPermission } from '../../constants/permissions';
+import {
+  SERVICE_SCOPES,
+  getServiceScopeLabel,
+  packageMatchesScope,
+} from '../../constants/serviceTags';
 import { Link } from 'react-router-dom';
 import './admin-shared.css';
 
 const emptyForm = () => ({
   clientName: '',
+  serviceScope: 'BOTH',
   packageIds: [],
   email: '',
   password: '',
-  accountQuota: 500,
+  walletCommissionType: 'none',
+  walletCommissionValue: 0,
   notes: '',
   isActive: true,
 });
+
+function formatCommissionLabel(operator) {
+  const type = operator.wallet_commission_type || 'none';
+  const value = Number(operator.wallet_commission_value) || 0;
+  if (type === 'fixed') return `+${formatMoney(value, 'MVR')} / top-up`;
+  if (type === 'percent') return `+${value}% / top-up`;
+  return 'None';
+}
 
 function StatusBadge({ active }) {
   return (
@@ -119,10 +135,12 @@ export default function OperatorsTab() {
 
     setEditForm({
       clientName: operator.client_name,
+      serviceScope: operator.service_scope || 'BOTH',
       packageIds,
       email: operator.email,
       password: '',
-      accountQuota: operator.account_quota,
+      walletCommissionType: operator.wallet_commission_type || 'none',
+      walletCommissionValue: Number(operator.wallet_commission_value) || 0,
       notes: operator.notes || '',
       isActive: Boolean(operator.is_active),
     });
@@ -219,7 +237,27 @@ export default function OperatorsTab() {
 
   const canCreatePackage = hasPermission(user?.role, 'createPackage');
 
-  const operatorFormFields = (form, setForm, { isEdit = false } = {}) => (
+  const handleServiceScopeChange = (form, setForm, serviceScope) => {
+    const scopedPackages = packages.filter((pkg) => packageMatchesScope(pkg, serviceScope));
+    const validIds = form.packageIds
+      .map(Number)
+      .filter((id) => scopedPackages.some((pkg) => Number(pkg.id) === id));
+
+    setForm({
+      ...form,
+      serviceScope,
+      packageIds: validIds.length
+        ? validIds
+        : scopedPackages[0]?.id
+          ? [scopedPackages[0].id]
+          : [],
+    });
+  };
+
+  const operatorFormFields = (form, setForm, { isEdit = false } = {}) => {
+    const scopedPackages = packages.filter((pkg) => packageMatchesScope(pkg, form.serviceScope));
+
+    return (
     <div className="form-grid">
       <div className="form-group">
         <label className="form-label">Client Name</label>
@@ -232,10 +270,29 @@ export default function OperatorsTab() {
         />
       </div>
       <div className="form-group form-group-full">
+        <label className="form-label">Customer Types</label>
+        <div className="package-checkbox-list">
+          {SERVICE_SCOPES.map((scope) => (
+            <label key={scope.key} className="package-checkbox-item">
+              <input
+                type="radio"
+                name={`serviceScope-${isEdit ? 'edit' : 'create'}`}
+                checked={form.serviceScope === scope.key}
+                onChange={() => handleServiceScopeChange(form, setForm, scope.key)}
+              />
+              <span>{scope.label}</span>
+            </label>
+          ))}
+        </div>
+        <p className="form-hint">
+          Controls whether this operator can create Mobile accounts, TV accounts, or both.
+        </p>
+      </div>
+      <div className="form-group form-group-full">
         <label className="form-label">Packages</label>
-        {!packages.length ? (
+        {!scopedPackages.length ? (
           <p className="form-hint">
-            No active packages.{' '}
+            No active packages for {getServiceScopeLabel(form.serviceScope).toLowerCase()}.{' '}
             {canCreatePackage ? (
               <Link to="/admin/packages">Create a package</Link>
             ) : (
@@ -245,7 +302,7 @@ export default function OperatorsTab() {
           </p>
         ) : (
           <div className="package-checkbox-list">
-            {packages.map((pkg) => (
+            {scopedPackages.map((pkg) => (
               <label key={pkg.id} className="package-checkbox-item">
                 <input
                   type="checkbox"
@@ -257,7 +314,7 @@ export default function OperatorsTab() {
             ))}
           </div>
         )}
-        <p className="form-hint">Select one or more packages. The operator chooses which package(s) to use when creating each account.</p>
+        <p className="form-hint">Select one or more packages for the selected customer type(s).</p>
       </div>
       <div className="form-group">
         <label className="form-label">Email</label>
@@ -287,22 +344,56 @@ export default function OperatorsTab() {
         />
       </div>
       <div className="form-group">
-        <label className="form-label">Account Creation Quota</label>
-        <input
-          type="number"
+        <label className="form-label">Top-up Commission</label>
+        <select
           className="form-input"
-          value={form.accountQuota}
-          onChange={(e) => setForm({ ...form, accountQuota: parseInt(e.target.value, 10) || 0 })}
-          min={isEdit ? editModal?.accounts_created || 1 : 1}
-          max={100000}
-          required
-        />
-        {isEdit && (
-          <p className="form-hint">
-            Current usage: {editModal?.accounts_created || 0} accounts created.
-          </p>
-        )}
+          value={form.walletCommissionType}
+          onChange={(e) =>
+            setForm({
+              ...form,
+              walletCommissionType: e.target.value,
+              walletCommissionValue: e.target.value === 'none' ? 0 : form.walletCommissionValue,
+            })
+          }
+        >
+          <option value="none">None — credit payment amount only</option>
+          <option value="fixed">Fixed bonus (MVR per top-up)</option>
+          <option value="percent">Percent bonus (% of payment)</option>
+        </select>
+        <p className="form-hint">
+          Bonus added on top of what the partner pays.
+        </p>
       </div>
+      {form.walletCommissionType !== 'none' && (
+        <div className="form-group">
+          <label className="form-label">
+            {form.walletCommissionType === 'fixed' ? 'Bonus amount (MVR)' : 'Bonus percent (%)'}
+          </label>
+          <input
+            type="number"
+            className="form-input"
+            value={form.walletCommissionValue}
+            onChange={(e) =>
+              setForm({ ...form, walletCommissionValue: parseFloat(e.target.value) || 0 })
+            }
+            min={0.01}
+            max={form.walletCommissionType === 'percent' ? 100 : undefined}
+            step={form.walletCommissionType === 'percent' ? 0.1 : 0.01}
+            required
+          />
+        </div>
+      )}
+      {isEdit && (
+        <div className="form-group">
+          <label className="form-label">Current Wallet Balance</label>
+          <p style={{ fontSize: 14, margin: 0, fontWeight: 600 }}>
+            {formatMoney(editModal?.wallet_balance, 'MVR')}
+          </p>
+          <p className="form-hint">
+            {editModal?.accounts_created || 0} accounts created. Partners top up their own balance via the wallet page.
+          </p>
+        </div>
+      )}
       {isEdit && (
         <div className="form-group">
           <label className="form-label">Status</label>
@@ -328,7 +419,8 @@ export default function OperatorsTab() {
         <p className="form-hint">Use notes for contract details, billing references, or support context.</p>
       </div>
     </div>
-  );
+    );
+  };
 
   return (
     <>
@@ -368,17 +460,19 @@ export default function OperatorsTab() {
             </div>
           ) : (
             <>
+            <div className="table-scroll-container">
             <div className="table-wrapper">
               <table className="table operators-table">
                 <thead>
                   <tr>
                     <th>Client Name</th>
+                    <th>Services</th>
                     <th>Packages</th>
                     <th>Notes</th>
                     <th>Email</th>
-                    <th>Quota</th>
-                    <th>Used</th>
-                    <th>Remaining</th>
+                    <th>Wallet</th>
+                    <th>Commission</th>
+                    <th>Accounts</th>
                     <th>Status</th>
                     <th>Created</th>
                     <th>Actions</th>
@@ -388,14 +482,15 @@ export default function OperatorsTab() {
                   {operators.map((op) => (
                     <tr key={op.id}>
                       <td style={{ fontWeight: 500 }}>{op.client_name}</td>
+                      <td><span className="badge badge-neutral">{getServiceScopeLabel(op.service_scope || 'BOTH')}</span></td>
                       <td><PackageBadges operator={op} /></td>
                       <td style={{ maxWidth: 220, fontSize: 13, color: 'var(--color-text-secondary)' }} title={op.notes || ''}>
                         {op.notes ? (op.notes.length > 60 ? `${op.notes.slice(0, 60)}…` : op.notes) : '—'}
                       </td>
                       <td>{op.email}</td>
-                      <td>{op.account_quota.toLocaleString()}</td>
+                      <td>{formatMoney(op.wallet_balance, 'MVR')}</td>
+                      <td style={{ fontSize: 13 }}>{formatCommissionLabel(op)}</td>
                       <td>{op.accounts_created.toLocaleString()}</td>
-                      <td>{Math.max(0, op.account_quota - op.accounts_created).toLocaleString()}</td>
                       <td><StatusBadge active={op.is_active} /></td>
                       <td>{new Date(op.created_at).toLocaleDateString()}</td>
                       <td>
@@ -432,6 +527,7 @@ export default function OperatorsTab() {
                   ))}
                 </tbody>
               </table>
+            </div>
             </div>
             <TablePagination
               page={pagination.page}

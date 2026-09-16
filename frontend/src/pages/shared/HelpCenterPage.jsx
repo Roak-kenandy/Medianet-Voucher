@@ -13,11 +13,11 @@ const ADMIN_FAQ = [
   },
   {
     q: 'How do I create a package?',
-    a: 'Go to Packages in the sidebar, click Create Package, load the CRM catalog (OTT-tagged products), pick a service and OTT-segment price tier, then save. Finance users can view packages but cannot create them.',
+    a: 'Go to Packages in the sidebar, click Create Package, load the service catalog, pick a product and Retail price tier, then save. Finance users can view packages but cannot create them.',
   },
   {
     q: 'How do I create an operator?',
-    a: 'Go to Operators, click Create Operator, select one or more packages from the admin-created list, fill in client details, quota, and optional notes, then save.',
+    a: 'Go to Operators, click Create Operator, select one or more packages, fill in client details, set an optional top-up commission bonus (fixed MVR or percent), and save. Partners top up their own wallet — you do not assign a starting balance.',
   },
   {
     q: 'How do I add another staff account?',
@@ -31,8 +31,16 @@ const ADMIN_FAQ = [
 
 const OPERATOR_FAQ = [
   {
-    q: 'How do I create a single account?',
-    a: 'Navigate to Create Account. If you have multiple assigned packages, select one or more first. Enter the customer full name and their 7-digit Maldives mobile number (starts with 7 or 9, no +960), then submit. Your remaining quota is shown on the page.',
+    q: 'How do packages work for Mobile and TV?',
+    a: 'Your administrator assigns Mobile (OTT) and/or TV (Medianet TV) packages to your account. When activating, choose the matching customer type so the correct packages are applied.',
+  },
+  {
+    q: 'How do I create a new account?',
+    a: 'Go to Create Account, choose Mobile or TV, select the package(s) to activate, enter name and phone, and submit. The customer is registered with a subscription and your wallet is charged immediately. Your balance and charge are shown before you confirm.',
+  },
+  {
+    q: 'How do I top up an existing customer?',
+    a: 'Go to Customer Top-up, choose Mobile or TV, select the package(s), search by phone number, and click Top up on the matching customer. The cost is deducted from your wallet and shown in Transaction Reports.',
   },
   {
     q: 'How does bulk upload work?',
@@ -40,19 +48,23 @@ const OPERATOR_FAQ = [
   },
   {
     q: 'What packages are provisioned?',
-    a: 'Your administrator may assign one or more packages to your operator account. When creating an account, you choose which of your assigned packages to provision — one or several. Only your selection is sent to CRM for that account.',
+    a: 'Your administrator may assign one or more packages to your operator account. Bulk upload lets you choose which assigned packages to apply for that batch.',
   },
   {
-    q: 'How do I download my report?',
-    a: 'Go to Reports, optionally adjust the date range (defaults to the last 30 days), click Generate Report, then Download CSV for your account activity and quota summary.',
+    q: 'How does wallet top-up work?',
+    a: 'Go to Wallet, enter the amount you will pay, and review the payment breakdown before confirming. If your administrator set an operator bonus, it is included in the breakdown.',
   },
   {
-    q: 'What is my account quota?',
-    a: 'Your quota is set by your administrator. Check the Dashboard for used vs remaining accounts.',
+    q: 'How do I download transaction reports?',
+    a: 'Go to Transaction Reports, set the date range and optional type filter, click Generate Report, then Download Excel (CSV). The file includes activity type, customer, packages, amounts, and balance before/after each transaction.',
+  },
+  {
+    q: 'How do I download account activity?',
+    a: 'Go to Account Reports, optionally adjust the date range (defaults to the last 30 days), click Generate Report, then Download CSV for your account creation activity.',
   },
   {
     q: 'Why did an account fail?',
-    a: 'Open Accounts and check the Details column for failed rows. Common reasons include invalid phone numbers or CRM provisioning errors. Contact support if you need help resolving a failure.',
+    a: 'Open Accounts and check the Details column for failed rows. Common reasons include invalid phone numbers or service setup errors. Contact support if you need help resolving a failure.',
   },
 ];
 
@@ -90,7 +102,7 @@ export default function HelpCenterPage() {
           </div>
           <div className="card-body">
             <p style={{ fontSize: 14, color: 'var(--color-text-secondary)', marginBottom: 16 }}>
-              For technical issues, quota changes, or CRM integration help:
+              For technical issues, wallet or commission changes, or other account help:
             </p>
             <ul style={{ listStyle: 'none', fontSize: 14 }}>
               <li style={{ display: 'flex', gap: 10, marginBottom: 12 }}>

@@ -39,51 +39,86 @@ export const createAdminSchema = z.object({
   role: z.enum(['admin', 'sales', 'finance']).optional().default('admin'),
 });
 
-export const createOperatorSchema = z.object({
-  clientName: z.string().trim().min(2, 'Client name is required').max(200),
-  packageIds: packageIdsSchema,
-  email: emailSchema,
-  password: passwordSchema,
-  accountQuota: z
-    .number({ invalid_type_error: 'Account quota must be a number' })
-    .int('Account quota must be a whole number')
-    .min(1, 'Account quota must be at least 1')
-    .max(100000, 'Account quota cannot exceed 100,000'),
-  notes: z.string().trim().max(2000).optional().default(''),
+const walletCommissionFields = {
+  walletCommissionType: z.enum(['none', 'fixed', 'percent']).default('none'),
+  walletCommissionValue: z.coerce.number().min(0, 'Commission value cannot be negative').default(0),
+};
+
+function validateWalletCommission(data, ctx) {
+  if (data.walletCommissionType !== 'none' && data.walletCommissionValue <= 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Commission value is required when commission type is set',
+      path: ['walletCommissionValue'],
+    });
+  }
+  if (data.walletCommissionType === 'percent' && data.walletCommissionValue > 100) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Percent commission cannot exceed 100',
+      path: ['walletCommissionValue'],
+    });
+  }
+}
+
+export const createOperatorSchema = z
+  .object({
+    clientName: z.string().trim().min(2, 'Client name is required').max(200),
+    serviceScope: z.enum(['OTT', 'MEDIANET_TV', 'BOTH']).default('BOTH'),
+    packageIds: packageIdsSchema,
+    email: emailSchema,
+    password: passwordSchema,
+    notes: z.string().trim().max(2000).optional().default(''),
+    ...walletCommissionFields,
+  })
+  .superRefine(validateWalletCommission);
+
+export const updateOperatorSchema = z
+  .object({
+    clientName: z.string().trim().min(2, 'Client name is required').max(200),
+    serviceScope: z.enum(['OTT', 'MEDIANET_TV', 'BOTH']).default('BOTH'),
+    packageIds: packageIdsSchema,
+    email: emailSchema,
+    password: z
+      .string()
+      .max(128)
+      .optional()
+      .refine(
+        (value) =>
+          !value ||
+          (value.length >= 12 &&
+            /[A-Z]/.test(value) &&
+            /[a-z]/.test(value) &&
+            /[0-9]/.test(value) &&
+            /[^A-Za-z0-9]/.test(value)),
+        'Password must be at least 12 characters with uppercase, lowercase, number, and special character'
+      ),
+    isActive: z.boolean(),
+    notes: z.string().trim().max(2000).optional().default(''),
+    ...walletCommissionFields,
+  })
+  .superRefine(validateWalletCommission);
+
+export const walletTopupSchema = z.object({
+  amount: z.coerce.number().positive('Top-up amount must be greater than zero'),
 });
 
-export const updateOperatorSchema = z.object({
-  clientName: z.string().trim().min(2, 'Client name is required').max(200),
-  packageIds: packageIdsSchema,
-  email: emailSchema,
-  password: z
-    .string()
-    .max(128)
-    .optional()
-    .refine(
-      (value) =>
-        !value ||
-        (value.length >= 12 &&
-          /[A-Z]/.test(value) &&
-          /[a-z]/.test(value) &&
-          /[0-9]/.test(value) &&
-          /[^A-Za-z0-9]/.test(value)),
-      'Password must be at least 12 characters with uppercase, lowercase, number, and special character'
-    ),
-  accountQuota: z
-    .number({ invalid_type_error: 'Account quota must be a number' })
-    .int('Account quota must be a whole number')
-    .min(1, 'Account quota must be at least 1')
-    .max(100000, 'Account quota cannot exceed 100,000'),
-  isActive: z.boolean(),
-  notes: z.string().trim().max(2000).optional().default(''),
+export const walletTopupStatusQuerySchema = z.object({
+  reference: z.string().min(1, 'Reference is required'),
+  transactionId: z.string().optional(),
+});
+
+export const walletAdjustSchema = z.object({
+  amount: z.coerce.number().refine((value) => value !== 0, 'Adjustment amount cannot be zero'),
+  description: z.string().trim().max(500).optional().default(''),
 });
 
 export const createPackageSchema = z.object({
   name: z.string().trim().min(2, 'Package name is required').max(200),
+  serviceTag: z.enum(['OTT', 'MEDIANET_TV']).default('OTT'),
   sku: z.string().trim().max(100).optional(),
-  productId: z.string().uuid('Invalid CRM product ID'),
-  priceTermId: z.string().uuid('Invalid CRM price term ID'),
+  productId: z.string().uuid('Invalid product ID'),
+  priceTermId: z.string().uuid('Invalid price term ID'),
   priceAmount: z.coerce.number().min(0, 'Price must be zero or greater'),
   currencyCode: z.string().trim().length(3).default('MVR'),
   description: z.string().trim().max(2000).optional(),
@@ -102,13 +137,18 @@ export const reportQuerySchema = z.object({
   packageType: z.string().max(100).optional(),
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  reportType: z.enum(['client_summary', 'accounts_by_period', 'package_breakdown']).default('client_summary'),
+  reportType: z
+    .enum(['client_summary', 'accounts_by_period', 'package_breakdown', 'dealer_topup'])
+    .default('client_summary'),
 });
+
+const serviceTagSchema = z.enum(['OTT', 'MEDIANET_TV']);
 
 export const createAccountSchema = z.object({
   fullName: z.string().trim().min(2, 'Name is required').max(200),
   phoneNumber: phoneSchema,
-  packageIds: packageIdsSchema.optional(),
+  serviceTag: serviceTagSchema,
+  packageIds: packageIdsSchema,
 });
 
 export const bulkAccountsSchema = z.object({
@@ -136,4 +176,22 @@ export const listQuerySchema = paginationSchema.extend({
 export const operatorReportQuerySchema = z.object({
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+export const customerSearchQuerySchema = z.object({
+  phone: phoneSchema,
+});
+
+export const activateCustomerSchema = z.object({
+  crmContactId: z.string().uuid('Invalid customer reference'),
+  fullName: z.string().trim().min(2, 'Customer name is required').max(200),
+  phoneNumber: phoneSchema,
+  serviceTag: serviceTagSchema,
+  packageIds: packageIdsSchema,
+});
+
+export const walletTransactionQuerySchema = operatorReportQuerySchema.extend({
+  type: z.enum(['topup', 'debit', 'adjustment', 'refund']).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
 });

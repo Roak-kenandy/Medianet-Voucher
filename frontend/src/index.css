@@ -302,6 +302,7 @@ textarea.form-input {
 /* Table */
 .table-wrapper {
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .table {

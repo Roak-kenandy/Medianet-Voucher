@@ -84,9 +84,211 @@
   font-size: 14px;
 }
 
-.reports-table th {
+/* Operator top-up report */
+.topup-report-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.topup-report-summary-card {
+  padding: 18px 20px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+}
+
+.topup-report-summary-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+
+.topup-report-summary-value {
+  display: block;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--color-text);
+}
+
+.topup-report-summary-meta .topup-report-summary-value {
+  font-size: 18px;
+}
+
+.topup-report-card {
+  overflow: hidden;
+}
+
+.topup-report-card-header {
+  background: linear-gradient(180deg, #fafbfc 0%, var(--color-surface) 100%);
+}
+
+.topup-report-table-wrap {
+  overflow-x: auto;
+}
+
+.topup-report-table {
+  min-width: 1100px;
+  font-size: 13px;
+}
+
+.topup-report-table thead th {
+  background: var(--color-bg);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-secondary);
+  padding: 12px 16px;
+  white-space: nowrap;
+  border-bottom: 2px solid var(--color-border);
+}
+
+.topup-report-table tbody td {
+  padding: 14px 16px;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.topup-report-table tbody tr:hover {
+  background: #fafbfc;
+}
+
+.topup-report-table .col-money {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+.topup-report-table .col-highlight {
+  font-weight: 700;
+  color: var(--color-primary);
+}
+
+.topup-report-table .col-deduct {
+  color: var(--color-danger);
+}
+
+.topup-report-table .col-bonus {
+  color: var(--color-success);
+}
+
+.topup-report-table .col-time {
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.topup-report-table .col-reference code {
+  font-size: 11px;
+  padding: 3px 8px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.topup-report-table .col-operator {
+  min-width: 180px;
+}
+
+.topup-operator-name {
+  display: block;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.topup-operator-email {
+  display: block;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+
+.topup-report-table .col-user {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wallet-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 20px;
+}
+
+.wallet-balance-value {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.wallet-preview {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  font-size: 14px;
+}
+
+.wallet-preview div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.page-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.page-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  margin-bottom: -1px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.page-tab:hover {
+  color: var(--color-text);
+}
+
+.page-tab.active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+}
+
+@media (max-width: 900px) {
+  .wallet-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 
 .settings-row {
   display: flex;

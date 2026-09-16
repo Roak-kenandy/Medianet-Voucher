@@ -114,8 +114,10 @@ export const adminApi = {
   getOperators: (params = {}) => apiRequest(`/admin/operators${buildQuery(params)}`),
   getPackages: () => apiRequest('/admin/packages/active').then((data) => data.packages),
   getPackagesList: (params = {}) => apiRequest(`/admin/packages${buildQuery(params)}`),
-  getCrmRecommendations: () =>
-    apiRequest('/admin/packages/crm-recommendations').then((data) => data.recommendations),
+  getCrmRecommendations: (serviceTag = 'OTT') =>
+    apiRequest(`/admin/packages/crm-recommendations${buildQuery({ serviceTag })}`).then(
+      (data) => data.recommendations
+    ),
   createPackage: (payload) =>
     apiRequest('/admin/packages', {
       method: 'POST',
@@ -140,6 +142,17 @@ export const adminApi = {
     apiRequest(`/admin/operators/${id}/quota`, {
       method: 'PATCH',
       body: JSON.stringify({ accountQuota }),
+    }),
+  getOperatorWallet: (id) => apiRequest(`/admin/operators/${id}/wallet`),
+  adjustOperatorWallet: (id, payload) =>
+    apiRequest(`/admin/operators/${id}/wallet/adjust`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  completeOperatorTopup: (operatorId, transactionId, paymentRef) =>
+    apiRequest(`/admin/operators/${operatorId}/wallet/topups/${transactionId}/complete`, {
+      method: 'POST',
+      body: JSON.stringify({ paymentRef }),
     }),
   updateOperator: (id, payload) =>
     apiRequest(`/admin/operators/${id}`, {
@@ -169,6 +182,54 @@ export const adminApi = {
 
 export const operatorApi = {
   getStats: () => apiRequest('/operator/stats'),
+  getWallet: () => apiRequest('/operator/wallet'),
+  getWalletTransactions: (params = {}) => apiRequest(`/operator/wallet/transactions${buildQuery(params)}`),
+  previewWalletTopup: (amount) =>
+    apiRequest('/operator/wallet/topup/preview', {
+      method: 'POST',
+      body: JSON.stringify({ amount }),
+    }),
+  getPendingWalletTopup: () => apiRequest('/operator/wallet/topup/pending'),
+  initiateWalletTopup: (amount) =>
+    apiRequest('/operator/wallet/topup', {
+      method: 'POST',
+      body: JSON.stringify({ amount }),
+    }),
+  getWalletTopupStatus: (reference, transactionId) =>
+    apiRequest(
+      `/operator/wallet/topup/status${buildQuery({ reference, transactionId })}`
+    ),
+  searchCustomers: (phone) =>
+    apiRequest(`/operator/customers/search${buildQuery({ phone })}`),
+  activateCustomer: (payload) =>
+    apiRequest('/operator/customers/activate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  topupCustomer: (payload) =>
+    apiRequest('/operator/customers/topup', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  generateTransactionReport: (params) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== undefined && v !== '')
+    ).toString();
+    return apiRequest(`/operator/wallet/transactions/report?${qs}`);
+  },
+  exportTransactionReport: async (params) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== undefined && v !== '')
+    ).toString();
+    const headers = {};
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+    const res = await fetch(`${API_BASE}/operator/wallet/transactions/export?${qs}`, {
+      credentials: 'include',
+      headers,
+    });
+    if (!res.ok) throw new Error('Export failed');
+    return res.text();
+  },
   getAccounts: (params = {}) => apiRequest(`/operator/accounts${buildQuery(params)}`),
   createAccount: (payload) =>
     apiRequest('/operator/accounts', {

@@ -1,0 +1,316 @@
+.operator-dashboard-welcome {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 28px;
+}
+
+.operator-dashboard-welcome-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.operator-dashboard-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.operator-action-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px 20px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.15s, box-shadow 0.15s;
+  color: inherit;
+}
+
+.operator-action-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: var(--shadow-md);
+}
+
+.operator-action-card.primary {
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
+  border-color: var(--color-primary);
+  color: white;
+}
+
+.operator-action-card.primary .operator-action-desc {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.operator-action-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.operator-action-card.primary .operator-action-icon {
+  background: rgba(255, 255, 255, 0.15);
+  color: white;
+}
+
+.operator-action-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.operator-action-desc {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  line-height: 1.45;
+}
+
+.operator-kpi-grid {
+  display: grid;
+  grid-template-columns: 1.4fr repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.operator-kpi-wallet {
+  padding: 22px 24px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
+  color: white;
+  box-shadow: var(--shadow-md);
+}
+
+.operator-kpi-wallet-label {
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0.85;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.operator-kpi-wallet-value {
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  margin-top: 6px;
+}
+
+.operator-kpi-wallet-meta {
+  margin-top: 10px;
+  font-size: 13px;
+  opacity: 0.9;
+}
+
+.operator-kpi-wallet-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.operator-kpi-wallet-actions .btn {
+  background: rgba(255, 255, 255, 0.14);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.operator-kpi-wallet-actions .btn:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.operator-kpi-card {
+  padding: 18px 20px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.operator-kpi-card-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.operator-kpi-card-value {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-top: 6px;
+  color: var(--color-text);
+}
+
+.operator-kpi-card-meta {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin-top: 6px;
+}
+
+.operator-kpi-card-value.is-money {
+  font-size: 22px;
+}
+
+.operator-dashboard-panels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  margin-bottom: 28px;
+}
+
+.operator-panel-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.operator-panel-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 14px;
+}
+
+.operator-panel-item:last-child {
+  border-bottom: none;
+}
+
+.operator-panel-item-title {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.operator-panel-item-sub {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.operator-panel-item-value {
+  font-weight: 600;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.operator-panel-item-value.credit {
+  color: var(--color-success);
+}
+
+.operator-panel-item-value.debit {
+  color: var(--color-danger);
+}
+
+.operator-spend-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.operator-spend-row {
+  display: grid;
+  grid-template-columns: 120px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  font-size: 13px;
+}
+
+.operator-spend-label {
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.operator-spend-track {
+  height: 8px;
+  background: var(--color-bg);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.operator-spend-fill {
+  height: 100%;
+  background: var(--color-primary);
+  border-radius: 999px;
+}
+
+.operator-spend-amount {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.operator-alert-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  margin-bottom: 24px;
+  border-radius: var(--radius-md);
+  border: 1px solid #fcd34d;
+  background: var(--color-warning-soft);
+  color: #92400e;
+  font-size: 14px;
+}
+
+.operator-alert-banner a {
+  font-weight: 600;
+  color: inherit;
+  text-decoration: underline;
+}
+
+@media (max-width: 1200px) {
+  .operator-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .operator-kpi-wallet {
+    grid-column: 1 / -1;
+  }
+
+  .operator-dashboard-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.operator-dashboard-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding-top: 8px;
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.operator-dashboard-footer a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-secondary);
+}
+
+.operator-dashboard-footer a:hover {
+  color: var(--color-primary);
+}
+
+@media (max-width: 768px) {
+  .operator-dashboard-welcome {
+    flex-direction: column;
+  }
+
+  .operator-kpi-grid,
+  .operator-dashboard-panels,
+  .operator-dashboard-actions {
+    grid-template-columns: 1fr;
+  }
+}

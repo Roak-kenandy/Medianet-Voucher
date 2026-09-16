@@ -142,10 +142,14 @@ export default function AdminDashboard() {
 
             <ChartCard
               title="Top Operators by Usage"
-              subtitle="Accounts created vs quota"
+              subtitle="Accounts created and wallet balance"
               className="chart-card-wide"
             >
-              <HorizontalBarChart data={charts?.operatorAccounts || []} />
+              <HorizontalBarChart
+                data={charts?.operatorAccounts || []}
+                valueKey="accountsCreated"
+                maxKey="walletBalance"
+              />
             </ChartCard>
           </div>
         </>
