@@ -180,6 +180,7 @@ export const operatorReportQuerySchema = z.object({
 
 export const customerSearchQuerySchema = z.object({
   phone: phoneSchema,
+  serviceTag: serviceTagSchema.default('OTT'),
 });
 
 export const activateCustomerSchema = z.object({

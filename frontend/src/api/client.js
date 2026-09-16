@@ -199,8 +199,8 @@ export const operatorApi = {
     apiRequest(
       `/operator/wallet/topup/status${buildQuery({ reference, transactionId })}`
     ),
-  searchCustomers: (phone) =>
-    apiRequest(`/operator/customers/search${buildQuery({ phone })}`),
+  searchCustomers: (phone, serviceTag) =>
+    apiRequest(`/operator/customers/search${buildQuery({ phone, serviceTag })}`),
   activateCustomer: (payload) =>
     apiRequest('/operator/customers/activate', {
       method: 'POST',

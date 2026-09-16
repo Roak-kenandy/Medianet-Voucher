@@ -108,11 +108,14 @@ export default function ActivatePage() {
     setSearching(true);
 
     try {
-      const result = await operatorApi.searchCustomers(sanitizePhoneInput(phoneNumber));
+      const result = await operatorApi.searchCustomers(
+        sanitizePhoneInput(phoneNumber),
+        serviceTag
+      );
       setCustomers(result.customers || []);
       setHasSearched(true);
       if (!result.customers?.length) {
-        toast.info('No customers found for this phone number');
+        toast.info(`No ${getServiceTagLabel(serviceTag)} customers found for this phone number`);
       }
     } catch (err) {
       setHasSearched(true);
@@ -282,7 +285,9 @@ export default function ActivatePage() {
                 </div>
               ) : customers.length === 0 ? (
                 <div className="workflow-results-empty">
-                  <p>No customers found for this phone number.</p>
+                  <p>
+                    No {getServiceTagLabel(serviceTag)} customers found for this phone number.
+                  </p>
                   <Link to="/operator/create" className="btn btn-secondary btn-sm">
                     <UserPlus size={14} /> Create new account instead
                   </Link>
@@ -294,6 +299,7 @@ export default function ActivatePage() {
                       <tr>
                         <th>Customer name</th>
                         <th>Phone</th>
+                        <th>Type</th>
                         <th>Package(s)</th>
                         <th>Charge</th>
                         <th style={{ width: 140 }}>Action</th>
@@ -304,6 +310,12 @@ export default function ActivatePage() {
                         <tr key={customer.id}>
                           <td style={{ fontWeight: 500 }}>{customer.name}</td>
                           <td>{customer.phone}</td>
+                          <td>
+                            <span className="badge badge-info">
+                              {customer.serviceTypeShort ||
+                                (customer.serviceTag === 'MEDIANET_TV' ? 'TV' : 'Mobile')}
+                            </span>
+                          </td>
                           <td style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
                             {selectedPackages.map((p) => p.name).join(', ') || '—'}
                           </td>

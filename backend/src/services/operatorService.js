@@ -429,8 +429,11 @@ async function resolveActivatePackageIds(operatorId, packageIds, serviceTag, con
   return requested;
 }
 
-export async function searchCustomers(operatorId, phoneNumber) {
-  const [operator] = await query(`SELECT id, is_active FROM operators WHERE id = ? LIMIT 1`, [operatorId]);
+export async function searchCustomers(operatorId, phoneNumber, serviceTag = 'OTT') {
+  const [operator] = await query(
+    `SELECT id, is_active, service_scope FROM operators WHERE id = ? LIMIT 1`,
+    [operatorId]
+  );
   if (!operator) {
     throw new AppError('Operator not found', 404, 'NOT_FOUND');
   }
@@ -438,7 +441,8 @@ export async function searchCustomers(operatorId, phoneNumber) {
     throw new AppError('Operator account is inactive', 403, 'FORBIDDEN');
   }
 
-  return crmService.searchCustomersByPhone(phoneNumber);
+  assertOperatorServiceTag(operator.service_scope || 'BOTH', serviceTag);
+  return crmService.searchCustomersByPhone(phoneNumber, serviceTag);
 }
 
 export async function activateCustomer(operatorId, data, reqMeta = {}) {

@@ -142,8 +142,8 @@ router.get(
 router.get(
   '/customers/search',
   asyncHandler(async (req, res) => {
-    const { phone } = customerSearchQuerySchema.parse(req.query);
-    const result = await searchCustomers(req.user.id, phone);
+    const { phone, serviceTag } = customerSearchQuerySchema.parse(req.query);
+    const result = await searchCustomers(req.user.id, phone, serviceTag);
     success(res, result);
   })
 );

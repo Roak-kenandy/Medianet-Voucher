@@ -306,8 +306,15 @@ class CRMService {
     }
   }
 
-  async fetchContactsByPhone(phoneNumber) {
-    const queryParams = new URLSearchParams({ phone_number: phoneNumber }).toString();
+  async fetchContactsByPhone(phoneNumber, { size = 10, page = 1 } = {}) {
+    const queryParams = new URLSearchParams({
+      size: String(size),
+      page: String(page),
+      include_metrics: 'true',
+      search_value: phoneNumber,
+      include_total: 'true',
+    }).toString();
+
     const response = await fetch(`${this.baseUrl}/contacts?${queryParams}`, {
       method: 'GET',
       headers: this.headers,
@@ -414,12 +421,12 @@ class CRMService {
     return this.handleResponse(response, 'Device creation');
   }
 
-  async createAccount(contactId) {
+  async createAccount(contactId, { isPrimary = true } = {}) {
     const payload = {
       classification_id: this.classificationId,
       credit_limit: '',
       currency_code: this.currencyCode,
-      is_primary: false,
+      is_primary: Boolean(isPrimary),
       payment_terms_id: this.paymentTermsId,
     };
 
@@ -491,9 +498,12 @@ class CRMService {
 
     const payload = {
       account_id: accountId,
-      scheduled_date: plans[0]?.schedule_date || null,
       services,
     };
+
+    if (plans[0]?.schedule_date) {
+      payload.scheduled_date = plans[0].schedule_date;
+    }
 
     let lastError = 'Subscription API failed';
 
@@ -842,7 +852,7 @@ class CRMService {
       // Create a billing account below when none exists.
     }
 
-    const account = await this.createAccount(contactId);
+    const account = await this.createAccount(contactId, { isPrimary: true });
     return account.id;
   }
 
@@ -850,29 +860,33 @@ class CRMService {
    * Register a customer in CRM (contact + tag + device + billing account).
    * Does not create a subscription — use Activate for that.
    */
-  async registerCustomer(phoneNumber, fullName, serviceTag = 'OTT') {
+  async registerCustomer(phoneNumber, fullName, serviceTag = 'OTT', { forceNew = false } = {}) {
     this.assertConfigured();
     const normalizedTag = assertServiceTag(serviceTag);
     const tagConfig = getServiceTagConfig(normalizedTag);
     const normalizedPhone = normalizePhone(phoneNumber);
     const { firstName, lastName } = splitFullName(fullName);
 
-    const contactsData = await this.fetchContactsByPhone(normalizedPhone);
-    const contacts = contactsData.content || [];
-
     let contactId;
     let alreadyRegistered = false;
     let deviceId = null;
 
-    if (contacts.length) {
-      contactId = contacts[0].id;
-      alreadyRegistered = true;
+    if (!forceNew) {
+      const contactsData = await this.fetchContactsByPhone(normalizedPhone);
+      const contacts = contactsData.content || [];
 
-      const tagsData = await this.fetchContactTags(contactId);
-      if (!this.contactHasServiceTag(tagsData, tagConfig)) {
-        await this.addContactTag(contactId, [tagConfig.crmTagId]);
+      if (contacts.length) {
+        contactId = contacts[0].id;
+        alreadyRegistered = true;
+
+        const tagsData = await this.fetchContactTags(contactId);
+        if (!this.contactHasServiceTag(tagsData, tagConfig)) {
+          await this.addContactTag(contactId, [tagConfig.crmTagId]);
+        }
       }
-    } else {
+    }
+
+    if (!contactId) {
       const contact = await this.createContact(firstName, lastName, normalizedPhone, normalizedTag);
       contactId = contact.id;
       const device = await this.createDevice(contactId, normalizedTag);
@@ -896,7 +910,9 @@ class CRMService {
   async registerNewUser(phoneNumber, fullName, packageIds) {
     const serviceTag = await this.resolveServiceTagFromPackageIds(packageIds);
     const plans = await this.resolvePlans(packageIds);
-    const registration = await this.registerCustomer(phoneNumber, fullName, serviceTag);
+    const registration = await this.registerCustomer(phoneNumber, fullName, serviceTag, {
+      forceNew: true,
+    });
     const subscription = await this.setupSubscription(
       registration.contactId,
       registration.accountId,
@@ -911,7 +927,7 @@ class CRMService {
       subscriptionId: subscription.subscriptionId,
       paymentId: subscription.paymentId,
       deviceIds: subscription.deviceIds,
-      message: 'User registered successfully in CRM',
+      message: 'New customer account created in CRM',
     };
   }
 
@@ -929,21 +945,50 @@ class CRMService {
     };
   }
 
-  async searchCustomersByPhone(phoneNumber) {
+  async searchCustomersByPhone(phoneNumber, serviceTag = 'OTT') {
     this.assertConfigured();
+    const normalizedTag = assertServiceTag(serviceTag);
+    const tagConfig = getServiceTagConfig(normalizedTag);
     const normalizedPhone = normalizePhone(phoneNumber);
     const contactsData = await this.fetchContactsByPhone(normalizedPhone);
     const contacts = contactsData.content || [];
 
+    const customers = (
+      await Promise.all(
+        contacts.map(async (contact) => {
+          try {
+            const tagsData = await this.fetchContactTags(contact.id);
+            if (!this.contactHasServiceTag(tagsData, tagConfig)) {
+              return null;
+            }
+
+            const crmTags = (tagsData.content || [])
+              .map((tag) => tag.name)
+              .filter(Boolean);
+
+            return {
+              id: contact.id,
+              code: contact.code || null,
+              name: contact.name || 'Unknown',
+              type: contact.type || null,
+              phone: contact.phone?.number || normalizedPhone,
+              serviceTag: normalizedTag,
+              serviceTagLabel: tagConfig.label,
+              serviceTypeShort: normalizedTag === 'MEDIANET_TV' ? 'TV' : 'Mobile',
+              crmTags,
+            };
+          } catch (err) {
+            console.error(`[CRM] Tag lookup failed for contact ${contact.id}:`, err.message);
+            return null;
+          }
+        })
+      )
+    ).filter(Boolean);
+
     return {
-      customers: contacts.map((contact) => ({
-        id: contact.id,
-        code: contact.code || null,
-        name: contact.name || 'Unknown',
-        type: contact.type || null,
-        phone: contact.phone?.number || normalizedPhone,
-      })),
+      customers,
       paging: contactsData.paging || null,
+      serviceTag: normalizedTag,
     };
   }
 
