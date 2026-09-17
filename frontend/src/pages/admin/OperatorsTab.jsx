@@ -17,6 +17,8 @@ import {
   packageMatchesScope,
 } from '../../constants/serviceTags';
 import { Link } from 'react-router-dom';
+import PackageSelector from '../../components/admin/PackageSelector';
+import PackageBadgeOverflow from '../../components/admin/PackageBadgeOverflow';
 import './admin-shared.css';
 
 const emptyForm = () => ({
@@ -47,25 +49,15 @@ function StatusBadge({ active }) {
   );
 }
 
-function PackageBadges({ operator }) {
-  const names = operator.package_names?.length
-    ? operator.package_names
-    : (operator.package_name || operator.package_type || '')
-        .split(',')
-        .map((name) => name.trim())
-        .filter(Boolean);
+function getOperatorPackageNames(operator) {
+  if (operator.package_names?.length) {
+    return operator.package_names;
+  }
 
-  if (!names.length) return '—';
-
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-      {names.map((name) => (
-        <span key={name} className="badge badge-info">
-          {formatPackageLabel(name)}
-        </span>
-      ))}
-    </div>
-  );
+  return (operator.package_name || operator.package_type || '')
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean);
 }
 
 export default function OperatorsTab() {
@@ -88,6 +80,7 @@ export default function OperatorsTab() {
   const [submitting, setSubmitting] = useState(false);
   const [confirmTarget, setConfirmTarget] = useState(null);
   const [confirmLoading, setConfirmLoading] = useState(false);
+  const [packagesModal, setPackagesModal] = useState(null);
 
   const loadOperators = () => {
     setLoading(true);
@@ -147,15 +140,6 @@ export default function OperatorsTab() {
     setEditError('');
     setEditModal(operator);
     setMenuOpen(null);
-  };
-
-  const togglePackageId = (form, setForm, packageId) => {
-    const id = Number(packageId);
-    const current = form.packageIds.map(Number);
-    const next = current.includes(id)
-      ? current.filter((item) => item !== id)
-      : [...current, id];
-    setForm({ ...form, packageIds: next });
   };
 
   const handleCreate = async (e) => {
@@ -271,9 +255,12 @@ export default function OperatorsTab() {
       </div>
       <div className="form-group form-group-full">
         <label className="form-label">Customer Types</label>
-        <div className="package-checkbox-list">
+        <div className="scope-selector">
           {SERVICE_SCOPES.map((scope) => (
-            <label key={scope.key} className="package-checkbox-item">
+            <label
+              key={scope.key}
+              className={`scope-selector-item${form.serviceScope === scope.key ? ' is-selected' : ''}`}
+            >
               <input
                 type="radio"
                 name={`serviceScope-${isEdit ? 'edit' : 'create'}`}
@@ -301,18 +288,11 @@ export default function OperatorsTab() {
             first.
           </p>
         ) : (
-          <div className="package-checkbox-list">
-            {scopedPackages.map((pkg) => (
-              <label key={pkg.id} className="package-checkbox-item">
-                <input
-                  type="checkbox"
-                  checked={form.packageIds.map(Number).includes(Number(pkg.id))}
-                  onChange={() => togglePackageId(form, setForm, pkg.id)}
-                />
-                <span>{pkg.label || pkg.name}</span>
-              </label>
-            ))}
-          </div>
+          <PackageSelector
+            packages={scopedPackages}
+            selectedIds={form.packageIds}
+            onChange={(packageIds) => setForm({ ...form, packageIds })}
+          />
         )}
         <p className="form-hint">Select one or more packages for the selected customer type(s).</p>
       </div>
@@ -423,15 +403,27 @@ export default function OperatorsTab() {
   };
 
   return (
-    <>
-      <div className="tab-toolbar">
-        <button className="btn btn-primary" onClick={() => { resetCreateForm(); setCreateModalOpen(true); }}>
-          <Plus size={18} />
-          Create Operator
-        </button>
+    <div className="operators-page">
+      <div className="operators-page-chrome">
+        <div className="page-header-row">
+          <div>
+            <h1 className="page-title">Operators</h1>
+            <p className="page-subtitle">Manage client operators, packages, and account quotas</p>
+          </div>
+          <div className="page-header-actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => { resetCreateForm(); setCreateModalOpen(true); }}
+            >
+              <Plus size={18} />
+              Create Operator
+            </button>
+          </div>
+        </div>
       </div>
 
-      <div className="card">
+      <div className="card operators-card">
         <TableToolbar
           value={search}
           onChange={handleSearchChange}
@@ -483,11 +475,18 @@ export default function OperatorsTab() {
                     <tr key={op.id}>
                       <td style={{ fontWeight: 500 }}>{op.client_name}</td>
                       <td><span className="badge badge-neutral">{getServiceScopeLabel(op.service_scope || 'BOTH')}</span></td>
-                      <td><PackageBadges operator={op} /></td>
-                      <td style={{ maxWidth: 220, fontSize: 13, color: 'var(--color-text-secondary)' }} title={op.notes || ''}>
-                        {op.notes ? (op.notes.length > 60 ? `${op.notes.slice(0, 60)}…` : op.notes) : '—'}
+                      <td className="operators-packages-cell">
+                        <PackageBadgeOverflow
+                          names={getOperatorPackageNames(op)}
+                          formatLabel={formatPackageLabel}
+                          modalTitle={`Packages — ${op.client_name}`}
+                          onShowMore={setPackagesModal}
+                        />
                       </td>
-                      <td>{op.email}</td>
+                      <td className="operators-notes-cell" title={op.notes || ''}>
+                        {op.notes ? (op.notes.length > 40 ? `${op.notes.slice(0, 40)}…` : op.notes) : '—'}
+                      </td>
+                      <td className="operators-email-cell" title={op.email}>{op.email}</td>
                       <td>{formatMoney(op.wallet_balance, 'MVR')}</td>
                       <td style={{ fontSize: 13 }}>{formatCommissionLabel(op)}</td>
                       <td>{op.accounts_created.toLocaleString()}</td>
@@ -541,6 +540,32 @@ export default function OperatorsTab() {
           )}
         </div>
       </div>
+
+      <Modal
+        open={!!packagesModal}
+        onClose={() => setPackagesModal(null)}
+        title={packagesModal?.title || 'Packages'}
+        footer={(
+          <button type="button" className="btn btn-secondary" onClick={() => setPackagesModal(null)}>
+            Close
+          </button>
+        )}
+      >
+        {packagesModal && (
+          <>
+            <p className="package-badge-overflow-modal-count">
+              {packagesModal.labels.length} package{packagesModal.labels.length === 1 ? '' : 's'} assigned
+            </p>
+            <div className="package-badge-overflow-modal-list">
+              {packagesModal.labels.map((label) => (
+                <span key={label} className="badge badge-info">
+                  {label}
+                </span>
+              ))}
+            </div>
+          </>
+        )}
+      </Modal>
 
       <Modal
         open={createModalOpen}
@@ -613,6 +638,6 @@ export default function OperatorsTab() {
         variant={confirmTarget?.is_active ? 'danger' : 'primary'}
         loading={confirmLoading}
       />
-    </>
+    </div>
   );
 }

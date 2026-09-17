@@ -8,6 +8,7 @@ import { operatorApi } from '../../api/client';
 import { useToast } from '../../context/ToastContext';
 import { sanitizePhoneInput, getPhoneValidationMessage, PHONE_HINT, PHONE_TEMPLATE_EXAMPLES } from '../../utils/phone';
 import { formatMoney, sumPackagePrices } from '../../utils/money';
+import PackageSelector from '../../components/admin/PackageSelector';
 
 const MAX_BULK = 10;
 
@@ -25,14 +26,6 @@ function ResultStatusBadge({ status }) {
       {status}
     </span>
   );
-}
-
-function togglePackageId(currentIds, packageId) {
-  const id = Number(packageId);
-  const current = currentIds.map(Number);
-  return current.includes(id)
-    ? current.filter((item) => item !== id)
-    : [...current, id];
 }
 
 export default function BulkUploadPage() {
@@ -238,19 +231,12 @@ export default function BulkUploadPage() {
             {packages.length > 1 && (
               <div className="form-group" style={{ marginBottom: 20 }}>
                 <label className="form-label">Packages</label>
-                <div className="package-checkbox-list">
-                  {packages.map((pkg) => (
-                    <label key={pkg.id} className="package-checkbox-item">
-                      <input
-                        type="checkbox"
-                        checked={packageIds.map(Number).includes(Number(pkg.id))}
-                        onChange={() => setPackageIds((prev) => togglePackageId(prev, pkg.id))}
-                        disabled={!canAfford}
-                      />
-                      <span>{pkg.name}</span>
-                    </label>
-                  ))}
-                </div>
+                <PackageSelector
+                  packages={packages}
+                  selectedIds={packageIds}
+                  onChange={setPackageIds}
+                  disabled={!canAfford}
+                />
                 <p className="form-hint">All accounts in this upload use the selected package(s).</p>
               </div>
             )}

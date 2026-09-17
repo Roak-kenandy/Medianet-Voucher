@@ -32,6 +32,8 @@
 
 .table-scroll-container {
   position: relative;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .table-scroll-container::after {

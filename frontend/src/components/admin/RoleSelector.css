@@ -1,0 +1,50 @@
+.role-selector {
+  display: grid;
+  gap: 10px;
+}
+
+.role-selector-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.role-selector-item:hover {
+  border-color: #cbd5e1;
+}
+
+.role-selector-item.is-selected {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.15);
+}
+
+.role-selector-item input {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
+.role-selector-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.role-selector-item-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.role-selector-item-desc {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.45;
+}

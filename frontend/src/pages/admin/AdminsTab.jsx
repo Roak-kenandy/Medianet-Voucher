@@ -9,6 +9,7 @@ import { adminApi } from '../../api/client';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import { hasPermission, ROLE_LABELS } from '../../constants/permissions';
+import RoleSelector from '../../components/admin/RoleSelector';
 import './admin-shared.css';
 
 function StatusBadge({ active }) {
@@ -149,6 +150,7 @@ export default function AdminsTab() {
             </div>
           ) : (
             <>
+            <div className="table-scroll-container">
             <div className="table-wrapper">
               <table className="table">
                 <thead>
@@ -209,6 +211,7 @@ export default function AdminsTab() {
                 </tbody>
               </table>
             </div>
+            </div>
             <TablePagination
               page={pagination.page}
               totalPages={pagination.totalPages}
@@ -240,54 +243,50 @@ export default function AdminsTab() {
       >
         {error && <div className="alert alert-error">{error}</div>}
         <form id="create-admin-form" onSubmit={handleCreate}>
-          <div className="form-group">
-            <label className="form-label">Full Name</label>
-            <input
-              className="form-input"
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              placeholder="John Doe"
-              required
-            />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Email</label>
-            <input
-              type="email"
-              className="form-input"
-              value={form.email}
-              onChange={(e) => setForm({ ...form, email: e.target.value })}
-              placeholder="staff@medianet.mv"
-              required
-            />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Role</label>
-            <select
-              className="form-input"
-              value={form.role}
-              onChange={(e) => setForm({ ...form, role: e.target.value })}
-              required
-            >
-              <option value="admin">Admin — full access</option>
-              <option value="sales">Sales — all except creating staff</option>
-              <option value="finance">Finance — all except creating packages</option>
-            </select>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Password</label>
-            <input
-              type="password"
-              className="form-input"
-              value={form.password}
-              onChange={(e) => setForm({ ...form, password: e.target.value })}
-              placeholder="Min 12 chars with upper, lower, number & symbol"
-              required
-              minLength={12}
-            />
-            <p className="form-hint">
-              Must be at least 12 characters with uppercase, lowercase, number, and special character.
-            </p>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Full Name</label>
+              <input
+                className="form-input"
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="John Doe"
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Email</label>
+              <input
+                type="email"
+                className="form-input"
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+                placeholder="staff@medianet.mv"
+                required
+              />
+            </div>
+            <div className="form-group form-group-full">
+              <label className="form-label">Role</label>
+              <RoleSelector
+                value={form.role}
+                onChange={(role) => setForm({ ...form, role })}
+              />
+            </div>
+            <div className="form-group form-group-full">
+              <label className="form-label">Password</label>
+              <input
+                type="password"
+                className="form-input"
+                value={form.password}
+                onChange={(e) => setForm({ ...form, password: e.target.value })}
+                placeholder="Min 12 chars with upper, lower, number & symbol"
+                required
+                minLength={12}
+              />
+              <p className="form-hint">
+                Must be at least 12 characters with uppercase, lowercase, number, and special character.
+              </p>
+            </div>
           </div>
         </form>
       </Modal>

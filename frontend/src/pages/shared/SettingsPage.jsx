@@ -1,6 +1,7 @@
 import { useLocation } from 'react-router-dom';
 import { Shield, Bell, User, Lock } from 'lucide-react';
 import Layout from '../../components/Layout';
+import PackageBadgeOverflow from '../../components/admin/PackageBadgeOverflow';
 import Sidebar from '../../components/Sidebar';
 import Header from '../../components/Header';
 import { useAuth } from '../../context/AuthContext';
@@ -47,11 +48,10 @@ export default function SettingsPage() {
                 </div>
                 <div className="settings-row">
                   <span className="settings-label">Packages</span>
-                  <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                    {(user?.packageNames?.length ? user.packageNames : [user?.packageType].filter(Boolean)).map((name) => (
-                      <span key={name} className="badge badge-info">{name}</span>
-                    ))}
-                  </span>
+                  <PackageBadgeOverflow
+                    names={user?.packageNames?.length ? user.packageNames : [user?.packageType].filter(Boolean)}
+                    modalTitle="Your packages"
+                  />
                 </div>
               </>
             )}

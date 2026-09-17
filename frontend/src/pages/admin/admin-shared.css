@@ -4,10 +4,79 @@
   margin-bottom: 16px;
 }
 
-.operators-table th:nth-child(2),
-.operators-table td:nth-child(2) {
-  min-width: 190px;
+.operators-page {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.operators-page-chrome {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin-bottom: 4px;
+}
+
+.operators-page-chrome .page-header-row {
+  margin-bottom: 20px;
+}
+
+.operators-card {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.operators-card .card-body {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.operators-card .table-scroll-container {
+  overflow-x: auto;
+  max-width: 100%;
+  width: 100%;
+  -webkit-overflow-scrolling: touch;
+}
+
+.operators-card .table-wrapper {
+  overflow: visible;
+}
+
+.operators-table {
+  min-width: 1100px;
+}
+
+.operators-table th,
+.operators-table td {
+  vertical-align: middle;
   white-space: nowrap;
+}
+
+.operators-table .operators-packages-cell {
+  white-space: nowrap;
+  max-width: 200px;
+}
+
+.operators-table .operators-notes-cell {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.operators-table .operators-email-cell {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 1200px) {
+  .operators-table .operators-notes-cell,
+  .operators-table th:nth-child(4) {
+    display: none;
+  }
 }
 
 .action-menu {
@@ -308,6 +377,45 @@
   font-weight: 500;
 }
 
+.scope-selector {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.scope-selector-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.scope-selector-item:hover {
+  border-color: #cbd5e1;
+}
+
+.scope-selector-item.is-selected {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.15);
+}
+
+.scope-selector-item input {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.scope-selector-item span {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
 @media (max-width: 768px) {
   .reports-filters {
     grid-template-columns: 1fr;
@@ -324,5 +432,9 @@
 
   .tab-toolbar .btn {
     width: 100%;
+  }
+
+  .scope-selector {
+    grid-template-columns: 1fr;
   }
 }

@@ -1,0 +1,53 @@
+.package-badge-overflow {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: nowrap;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.package-badge-overflow-item {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 88px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  padding: 2px 7px;
+}
+
+.package-badge-overflow-more {
+  flex-shrink: 0;
+  min-width: 28px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px dashed var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.package-badge-overflow-more:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.package-badge-overflow-modal-count {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.package-badge-overflow-modal-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
