@@ -5,8 +5,12 @@
   align-items: center;
   justify-content: center;
   padding: 24px 16px;
-  background:
-    linear-gradient(180deg, #f0f4f8 0%, #e8edf3 100%);
+  background: linear-gradient(
+    180deg,
+    var(--color-login-gradient-start) 0%,
+    var(--color-login-gradient-end) 100%
+  );
+  position: relative;
 }
 
 .login-shell {
@@ -15,13 +19,11 @@
 }
 
 .login-card {
-  background: #ffffff;
-  border: 1px solid #e5e9ef;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
   border-radius: 16px;
   padding: 32px 28px;
-  box-shadow:
-    0 1px 3px rgba(0, 27, 61, 0.04),
-    0 8px 24px rgba(0, 27, 61, 0.06);
+  box-shadow: var(--shadow-md);
 }
 
 .login-header {
@@ -51,12 +53,12 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: #ffffff;
+  background: var(--color-surface);
   border-radius: 14px;
   padding: 8px;
   box-shadow:
-    0 0 0 1px rgba(212, 175, 55, 0.3),
-    0 4px 12px rgba(0, 0, 0, 0.06);
+    0 0 0 1px var(--color-logo-ring),
+    0 4px 12px var(--color-logo-shadow);
 }
 
 .brand-logo {

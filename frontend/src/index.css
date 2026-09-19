@@ -1,29 +1,9 @@
 :root {
-  --color-primary: #001b3d;
-  --color-primary-light: #0a2f5c;
-  --color-primary-hover: #002855;
-  --color-accent: #3b82f6;
-  --color-accent-soft: #eff6ff;
-  --color-success: #059669;
-  --color-success-soft: #ecfdf5;
-  --color-warning: #d97706;
-  --color-warning-soft: #fffbeb;
-  --color-danger: #dc2626;
-  --color-danger-soft: #fef2f2;
-  --color-bg: #f4f6f9;
-  --color-surface: #ffffff;
-  --color-border: #e5e7eb;
-  --color-text: #111827;
-  --color-text-secondary: #6b7280;
-  --color-text-muted: #9ca3af;
   --sidebar-width: 260px;
   --header-height: 64px;
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.12);
   --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
@@ -185,7 +165,7 @@ a:focus-visible,
 
 .form-input:focus {
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+  box-shadow: 0 0 0 3px var(--color-focus-ring);
 }
 
 .form-input.error {
@@ -217,6 +197,7 @@ textarea.form-input {
   box-shadow: var(--shadow-sm);
   min-width: 0;
   max-width: 100%;
+  overflow: hidden;
 }
 
 .card-header {
@@ -266,7 +247,7 @@ textarea.form-input {
 }
 
 .badge-neutral {
-  background: #f3f4f6;
+  background: var(--color-badge-neutral-bg);
   color: var(--color-text-secondary);
 }
 
@@ -285,31 +266,66 @@ textarea.form-input {
 
 .alert-error {
   background: var(--color-danger-soft);
-  color: var(--color-danger);
-  border: 1px solid #fecaca;
+  color: var(--color-danger-text);
+  border: 1px solid var(--color-danger-border);
 }
 
 .alert-success {
   background: var(--color-success-soft);
-  color: var(--color-success);
-  border: 1px solid #a7f3d0;
+  color: var(--color-success-text);
+  border: 1px solid var(--color-success-border);
 }
 
 .alert-info {
   background: var(--color-accent-soft);
-  color: #1d4ed8;
-  border: 1px solid #bfdbfe;
+  color: var(--color-info-text);
+  border: 1px solid var(--color-info-border);
 }
 
 /* Table */
 .table-wrapper {
-  overflow-x: auto;
+  max-width: 100%;
+  overflow: auto;
   -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+
+.card .card-body:has(.table-wrapper) {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.card .card-body > .table-wrapper,
+.card .card-body .table-scroll-container .table-wrapper {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: min(60vh, calc(100dvh - var(--header-height) - 280px));
+}
+
+.card .card-body .table-scroll-container {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.card .card-body .table-pagination {
+  flex-shrink: 0;
+}
+
+.modal-body .table-wrapper {
+  max-height: none;
 }
 
 .table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
 .table th,
@@ -320,16 +336,20 @@ textarea.form-input {
 }
 
 .table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--color-text-secondary);
-  background: #f9fafb;
+  background: var(--color-table-header);
+  box-shadow: 0 1px 0 var(--color-border);
 }
 
 .table tbody tr:hover {
-  background: #f9fafb;
+  background: var(--color-table-row-hover);
 }
 
 .table td {
@@ -340,7 +360,7 @@ textarea.form-input {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--color-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -587,26 +607,26 @@ textarea.form-input {
 
 .toast-success {
   background: var(--color-success-soft);
-  color: #065f46;
-  border: 1px solid #a7f3d0;
+  color: var(--color-success-text);
+  border: 1px solid var(--color-success-border);
 }
 
 .toast-error {
   background: var(--color-danger-soft);
-  color: #991b1b;
-  border: 1px solid #fecaca;
+  color: var(--color-danger-text);
+  border: 1px solid var(--color-danger-border);
 }
 
 .toast-info {
   background: var(--color-accent-soft);
-  color: #1e40af;
-  border: 1px solid #bfdbfe;
+  color: var(--color-info-text);
+  border: 1px solid var(--color-info-border);
 }
 
 .toast-warning {
   background: var(--color-warning-soft);
-  color: #92400e;
-  border: 1px solid #fde68a;
+  color: var(--color-warning-text);
+  border: 1px solid var(--color-warning-border);
 }
 
 .toast-icon {
@@ -628,7 +648,7 @@ textarea.form-input {
 
 .toast-close:hover {
   opacity: 1;
-  background: rgba(0, 0, 0, 0.06);
+  background: var(--color-hover-subtle);
 }
 
 @keyframes toastIn {
@@ -878,7 +898,7 @@ textarea.form-input {
 
 .hbar-track {
   height: 10px;
-  background: #f3f4f6;
+  background: var(--color-track-bg);
   border-radius: 999px;
   overflow: hidden;
 }
@@ -959,7 +979,7 @@ textarea.form-input {
   padding: 16px;
   border-radius: var(--radius-sm);
   background: var(--color-success-soft);
-  border: 1px solid #a7f3d0;
+  border: 1px solid var(--color-success-border);
   margin-bottom: 20px;
 }
 

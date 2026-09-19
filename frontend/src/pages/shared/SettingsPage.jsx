@@ -1,5 +1,6 @@
 import { useLocation } from 'react-router-dom';
-import { Shield, Bell, User, Lock } from 'lucide-react';
+import { Shield, Bell, User, Lock, Sun, Moon, Monitor } from 'lucide-react';
+import { useTheme } from '../../context/ThemeContext';
 import Layout from '../../components/Layout';
 import PackageBadgeOverflow from '../../components/admin/PackageBadgeOverflow';
 import Sidebar from '../../components/Sidebar';
@@ -11,7 +12,14 @@ import '../admin/admin-shared.css';
 export default function SettingsPage() {
   const { pathname } = useLocation();
   const { user } = useAuth();
+  const { preference, setPreference } = useTheme();
   const role = user?.role || (pathname.startsWith('/admin') ? 'admin' : 'operator');
+
+  const themeOptions = [
+    { value: 'light', label: 'Light', icon: Sun },
+    { value: 'dark', label: 'Dark', icon: Moon },
+    { value: 'system', label: 'System', icon: Monitor },
+  ];
 
   return (
     <Layout sidebar={<Sidebar role={role} />} header={<Header />}>
@@ -73,6 +81,32 @@ export default function SettingsPage() {
             <div className="alert alert-info" style={{ marginTop: 16 }}>
               <Shield size={16} style={{ verticalAlign: 'middle', marginRight: 6 }} />
               Sessions expire after 15 minutes of inactivity. You will receive a warning before expiry.
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <h3 className="card-title"><Sun size={18} style={{ verticalAlign: 'middle', marginRight: 8 }} />Appearance</h3>
+          </div>
+          <div className="card-body">
+            <p className="form-hint" style={{ marginTop: 0, marginBottom: 12 }}>
+              Choose how the portal looks on this device.
+            </p>
+            <div className="theme-preference" role="radiogroup" aria-label="Theme preference">
+              {themeOptions.map(({ value, label, icon: Icon }) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="radio"
+                  aria-checked={preference === value}
+                  className={`theme-preference-option${preference === value ? ' active' : ''}`}
+                  onClick={() => setPreference(value)}
+                >
+                  <Icon size={20} />
+                  <span>{label}</span>
+                </button>
+              ))}
             </div>
           </div>
         </div>

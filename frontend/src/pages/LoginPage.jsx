@@ -4,6 +4,7 @@ import { Eye, EyeOff, Lock, Mail } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { getHomePathForRole } from '../constants/permissions';
 import Logo from '../components/Logo';
+import ThemeToggle from '../components/ThemeToggle';
 import './LoginPage.css';
 
 export default function LoginPage() {
@@ -45,6 +46,7 @@ export default function LoginPage() {
 
   return (
     <div className="login-page">
+      <ThemeToggle className="theme-toggle--login" />
       <div className="login-shell">
         <div className="login-card">
           <div className="login-header">

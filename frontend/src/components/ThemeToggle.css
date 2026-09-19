@@ -1,0 +1,29 @@
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  transition: background 0.15s, color 0.15s;
+}
+
+.theme-toggle:hover {
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.theme-toggle--login {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+}
+
+@media (min-width: 480px) {
+  .theme-toggle--login {
+    top: 24px;
+    right: 24px;
+  }
+}

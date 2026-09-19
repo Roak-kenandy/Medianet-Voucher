@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { LogOut, ChevronDown, Menu, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { isStaffRole, ROLE_LABELS } from '../constants/permissions';
+import ThemeToggle from './ThemeToggle';
 import './Header.css';
 
 export default function Header({ onMenuToggle, sidebarOpen = false }) {
@@ -46,6 +47,7 @@ export default function Header({ onMenuToggle, sidebarOpen = false }) {
       </button>
 
       <div className="header-actions" ref={menuRef}>
+        <ThemeToggle />
         <button
           className="header-profile"
           onClick={() => setProfileOpen(!profileOpen)}

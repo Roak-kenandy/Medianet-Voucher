@@ -26,6 +26,9 @@
 
 .header-actions {
   position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .header-profile {

@@ -25,15 +25,10 @@
 }
 
 /* Horizontal scroll hint for wide tables */
-.table-wrapper {
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: thin;
-}
-
 .table-scroll-container {
   position: relative;
   max-width: 100%;
-  overflow-x: auto;
+  min-width: 0;
 }
 
 .table-scroll-container::after {
@@ -44,7 +39,7 @@
   bottom: 0;
   width: 24px;
   pointer-events: none;
-  background: linear-gradient(to left, rgba(255, 255, 255, 0.95), transparent);
+  background: linear-gradient(to left, var(--color-surface), transparent);
   opacity: 0;
   transition: opacity 0.2s;
 }

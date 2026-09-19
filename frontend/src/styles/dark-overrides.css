@@ -1,0 +1,202 @@
+/* Shared theme-aware overrides for component-specific styles */
+
+.workflow-step-header,
+.workflow-sidebar-inner,
+.topup-report-card-header {
+  background: linear-gradient(180deg, var(--color-card-gradient-start) 0%, var(--color-surface) 100%);
+}
+
+.topup-report-table tbody tr:hover {
+  background: var(--color-table-row-hover);
+}
+
+.sidebar-backdrop {
+  background: var(--color-overlay);
+}
+
+.table-scroll-fade::after {
+  background: linear-gradient(to left, var(--color-surface), transparent);
+}
+
+.scope-selector-item:hover {
+  border-color: var(--color-border-strong);
+}
+
+.scope-selector-item.is-selected {
+  box-shadow: 0 0 0 1px var(--color-focus-ring);
+}
+
+.role-selector-item:hover,
+.package-selector-item:hover,
+.operator-action-card:hover {
+  border-color: var(--color-border-strong);
+}
+
+.role-selector-item.is-selected,
+.package-selector-item.is-selected {
+  box-shadow: 0 0 0 1px var(--color-focus-ring);
+}
+
+/* Wallet payment & status panels */
+.wallet-pending-banner {
+  background: var(--color-warning-soft);
+  border-color: var(--color-warning-border);
+}
+
+.wallet-pending-banner p {
+  color: var(--color-warning-text);
+}
+
+.wallet-payment-panel {
+  border-color: var(--color-border);
+  background: linear-gradient(180deg, var(--color-card-gradient-start) 0%, var(--color-surface) 100%);
+}
+
+.wallet-payment-panel-qr-label,
+.wallet-payment-panel-link-value,
+.wallet-payment-status-title,
+.wallet-payment-status-highlight,
+.wallet-payment-return-balance {
+  color: var(--color-text);
+}
+
+.wallet-payment-panel-qr-image,
+.wallet-payment-panel-link-box {
+  background: var(--color-surface-elevated);
+  border-color: var(--color-border);
+}
+
+.wallet-payment-panel-alert {
+  background: var(--color-danger-soft);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger-text);
+}
+
+.wallet-payment-panel-chrome-help {
+  background: var(--color-accent-soft);
+  border-color: var(--color-info-border);
+  color: var(--color-info-text);
+}
+
+.wallet-payment-panel-chrome-help kbd {
+  background: var(--color-surface-elevated);
+}
+
+.wallet-payment-panel-link-label,
+.wallet-payment-panel-steps,
+.wallet-payment-panel-qr-fallback,
+.wallet-payment-status-ref,
+.wallet-payment-return-state p {
+  color: var(--color-text-secondary);
+}
+
+.wallet-payment-status-card {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+}
+
+.wallet-payment-status-processing {
+  background: linear-gradient(180deg, var(--color-accent-soft) 0%, var(--color-surface) 55%);
+  border-color: var(--color-info-border);
+}
+
+.wallet-payment-status-success {
+  background: linear-gradient(180deg, var(--color-success-soft) 0%, var(--color-surface) 55%);
+  border-color: var(--color-success-border);
+}
+
+.wallet-payment-status-warning {
+  background: linear-gradient(180deg, var(--color-warning-soft) 0%, var(--color-surface) 55%);
+  border-color: var(--color-warning-border);
+}
+
+.wallet-payment-status-error {
+  background: linear-gradient(180deg, var(--color-danger-soft) 0%, var(--color-surface) 55%);
+  border-color: var(--color-danger-border);
+}
+
+.wallet-payment-status-summary {
+  color: var(--color-text-secondary);
+}
+
+.wallet-payment-status-lines {
+  color: var(--color-text-muted);
+}
+
+.wallet-payment-status-processing .wallet-payment-status-icon svg {
+  color: var(--color-accent);
+}
+
+.wallet-payment-status-success .wallet-payment-status-icon svg,
+.wallet-payment-return-state.success svg {
+  color: var(--color-success);
+}
+
+.wallet-payment-status-warning .wallet-payment-status-icon svg {
+  color: var(--color-warning);
+}
+
+.wallet-payment-status-error .wallet-payment-status-icon svg,
+.wallet-payment-return-state.error svg {
+  color: var(--color-danger);
+}
+
+.spin-icon {
+  color: var(--color-accent);
+}
+
+/* Operator dashboard alerts */
+.operator-alert-banner,
+.quota-warning-banner {
+  background: var(--color-warning-soft);
+  border-color: var(--color-warning-border);
+  color: var(--color-warning-text);
+}
+
+/* Theme preference on settings */
+.theme-preference {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.theme-preference-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s, box-shadow 0.15s;
+}
+
+.theme-preference-option:hover {
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+
+.theme-preference-option.active {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-focus-ring);
+}
+
+@media (max-width: 480px) {
+  .theme-preference {
+    grid-template-columns: 1fr;
+  }
+
+  .theme-preference-option {
+    flex-direction: row;
+    justify-content: flex-start;
+    padding: 12px 14px;
+  }
+}
