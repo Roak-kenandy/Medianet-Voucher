@@ -14,7 +14,7 @@ export default function Modal({
   const sizeClass = extraWide ? ' modal-extra-wide' : wide ? ' modal-wide' : '';
 
   return (
-    <div className="modal-overlay" onClick={onClose} role="presentation">
+    <div className="modal-overlay" role="presentation">
       <div
         className={`modal${sizeClass}`}
         onClick={(e) => e.stopPropagation()}

@@ -27,17 +27,32 @@ const emptyForm = () => ({
   packageIds: [],
   email: '',
   password: '',
-  walletCommissionType: 'none',
-  walletCommissionValue: 0,
+  walletCommissionMultiplier: 1,
   notes: '',
   isActive: true,
 });
 
-function formatCommissionLabel(operator) {
+function multiplierFromOperator(operator) {
   const type = operator.wallet_commission_type || 'none';
-  const value = Number(operator.wallet_commission_value) || 0;
-  if (type === 'fixed') return `+${formatMoney(value, 'MVR')} / top-up`;
-  if (type === 'percent') return `+${value}% / top-up`;
+  const value = Number(operator.wallet_commission_value) || 1;
+  if (type === 'multiplier' && value > 1) return value;
+  return 1;
+}
+
+function commissionPayload(multiplier) {
+  const value = Number(multiplier);
+  if (!Number.isFinite(value) || value <= 1) {
+    return { walletCommissionType: 'none', walletCommissionValue: 1 };
+  }
+  return { walletCommissionType: 'multiplier', walletCommissionValue: value };
+}
+
+function formatCommissionLabel(operator) {
+  const multiplier = multiplierFromOperator(operator);
+  if (multiplier > 1) {
+    const bonusPercent = Math.round((multiplier - 1) * 10000) / 100;
+    return `×${multiplier.toFixed(2)} (+${bonusPercent}%)`;
+  }
   return 'None';
 }
 
@@ -132,8 +147,7 @@ export default function OperatorsTab() {
       packageIds,
       email: operator.email,
       password: '',
-      walletCommissionType: operator.wallet_commission_type || 'none',
-      walletCommissionValue: Number(operator.wallet_commission_value) || 0,
+      walletCommissionMultiplier: multiplierFromOperator(operator),
       notes: operator.notes || '',
       isActive: Boolean(operator.is_active),
     });
@@ -154,7 +168,11 @@ export default function OperatorsTab() {
     setSubmitting(true);
 
     try {
-      await adminApi.createOperator(createForm);
+      const { walletCommissionMultiplier, ...formData } = createForm;
+      await adminApi.createOperator({
+        ...formData,
+        ...commissionPayload(walletCommissionMultiplier),
+      });
       setCreateModalOpen(false);
       resetCreateForm();
       toast.success('Operator created successfully');
@@ -181,7 +199,11 @@ export default function OperatorsTab() {
     setSubmitting(true);
 
     try {
-      await adminApi.updateOperator(editModal.id, editForm);
+      const { walletCommissionMultiplier, ...formData } = editForm;
+      await adminApi.updateOperator(editModal.id, {
+        ...formData,
+        ...commissionPayload(walletCommissionMultiplier),
+      });
       setEditModal(null);
       toast.success('Operator updated successfully');
       loadOperators();
@@ -324,45 +346,25 @@ export default function OperatorsTab() {
         />
       </div>
       <div className="form-group">
-        <label className="form-label">Top-up Commission</label>
-        <select
+        <label className="form-label">Top-up multiplier</label>
+        <input
+          type="number"
           className="form-input"
-          value={form.walletCommissionType}
+          value={form.walletCommissionMultiplier}
           onChange={(e) =>
             setForm({
               ...form,
-              walletCommissionType: e.target.value,
-              walletCommissionValue: e.target.value === 'none' ? 0 : form.walletCommissionValue,
+              walletCommissionMultiplier: e.target.value === '' ? '' : Number(e.target.value),
             })
           }
-        >
-          <option value="none">None — credit payment amount only</option>
-          <option value="fixed">Fixed bonus (MVR per top-up)</option>
-          <option value="percent">Percent bonus (% of payment)</option>
-        </select>
+          min={1}
+          step="any"
+          required
+        />
         <p className="form-hint">
-          Bonus added on top of what the partner pays.
+          Payment total is multiplied by this value before GST. e.g. 1.15 adds a 15% bonus. Use 1 for no bonus.
         </p>
       </div>
-      {form.walletCommissionType !== 'none' && (
-        <div className="form-group">
-          <label className="form-label">
-            {form.walletCommissionType === 'fixed' ? 'Bonus amount (MVR)' : 'Bonus percent (%)'}
-          </label>
-          <input
-            type="number"
-            className="form-input"
-            value={form.walletCommissionValue}
-            onChange={(e) =>
-              setForm({ ...form, walletCommissionValue: parseFloat(e.target.value) || 0 })
-            }
-            min={0.01}
-            max={form.walletCommissionType === 'percent' ? 100 : undefined}
-            step={form.walletCommissionType === 'percent' ? 0.1 : 0.01}
-            required
-          />
-        </div>
-      )}
       {isEdit && (
         <div className="form-group">
           <label className="form-label">Current Wallet Balance</label>
@@ -463,7 +465,7 @@ export default function OperatorsTab() {
                     <th>Notes</th>
                     <th>Email</th>
                     <th>Wallet</th>
-                    <th>Commission</th>
+                    <th>Multiplier</th>
                     <th>Accounts</th>
                     <th>Status</th>
                     <th>Created</th>

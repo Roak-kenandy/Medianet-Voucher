@@ -6,7 +6,12 @@ import Sidebar from '../../components/Sidebar';
 import Header from '../../components/Header';
 import ServiceTypePicker from '../../components/operator/ServiceTypePicker';
 import PackagePicker from '../../components/operator/PackagePicker';
-import WorkflowSummary, { WorkflowHeaderWallet, WorkflowStep } from '../../components/operator/WorkflowSummary';
+import WorkflowSummary, {
+  WorkflowHeaderWallet,
+  WorkflowStep,
+  formatResultCharge,
+} from '../../components/operator/WorkflowSummary';
+import { computeAccountCreationCharge } from '../../utils/trial';
 import { operatorApi } from '../../api/client';
 import { useToast } from '../../context/ToastContext';
 import {
@@ -30,6 +35,7 @@ export default function CreateAccountPage() {
   const [packages, setPackages] = useState([]);
   const [serviceTags, setServiceTags] = useState([]);
   const [walletBalance, setWalletBalance] = useState(null);
+  const [trialAccountsRemaining, setTrialAccountsRemaining] = useState(0);
   const [currencyCode, setCurrencyCode] = useState('MVR');
   const [packageIds, setPackageIds] = useState([]);
   const [form, setForm] = useState({ fullName: '', phoneNumber: '', serviceTag: 'OTT' });
@@ -43,6 +49,7 @@ export default function CreateAccountPage() {
       setServiceTags(tags);
       setPackages(stats.packages || []);
       setWalletBalance(stats.walletBalance);
+      setTrialAccountsRemaining(stats.trialAccountsRemaining || 0);
       setCurrencyCode(stats.currencyCode || 'MVR');
       const defaultTag = defaultServiceTag(stats.serviceScope);
       setForm((prev) => ({ ...prev, serviceTag: defaultTag }));
@@ -66,7 +73,12 @@ export default function CreateAccountPage() {
   );
 
   const unitCost = sumPackagePrices(taggedPackages, activePackageIds);
-  const canAfford = walletBalance == null || unitCost === 0 || walletBalance >= unitCost;
+  const chargePreview = computeAccountCreationCharge(unitCost, 1, trialAccountsRemaining);
+  const canAfford =
+    walletBalance == null ||
+    unitCost === 0 ||
+    chargePreview.usesTrial ||
+    walletBalance >= chargePreview.effectiveCharge;
 
   const formReady =
     taggedPackages.length > 0 &&
@@ -98,7 +110,9 @@ export default function CreateAccountPage() {
     }
 
     if (!canAfford) {
-      setError(`Insufficient wallet balance. Required ${formatMoney(unitCost, currencyCode)}.`);
+      setError(
+        `Insufficient wallet balance. Required ${formatMoney(chargePreview.effectiveCharge, currencyCode)}.`
+      );
       return;
     }
 
@@ -113,6 +127,9 @@ export default function CreateAccountPage() {
       });
 
       setWalletBalance(result.walletBalance);
+      if (!result.amountCharged) {
+        setTrialAccountsRemaining((prev) => Math.max(0, prev - 1));
+      }
       toast.success(`Account created for ${result.fullName}`);
       setLastResult(result);
       setForm({ fullName: '', phoneNumber: '', serviceTag: form.serviceTag });
@@ -158,7 +175,8 @@ export default function CreateAccountPage() {
                 <strong>Packages:</strong> {(lastResult.packageNames || []).join(', ')}
               </p>
               <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-                <strong>Charged:</strong> {formatMoney(lastResult.amountCharged, lastResult.currencyCode || currencyCode)}
+                <strong>Charged:</strong>{' '}
+                {formatResultCharge(lastResult.amountCharged, lastResult.currencyCode || currencyCode)}
                 {' · '}
                 <strong>Balance:</strong>{' '}
                 {formatMoney(lastResult.balanceBefore, currencyCode)} →{' '}
@@ -278,17 +296,25 @@ export default function CreateAccountPage() {
               currencyCode={currencyCode}
               selectedPackages={selectedPackages}
               unitCost={unitCost}
+              chargeAmount={chargePreview.effectiveCharge}
+              trialFreeCount={chargePreview.freeCount}
               canAfford={canAfford}
               actionLabel={
-                unitCost > 0
-                  ? `Create Account · ${formatMoney(unitCost, currencyCode)}`
-                  : 'Create Account'
+                chargePreview.usesTrial
+                  ? 'Create Account · Free'
+                  : unitCost > 0
+                    ? `Create Account · ${formatMoney(unitCost, currencyCode)}`
+                    : 'Create Account'
               }
               actionIcon={UserPlus}
               onAction={() => formRef.current?.requestSubmit()}
               actionDisabled={submitDisabled}
               actionLoading={submitting}
-              footnote="Your wallet is charged immediately when the account is created in the system."
+              footnote={
+                chargePreview.usesTrial
+                  ? 'This account uses a free trial slot. Your wallet will not be charged.'
+                  : 'Your wallet is charged immediately when the account is created in the system.'
+              }
             />
           </div>
         </aside>

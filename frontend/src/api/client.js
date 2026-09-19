@@ -149,6 +149,26 @@ export const adminApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  topupOperator: (id, payload) =>
+    apiRequest(`/admin/operators/${id}/wallet/topup`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  getOperatorActivations: (params = {}) =>
+    apiRequest(`/admin/operator-activations${buildQuery(params)}`),
+  exportOperatorActivations: async (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== undefined && v !== '')
+    ).toString();
+    const headers = {};
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+    const res = await fetch(
+      `${API_BASE}/admin/operator-activations/export${qs ? `?${qs}` : ''}`,
+      { credentials: 'include', headers }
+    );
+    if (!res.ok) throw new Error('Export failed');
+    return res.text();
+  },
   completeOperatorTopup: (operatorId, transactionId, paymentRef) =>
     apiRequest(`/admin/operators/${operatorId}/wallet/topups/${transactionId}/complete`, {
       method: 'POST',
@@ -199,6 +219,8 @@ export const operatorApi = {
     apiRequest(
       `/operator/wallet/topup/status${buildQuery({ reference, transactionId })}`
     ),
+  getWalletTopupBill: (reference) =>
+    apiRequest(`/operator/wallet/topup/bill${buildQuery({ reference })}`),
   searchCustomers: (phone, serviceTag) =>
     apiRequest(`/operator/customers/search${buildQuery({ phone, serviceTag })}`),
   crmTopupCustomer: (payload) =>
@@ -231,6 +253,19 @@ export const operatorApi = {
     return res.text();
   },
   getAccounts: (params = {}) => apiRequest(`/operator/accounts${buildQuery(params)}`),
+  exportAccounts: async (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== undefined && v !== '')
+    ).toString();
+    const headers = {};
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+    const res = await fetch(`${API_BASE}/operator/accounts/export${qs ? `?${qs}` : ''}`, {
+      credentials: 'include',
+      headers,
+    });
+    if (!res.ok) throw new Error('Export failed');
+    return res.text();
+  },
   createAccount: (payload) =>
     apiRequest('/operator/accounts', {
       method: 'POST',

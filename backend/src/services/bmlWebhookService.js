@@ -6,7 +6,7 @@ import {
   verifyWebhookHeaders,
 } from './bmlPaymentService.js';
 import { isProduction } from '../config/index.js';
-import { syncTopupFromBml } from './walletService.js';
+import { syncTopupFromBml, getWalletTopupBill } from './walletService.js';
 import { logAudit } from './auditService.js';
 
 function parseMetadata(raw) {
@@ -139,6 +139,7 @@ export async function reconcileTopupPayment({
   }
 
   if (tx.status === 'completed') {
+    const bill = await getWalletTopupBill(operatorId, reference);
     return {
       reference: tx.reference,
       status: 'completed',
@@ -148,6 +149,7 @@ export async function reconcileTopupPayment({
       credited: Number(tx.netAmount),
       balance: Number(tx.balanceAfter),
       alreadyCompleted: true,
+      bill,
     };
   }
 
@@ -191,6 +193,14 @@ export async function reconcileTopupPayment({
   if (result.status === 'failed' || result.status === 'cancelled') {
     result.amount = Number(tx.amount);
     result.amountPaid = Number(tx.amount);
+  }
+
+  if (result.status === 'completed') {
+    try {
+      result.bill = await getWalletTopupBill(operatorId, reference);
+    } catch {
+      // Bill enrichment is best-effort after reconciliation.
+    }
   }
 
   await logAudit({

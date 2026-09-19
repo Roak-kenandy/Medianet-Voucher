@@ -6,7 +6,12 @@ import Sidebar from '../../components/Sidebar';
 import Header from '../../components/Header';
 import ServiceTypePicker from '../../components/operator/ServiceTypePicker';
 import PackagePicker from '../../components/operator/PackagePicker';
-import WorkflowSummary, { WorkflowHeaderWallet, WorkflowStep } from '../../components/operator/WorkflowSummary';
+import WorkflowSummary, {
+  WorkflowHeaderWallet,
+  WorkflowStep,
+  formatResultCharge,
+} from '../../components/operator/WorkflowSummary';
+import { computeAccountCreationCharge } from '../../utils/trial';
 import { operatorApi } from '../../api/client';
 import { useToast } from '../../context/ToastContext';
 import { formatMoney, sumPackagePrices } from '../../utils/money';
@@ -61,6 +66,7 @@ export default function CustomerActionsPage() {
   const [packageIds, setPackageIds] = useState([]);
   const [amountInput, setAmountInput] = useState('');
   const [walletBalance, setWalletBalance] = useState(null);
+  const [trialAccountsRemaining, setTrialAccountsRemaining] = useState(0);
   const [currencyCode, setCurrencyCode] = useState('MVR');
   const [searching, setSearching] = useState(false);
   const [processingId, setProcessingId] = useState(null);
@@ -73,6 +79,7 @@ export default function CustomerActionsPage() {
   useEffect(() => {
     operatorApi.getStats().then((stats) => {
       setWalletBalance(stats.walletBalance);
+      setTrialAccountsRemaining(stats.trialAccountsRemaining || 0);
       setCurrencyCode(stats.currencyCode || 'MVR');
       setPackages(stats.packages || []);
       const scope = stats.serviceScope || 'BOTH';
@@ -101,8 +108,12 @@ export default function CustomerActionsPage() {
   );
 
   const unitCost = sumPackagePrices(taggedPackages, activePackageIds);
+  const subscribeChargePreview = computeAccountCreationCharge(unitCost, 1, trialAccountsRemaining);
   const canAffordSubscribe =
-    walletBalance == null || unitCost === 0 || walletBalance >= unitCost;
+    walletBalance == null ||
+    unitCost === 0 ||
+    subscribeChargePreview.usesTrial ||
+    walletBalance >= subscribeChargePreview.effectiveCharge;
   const packagesReady =
     taggedPackages.length > 0 &&
     (taggedPackages.length === 1 || activePackageIds.length > 0);
@@ -227,7 +238,9 @@ export default function CustomerActionsPage() {
     }
 
     if (!canAffordSubscribe) {
-      toast.error(`Insufficient wallet balance. Required ${formatMoney(unitCost, currencyCode)}.`);
+      toast.error(
+        `Insufficient wallet balance. Required ${formatMoney(subscribeChargePreview.effectiveCharge, currencyCode)}.`
+      );
       return;
     }
 
@@ -245,6 +258,9 @@ export default function CustomerActionsPage() {
       });
 
       setWalletBalance(result.walletBalance);
+      if (!result.amountCharged) {
+        setTrialAccountsRemaining((prev) => Math.max(0, prev - 1));
+      }
       setLastResult({ type: 'subscribe', ...result });
       toast.success(`Subscription created for ${customer.name}`);
       setCustomers((prev) => prev.filter((row) => row.id !== customer.id));
@@ -304,7 +320,7 @@ export default function CustomerActionsPage() {
               )}
               <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginTop: 4 }}>
                 <strong>Amount:</strong>{' '}
-                {formatMoney(lastResult.amountCharged, lastResult.currencyCode || currencyCode)}
+                {formatResultCharge(lastResult.amountCharged, lastResult.currencyCode || currencyCode)}
                 {' · '}
                 <strong>Balance:</strong>{' '}
                 {formatMoney(lastResult.balanceBefore, currencyCode)} →{' '}
@@ -361,7 +377,7 @@ export default function CustomerActionsPage() {
                   type="number"
                   className={`form-input${amountInput && !amountValid ? ' error' : ''}`}
                   min="0"
-                  step="0.01"
+                  step="any"
                   value={amountInput}
                   onChange={(e) => setAmountInput(e.target.value)}
                   disabled={!packagesReady}
@@ -524,7 +540,7 @@ export default function CustomerActionsPage() {
                                 type="number"
                                 className="form-input"
                                 min="1"
-                                step="0.01"
+                                step="any"
                                 placeholder="Amount"
                                 value={amount}
                                 onChange={(e) =>
@@ -567,9 +583,15 @@ export default function CustomerActionsPage() {
               currencyCode={currencyCode}
               selectedPackages={isSubscribe ? selectedPackages : []}
               unitCost={isSubscribe ? unitCost : 0}
+              chargeAmount={isSubscribe ? subscribeChargePreview.effectiveCharge : 0}
+              trialFreeCount={isSubscribe ? subscribeChargePreview.freeCount : 0}
               canAfford={isSubscribe ? canAffordSubscribe && amountValid : true}
               showAction={false}
-              footnote={modeConfig.summaryFootnote}
+              footnote={
+                isSubscribe && subscribeChargePreview.usesTrial
+                  ? 'This subscription uses a free trial slot. Your wallet will not be charged.'
+                  : modeConfig.summaryFootnote
+              }
             />
           </div>
         </aside>

@@ -1,4 +1,5 @@
 import { query } from '../db/pool.js';
+import { resolveWalletTransactionBalances } from './walletService.js';
 
 function parseMetadata(raw) {
   if (!raw) return {};
@@ -22,6 +23,7 @@ function formatActivityLabel(metadata = {}) {
 function mapTransactionRow(row) {
   const metadata = parseMetadata(row.metadata);
   const activity = formatActivityLabel(metadata) || (row.type === 'topup' ? 'Wallet Top-up' : row.type);
+  const { balanceBefore, balanceAfter, netAmount } = resolveWalletTransactionBalances(row);
 
   return {
     id: row.id,
@@ -32,9 +34,9 @@ function mapTransactionRow(row) {
     activity,
     amount: Number(row.amount) || 0,
     commissionAmount: Number(row.commission_amount) || 0,
-    netAmount: Number(row.net_amount) || 0,
-    balanceBefore: Number(row.balance_before) || 0,
-    balanceAfter: Number(row.balance_after) || 0,
+    netAmount,
+    balanceBefore,
+    balanceAfter,
     currencyCode: row.currency_code || 'MVR',
     reference: row.reference,
     paymentRef: row.payment_ref,

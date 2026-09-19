@@ -40,24 +40,19 @@ export const createAdminSchema = z.object({
 });
 
 const walletCommissionFields = {
-  walletCommissionType: z.enum(['none', 'fixed', 'percent']).default('none'),
-  walletCommissionValue: z.coerce.number().min(0, 'Commission value cannot be negative').default(0),
+  walletCommissionType: z.enum(['none', 'multiplier']).default('none'),
+  walletCommissionValue: z.coerce.number().min(0, 'Multiplier cannot be negative').default(1),
 };
 
 function validateWalletCommission(data, ctx) {
-  if (data.walletCommissionType !== 'none' && data.walletCommissionValue <= 0) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Commission value is required when commission type is set',
-      path: ['walletCommissionValue'],
-    });
-  }
-  if (data.walletCommissionType === 'percent' && data.walletCommissionValue > 100) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Percent commission cannot exceed 100',
-      path: ['walletCommissionValue'],
-    });
+  if (data.walletCommissionType === 'multiplier') {
+    if (data.walletCommissionValue < 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Multiplier must be at least 1',
+        path: ['walletCommissionValue'],
+      });
+    }
   }
 }
 
@@ -108,9 +103,19 @@ export const walletTopupStatusQuerySchema = z.object({
   transactionId: z.string().optional(),
 });
 
+export const walletTopupBillQuerySchema = z.object({
+  reference: z.string().trim().min(1, 'Reference is required'),
+});
+
 export const walletAdjustSchema = z.object({
   amount: z.coerce.number().refine((value) => value !== 0, 'Adjustment amount cannot be zero'),
   description: z.string().trim().max(500).optional().default(''),
+});
+
+export const adminOperatorTopupSchema = z.object({
+  amount: z.coerce.number().positive('Wallet credit amount must be greater than zero'),
+  trialAccounts: z.coerce.number().int().min(0).max(10000).optional().default(0),
+  notes: z.string().trim().min(3, 'Notes are required').max(500),
 });
 
 export const createPackageSchema = z.object({
@@ -171,6 +176,31 @@ export const paginationSchema = z.object({
 
 export const listQuerySchema = paginationSchema.extend({
   search: z.string().trim().max(200).optional().default(''),
+});
+
+const reportDateRangeSchema = {
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+};
+
+export const operatorActivationsQuerySchema = paginationSchema.extend({
+  search: z.string().trim().max(200).optional().default(''),
+  ...reportDateRangeSchema,
+});
+
+export const operatorActivationsExportSchema = z.object({
+  search: z.string().trim().max(200).optional().default(''),
+  ...reportDateRangeSchema,
+});
+
+export const operatorAccountsQuerySchema = paginationSchema.extend({
+  search: z.string().trim().max(200).optional().default(''),
+  ...reportDateRangeSchema,
+});
+
+export const operatorAccountsExportSchema = z.object({
+  search: z.string().trim().max(200).optional().default(''),
+  ...reportDateRangeSchema,
 });
 
 export const operatorReportQuerySchema = z.object({

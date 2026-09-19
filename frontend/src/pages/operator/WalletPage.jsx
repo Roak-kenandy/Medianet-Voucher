@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Wallet, Plus, Receipt, ExternalLink, RefreshCw } from 'lucide-react';
+import { Wallet, Plus, Receipt } from 'lucide-react';
 import Layout from '../../components/Layout';
 import Sidebar from '../../components/Sidebar';
 import Header from '../../components/Header';
@@ -9,41 +9,35 @@ import WalletPaymentStatusCard from '../../components/operator/WalletPaymentStat
 import { operatorApi } from '../../api/client';
 import { useToast } from '../../context/ToastContext';
 import { formatMoney } from '../../utils/money';
+import TrialBanner from '../../components/operator/TrialBanner';
+import { useAuth } from '../../context/AuthContext';
 import { openBmlPayment } from '../../utils/openPayment';
 import '../admin/admin-shared.css';
 import './operator-workflow.css';
 
-function commissionHint(wallet, currencyCode) {
-  if (!wallet || wallet.walletCommissionType === 'none') return null;
-  if (wallet.walletCommissionType === 'fixed') {
-    return `Includes a ${formatMoney(wallet.walletCommissionValue, currencyCode)} operator bonus after GST.`;
-  }
-  return `Includes a ${wallet.walletCommissionValue}% operator bonus on the post-GST amount.`;
+function commissionHint(wallet) {
+  if (!wallet || wallet.walletCommissionType !== 'multiplier') return null;
+  const multiplier = Number(wallet.walletCommissionValue) || 1;
+  if (multiplier <= 1) return null;
+  const bonusPercent = Math.round((multiplier - 1) * 10000) / 100;
+  return `Payment total is multiplied by ${multiplier.toFixed(2)} (+${bonusPercent}% bonus) before GST is calculated.`;
 }
 
 export default function WalletPage() {
   const toast = useToast();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [wallet, setWallet] = useState(null);
   const [amount, setAmount] = useState('');
   const [preview, setPreview] = useState(null);
   const [submitting, setSubmitting] = useState(false);
-  const [pendingTopup, setPendingTopup] = useState(null);
   const [paymentFlow, setPaymentFlow] = useState(null);
 
   const loadWallet = () => operatorApi.getWallet().then(setWallet);
 
-  const loadPendingTopup = useCallback(() => {
-    return operatorApi
-      .getPendingWalletTopup()
-      .then((data) => setPendingTopup(data.pending))
-      .catch(() => setPendingTopup(null));
-  }, []);
-
   useEffect(() => {
     loadWallet();
-    loadPendingTopup();
-  }, [loadPendingTopup]);
+  }, []);
 
   useEffect(() => {
     const value = Number(amount);
@@ -97,7 +91,6 @@ export default function WalletPage() {
 
         setAmount('');
         setPreview(null);
-        await loadPendingTopup();
         return;
       }
 
@@ -106,25 +99,12 @@ export default function WalletPage() {
       setAmount('');
       setPreview(null);
       await loadWallet();
-      await loadPendingTopup();
     } catch (err) {
       setPaymentFlow(null);
       toast.error(err.message || 'Top-up failed');
     } finally {
       setSubmitting(false);
     }
-  };
-
-  const handleContinuePending = () => {
-    if (!pendingTopup) return;
-    const paymentLink = pendingTopup.shortPaymentUrl || pendingTopup.paymentUrl;
-    sessionStorage.setItem('pendingTopupReference', pendingTopup.reference);
-    openBmlPayment(paymentLink);
-    setPaymentFlow({
-      phase: 'awaiting',
-      reference: pendingTopup.reference,
-      amount: pendingTopup.amount,
-    });
   };
 
   const currencyCode = wallet?.currencyCode || 'MVR';
@@ -153,6 +133,13 @@ export default function WalletPage() {
         </div>
       </div>
 
+      <TrialBanner
+        trialActive={wallet?.trialActive ?? user?.trialActive}
+        trialAccountsRemaining={wallet?.trialAccountsRemaining ?? user?.trialAccountsRemaining}
+        trialAccountLimit={wallet?.trialAccountLimit ?? user?.trialAccountLimit}
+        trialAccountsUsed={wallet?.trialAccountsUsed ?? user?.trialAccountsUsed}
+      />
+
       {paymentFlow && (
         <section className="workflow-step wallet-payment-return">
           <WalletPaymentStatusCard
@@ -180,29 +167,6 @@ export default function WalletPage() {
         </section>
       )}
 
-      {pendingTopup && !paymentFlow && (
-        <div className="wallet-pending-banner">
-          <div>
-            <strong>Pending payment</strong>
-            <p>
-              {formatMoney(pendingTopup.amount, currencyCode)} · Ref {pendingTopup.reference}
-            </p>
-          </div>
-          <div className="wallet-pending-banner-actions">
-            <button type="button" className="btn btn-primary btn-sm" onClick={handleContinuePending}>
-              <ExternalLink size={14} /> Open payment
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => goToPaymentStatus(pendingTopup.reference)}
-            >
-              <RefreshCw size={14} /> Check status
-            </button>
-          </div>
-        </div>
-      )}
-
       {!paymentFlow && (
         <div className="wallet-page-layout">
           <div className="wallet-page-main">
@@ -227,7 +191,7 @@ export default function WalletPage() {
                       type="number"
                       min={wallet?.minTopupAmount ?? 1}
                       max={wallet?.maxTopupAmount || 1000000}
-                      step="0.01"
+                      step="any"
                       className="form-input wallet-amount-input"
                       value={amount}
                       onChange={(e) => setAmount(e.target.value)}
@@ -235,7 +199,7 @@ export default function WalletPage() {
                     />
                     <p className="form-hint">
                       Minimum {formatMoney(wallet?.minTopupAmount ?? 1, currencyCode)}
-                      {commissionHint(wallet, currencyCode) ? ` · ${commissionHint(wallet, currencyCode)}` : ''}
+                      {commissionHint(wallet) ? ` · ${commissionHint(wallet)}` : ''}
                     </p>
                   </div>
 

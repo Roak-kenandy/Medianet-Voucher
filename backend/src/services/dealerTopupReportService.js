@@ -1,5 +1,6 @@
 import { config } from '../config/index.js';
 import { query } from '../db/pool.js';
+import { calculateGstFromTotal } from './walletService.js';
 
 function roundMoney(value) {
   return Math.round(Number(value) * 100) / 100;
@@ -43,16 +44,14 @@ function resolveTopupFinancials(row, metadata) {
     };
   }
 
-  const afterGst = roundMoney(totalTopupAmount - commissionAmount);
-  const gstAmount = roundMoney(Math.max(0, amountPaid - afterGst));
-  const gstRate = gstAmount > 0 ? roundMoney(gstAmount / amountPaid) : defaultGstRate;
+  const gst = calculateGstFromTotal(amountPaid, defaultGstRate);
 
   return {
     amountPaid,
-    gstRate,
-    gstRatePercent: roundMoney(gstRate * 100),
-    gstAmount,
-    afterGst,
+    gstRate: gst.gstRate,
+    gstRatePercent: gst.gstRatePercent,
+    gstAmount: gst.gstAmount,
+    afterGst: gst.afterGst,
     commissionAmount,
     totalTopupAmount,
   };

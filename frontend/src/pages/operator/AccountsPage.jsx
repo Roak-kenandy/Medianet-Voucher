@@ -1,13 +1,17 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { UserPlus } from 'lucide-react';
+import { UserPlus, Download } from 'lucide-react';
 import Layout from '../../components/Layout';
 import Sidebar from '../../components/Sidebar';
 import Header from '../../components/Header';
 import TableToolbar from '../../components/TableToolbar';
 import TablePagination from '../../components/TablePagination';
 import { operatorApi } from '../../api/client';
+import { useToast } from '../../context/ToastContext';
 import { formatPackageLabel } from '../../constants/packages';
+import { getDefaultReportDateRange } from '../../utils/dates';
+import { downloadCsv } from '../../utils/reports';
+import '../admin/admin-shared.css';
 
 function StatusBadge({ status }) {
   const map = {
@@ -63,21 +67,40 @@ function AccountCard({ acc, packageLabel }) {
 }
 
 export default function AccountsPage() {
+  const toast = useToast();
+  const defaultRange = getDefaultReportDateRange();
   const [data, setData] = useState({ accounts: [], pagination: {} });
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
+  const [startDate, setStartDate] = useState(defaultRange.startDate);
+  const [endDate, setEndDate] = useState(defaultRange.endDate);
 
   useEffect(() => {
     setLoading(true);
-    operatorApi.getAccounts({ page, limit: 20, search })
+    operatorApi
+      .getAccounts({ page, limit: 20, search, startDate, endDate })
       .then((accountsData) => setData(accountsData))
       .finally(() => setLoading(false));
-  }, [page, search]);
+  }, [page, search, startDate, endDate]);
 
   const handleSearchChange = (value) => {
     setSearch(value);
     setPage(1);
+  };
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const csv = await operatorApi.exportAccounts({ search, startDate, endDate });
+      downloadCsv(csv, 'accounts-report.csv');
+      toast.success('Accounts report downloaded');
+    } catch (err) {
+      toast.error(err.message || 'Export failed');
+    } finally {
+      setExporting(false);
+    }
   };
 
   const { accounts, pagination } = data;
@@ -89,10 +112,57 @@ export default function AccountsPage() {
     <Layout sidebar={<Sidebar role="operator" />} header={<Header />}>
       <div className="page-header">
         <h1 className="page-title">Accounts</h1>
-        <p className="page-subtitle">View all voucher accounts you have created</p>
+        <p className="page-subtitle">View and download all voucher accounts you have created</p>
       </div>
 
       <div className="card">
+        <div className="card-header activation-report-header">
+          <div>
+            <h3 className="card-title">Account list</h3>
+            <p className="card-subtitle">Filter by date range and search, then download the full report as CSV</p>
+          </div>
+          {pagination.total > 0 && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={handleExport}
+              disabled={exporting || loading}
+            >
+              <Download size={16} />
+              {exporting ? 'Exporting…' : 'Download CSV'}
+            </button>
+          )}
+        </div>
+
+        <div className="activation-report-filters">
+          <div className="form-group">
+            <label htmlFor="accountsStartDate" className="form-label">Start date</label>
+            <input
+              id="accountsStartDate"
+              type="date"
+              className="form-input"
+              value={startDate}
+              onChange={(e) => {
+                setStartDate(e.target.value);
+                setPage(1);
+              }}
+            />
+          </div>
+          <div className="form-group">
+            <label htmlFor="accountsEndDate" className="form-label">End date</label>
+            <input
+              id="accountsEndDate"
+              type="date"
+              className="form-input"
+              value={endDate}
+              onChange={(e) => {
+                setEndDate(e.target.value);
+                setPage(1);
+              }}
+            />
+          </div>
+        </div>
+
         <TableToolbar
           value={search}
           onChange={handleSearchChange}
@@ -106,10 +176,14 @@ export default function AccountsPage() {
           ) : accounts.length === 0 ? (
             <div className="empty-state">
               <p className="empty-state-title">
-                {search ? 'No accounts match your search' : 'No accounts yet'}
+                {search || startDate || endDate ? 'No accounts match your filters' : 'No accounts yet'}
               </p>
-              <p>{search ? 'Try a different search term' : 'Create your first account to see it here'}</p>
-              {!search && (
+              <p>
+                {search || startDate || endDate
+                  ? 'Try a different date range or search term'
+                  : 'Create your first account to see it here'}
+              </p>
+              {!search && !startDate && !endDate && (
                 <div className="empty-state-action">
                   <Link to="/operator/create" className="btn btn-primary">
                     <UserPlus size={18} />

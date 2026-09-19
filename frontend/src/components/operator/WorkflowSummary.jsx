@@ -7,6 +7,8 @@ export default function WorkflowSummary({
   currencyCode = 'MVR',
   selectedPackages = [],
   unitCost = 0,
+  chargeAmount,
+  trialFreeCount = 0,
   canAfford = true,
   actionLabel,
   actionIcon: ActionIcon,
@@ -18,10 +20,13 @@ export default function WorkflowSummary({
   footnote,
   showChargeBreakdown = true,
 }) {
+  const resolvedCharge = chargeAmount ?? unitCost;
   const balanceAfter =
-    walletBalance != null && unitCost > 0
-      ? walletBalance - unitCost
+    walletBalance != null && resolvedCharge > 0
+      ? walletBalance - resolvedCharge
       : walletBalance;
+  const isTrialFree = trialFreeCount > 0 && resolvedCharge === 0 && unitCost > 0;
+  const showBalanceChange = walletBalance != null && unitCost > 0;
 
   return (
     <div className="workflow-summary">
@@ -30,9 +35,12 @@ export default function WorkflowSummary({
         <div className="workflow-summary-top-value">
           {walletBalance != null ? formatMoney(walletBalance, currencyCode) : '—'}
         </div>
-        {unitCost > 0 && walletBalance != null && (
+        {showBalanceChange && (
           <div className="workflow-summary-top-meta">
-            After this action: {formatMoney(balanceAfter, currencyCode)}
+            After this action:{' '}
+            {isTrialFree
+              ? `${formatMoney(walletBalance, currencyCode)} (unchanged)`
+              : formatMoney(balanceAfter, currencyCode)}
           </div>
         )}
       </div>
@@ -48,7 +56,16 @@ export default function WorkflowSummary({
                   <div key={pkg.id} className="summary-package-item">
                     <span className="summary-package-item-name">{pkg.name}</span>
                     <span className="summary-package-item-price">
-                      {formatMoney(pkg.priceAmount, pkg.currencyCode || currencyCode)}
+                      {isTrialFree ? (
+                        <>
+                          <span style={{ textDecoration: 'line-through', opacity: 0.55, marginRight: 8 }}>
+                            {formatMoney(pkg.priceAmount, pkg.currencyCode || currencyCode)}
+                          </span>
+                          Free
+                        </>
+                      ) : (
+                        formatMoney(pkg.priceAmount, pkg.currencyCode || currencyCode)
+                      )}
                     </span>
                   </div>
                 ))}
@@ -59,27 +76,47 @@ export default function WorkflowSummary({
               </p>
             )}
 
+            {isTrialFree && (
+              <div className="summary-line" style={{ marginBottom: 12 }}>
+                <span className="summary-line-label">Free trial</span>
+                <span className="summary-line-value success">
+                  {trialFreeCount} account{trialFreeCount === 1 ? '' : 's'} at no charge
+                </span>
+              </div>
+            )}
+
             <div className="summary-total-row">
               <span className="summary-total-label">Total charge</span>
               <span className="summary-total-value">
-                {formatMoney(unitCost, currencyCode)}
+                {isTrialFree ? (
+                  <>
+                    <span style={{ textDecoration: 'line-through', opacity: 0.55, marginRight: 8, fontWeight: 500 }}>
+                      {formatMoney(unitCost, currencyCode)}
+                    </span>
+                    Free
+                  </>
+                ) : (
+                  formatMoney(resolvedCharge, currencyCode)
+                )}
               </span>
             </div>
 
-            {walletBalance != null && unitCost > 0 && (
+            {showBalanceChange && (
               <div className="summary-line" style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--color-border)' }}>
                 <span className="summary-line-label">Balance after</span>
-                <span className={`summary-line-value${!canAfford ? ' danger' : ' success'}`}>
-                  {formatMoney(balanceAfter, currencyCode)}
+                <span className={`summary-line-value${!canAfford && !isTrialFree ? ' danger' : ' success'}`}>
+                  {isTrialFree
+                    ? `${formatMoney(walletBalance, currencyCode)} (unchanged)`
+                    : formatMoney(balanceAfter, currencyCode)}
                 </span>
               </div>
             )}
           </>
         )}
 
-        {!canAfford && unitCost > 0 && (
+        {!canAfford && resolvedCharge > 0 && (
           <div className="workflow-summary-alert danger">
-            Insufficient balance. You need {formatMoney(unitCost, currencyCode)} but have{' '}
+            Insufficient balance. You need {formatMoney(resolvedCharge, currencyCode)} but have{' '}
             {formatMoney(walletBalance, currencyCode)}.{' '}
             <Link to="/operator/wallet" style={{ fontWeight: 600 }}>Top up wallet</Link>
           </div>
@@ -134,4 +171,9 @@ export function WorkflowStep({ step, title, description, children }) {
       <div className="workflow-step-body">{children}</div>
     </section>
   );
+}
+
+export function formatResultCharge(amount, currencyCode) {
+  if (!amount || amount === 0) return 'Free (trial)';
+  return formatMoney(amount, currencyCode);
 }

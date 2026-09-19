@@ -4,6 +4,7 @@ import { query, getConnection } from '../db/pool.js';
 import { AppError } from '../utils/errors.js';
 import { logAudit } from './auditService.js';
 import { paginationSql } from '../utils/pagination.js';
+import { formatTrialForResponse } from '../utils/trial.js';
 import {
   assertBmlPaymentMatchesTopup,
   buildRedirectUrl,
@@ -23,31 +24,65 @@ function generateReference(prefix = 'WT') {
   return `${prefix}-${Date.now().toString(36).toUpperCase()}-${suffix}`;
 }
 
+export function calculateGstFromTotal(grossAmount, gstRate = config.wallet.gstRate) {
+  const total = roundMoney(grossAmount);
+  const rate = Math.max(0, Math.min(1, Number(gstRate) || 0));
+
+  if (rate <= 0) {
+    return {
+      grossAmount: total,
+      gstRate: 0,
+      gstRatePercent: 0,
+      gstAmount: 0,
+      afterGst: total,
+    };
+  }
+
+  const afterGst = roundMoney(total / (1 + rate));
+  const gstAmount = roundMoney(afterGst * rate);
+
+  return {
+    grossAmount: total,
+    gstRate: rate,
+    gstRatePercent: roundMoney(rate * 100),
+    gstAmount,
+    afterGst,
+  };
+}
+
 export function calculateTopupCredit(
   paidAmount,
   { commissionType = 'none', commissionValue = 0, gstRate = config.wallet.gstRate } = {}
 ) {
   const amountPaid = roundMoney(paidAmount);
   const rate = Math.max(0, Math.min(1, Number(gstRate) || 0));
-  const gstAmount = roundMoney(amountPaid * rate);
-  const afterGst = roundMoney(amountPaid - gstAmount);
 
+  let grossTotal = amountPaid;
   let commission = 0;
-  if (commissionType === 'fixed') {
+
+  if (commissionType === 'multiplier') {
+    const multiplier = Math.max(1, Number(commissionValue) || 1);
+    grossTotal = roundMoney(amountPaid * multiplier);
+    commission = roundMoney(grossTotal - amountPaid);
+  } else if (commissionType === 'fixed') {
     commission = roundMoney(commissionValue);
+    grossTotal = roundMoney(amountPaid + commission);
   } else if (commissionType === 'percent') {
-    commission = roundMoney(afterGst * (Number(commissionValue) / 100));
+    commission = roundMoney(amountPaid * (Number(commissionValue) / 100));
+    grossTotal = roundMoney(amountPaid + commission);
   }
 
-  const net = roundMoney(afterGst + commission);
+  const gst = calculateGstFromTotal(grossTotal, rate);
+  const net = gst.afterGst;
 
   return {
     amount: amountPaid,
     amountPaid,
-    gstRate: rate,
-    gstRatePercent: roundMoney(rate * 100),
-    gstAmount,
-    afterGst,
+    grossTotal,
+    gstRate: gst.gstRate,
+    gstRatePercent: gst.gstRatePercent,
+    gstAmount: gst.gstAmount,
+    afterGst: gst.afterGst,
     commission,
     net,
     commissionType,
@@ -72,6 +107,7 @@ function buildTopupMetadata(breakdown, commissionSettings) {
   return {
     activity: 'wallet_topup',
     amountPaid: breakdown.amountPaid,
+    grossTotal: breakdown.grossTotal ?? breakdown.amountPaid,
     gstRate: breakdown.gstRate,
     gstRatePercent: breakdown.gstRatePercent,
     gstAmount: breakdown.gstAmount,
@@ -84,13 +120,17 @@ function buildTopupMetadata(breakdown, commissionSettings) {
 }
 
 export function formatOperatorCommission({ commissionType, commissionValue }) {
-  if (commissionType === 'fixed') {
-    return { commissionType, commissionValue: roundMoney(commissionValue) };
+  if (commissionType === 'multiplier') {
+    const multiplier = Math.max(1, Number(commissionValue) || 1);
+    if (multiplier <= 1) {
+      return { commissionType: 'none', commissionValue: 1 };
+    }
+    return { commissionType: 'multiplier', commissionValue: multiplier };
   }
-  if (commissionType === 'percent') {
-    return { commissionType, commissionValue: roundMoney(commissionValue) };
+  if (commissionType === 'fixed' || commissionType === 'percent') {
+    return { commissionType: 'none', commissionValue: 1 };
   }
-  return { commissionType: 'none', commissionValue: 0 };
+  return { commissionType: 'none', commissionValue: 1 };
 }
 
 async function getOperatorCommissionSettings(operatorId, connection = null) {
@@ -127,7 +167,8 @@ export async function getOperatorWallet(operatorId, connection = null) {
 
   const operator = await runner(
     `SELECT id, wallet_balance, accounts_created, client_name, is_active,
-            wallet_commission_type, wallet_commission_value
+            wallet_commission_type, wallet_commission_value,
+            trial_account_limit, trial_accounts_used
      FROM operators WHERE id = ? LIMIT 1`,
     [operatorId]
   );
@@ -153,6 +194,7 @@ export async function getOperatorWallet(operatorId, connection = null) {
     gstRatePercent: roundMoney(config.wallet.gstRate * 100),
     minTopupAmount: config.wallet.minTopupAmount,
     maxTopupAmount: config.wallet.maxTopupAmount,
+    ...formatTrialForResponse(operator.trial_account_limit, operator.trial_accounts_used),
   };
 }
 
@@ -762,13 +804,27 @@ export async function completeTopup(
     }
 
     if (tx.status === 'completed') {
+      const credited = roundMoney(tx.net_amount);
+      const { balanceBefore, balanceAfter } = normalizeTopupWalletBalances(
+        tx.balance_before,
+        tx.balance_after,
+        credited
+      );
+
+      if (Math.abs(roundMoney(tx.balance_before) - balanceBefore) > 0.009) {
+        await connection.execute(
+          `UPDATE wallet_transactions SET balance_before = ? WHERE id = ?`,
+          [balanceBefore, transactionId]
+        );
+      }
+
       await connection.commit();
       return {
         transactionId: tx.id,
         reference: tx.reference,
         status: 'completed',
-        balance: roundMoney(tx.balance_after),
-        credited: roundMoney(tx.net_amount),
+        balance: balanceAfter,
+        credited,
       };
     }
 
@@ -842,6 +898,275 @@ export async function completeTopup(
   }
 }
 
+export async function adminOperatorTopup(
+  adminId,
+  operatorId,
+  { amount, trialAccounts = 0, notes },
+  reqMeta = {},
+  staff = {}
+) {
+  const creditAmount = roundMoney(amount);
+  const connection = await getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const metadata = {
+      activity: 'admin_operator_activation',
+      source: 'admin_activation',
+      notes,
+      staffId: adminId,
+      staffName: staff.name || null,
+      staffEmail: staff.email || null,
+      trialAccounts: Number(trialAccounts) || 0,
+    };
+
+    const result = await creditWallet(connection, {
+      operatorId,
+      type: 'adjustment',
+      grossAmount: creditAmount,
+      netAmount: creditAmount,
+      commissionAmount: 0,
+      description: notes,
+      createdByType: 'admin',
+      createdById: adminId,
+      metadata,
+    });
+
+    let trialAccountLimit = 0;
+    let trialAccountsUsed = 0;
+    if (trialAccounts > 0) {
+      await connection.execute(
+        `UPDATE operators
+         SET trial_account_limit = trial_account_limit + ?
+         WHERE id = ?`,
+        [trialAccounts, operatorId]
+      );
+
+      const [trialRows] = await connection.execute(
+        `SELECT trial_account_limit, trial_accounts_used
+         FROM operators WHERE id = ? LIMIT 1`,
+        [operatorId]
+      );
+      trialAccountLimit = Number(trialRows[0]?.trial_account_limit) || 0;
+      trialAccountsUsed = Number(trialRows[0]?.trial_accounts_used) || 0;
+    } else {
+      const [trialRows] = await connection.execute(
+        `SELECT trial_account_limit, trial_accounts_used
+         FROM operators WHERE id = ? LIMIT 1`,
+        [operatorId]
+      );
+      trialAccountLimit = Number(trialRows[0]?.trial_account_limit) || 0;
+      trialAccountsUsed = Number(trialRows[0]?.trial_accounts_used) || 0;
+    }
+
+    await connection.commit();
+
+    await logAudit({
+      actorType: 'admin',
+      actorId: adminId,
+      action: 'ADMIN_OPERATOR_ACTIVATION',
+      resourceType: 'operator',
+      resourceId: operatorId,
+      ipAddress: reqMeta.ipAddress,
+      userAgent: reqMeta.userAgent,
+      metadata: {
+        amount: creditAmount,
+        notes,
+        trialAccounts,
+        staffName: staff.name || null,
+      },
+    });
+
+    return {
+      amount: creditAmount,
+      currencyCode: config.wallet.currencyCode,
+      balance: result.balanceAfter,
+      balanceBefore: result.balanceBefore,
+      transactionId: result.transactionId,
+      reference: result.reference,
+      notes,
+      ...formatTrialForResponse(trialAccountLimit, trialAccountsUsed),
+    };
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
+}
+
+function buildAdminOperatorActivationsFilters({ search = '', startDate, endDate } = {}) {
+  const filters = [
+    `wt.created_by_type = 'admin'`,
+    `JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.activity')) = 'admin_operator_activation'`,
+  ];
+  const params = [];
+
+  if (search) {
+    filters.push(
+      '(o.client_name LIKE ? OR o.email LIKE ? OR a.name LIKE ? OR a.email LIKE ? OR wt.description LIKE ?)'
+    );
+    const term = `%${search}%`;
+    params.push(term, term, term, term, term);
+  }
+
+  if (startDate) {
+    filters.push('wt.created_at >= ?');
+    params.push(`${startDate} 00:00:00`);
+  }
+
+  if (endDate) {
+    filters.push('wt.created_at <= ?');
+    params.push(`${endDate} 23:59:59`);
+  }
+
+  return { where: `WHERE ${filters.join(' AND ')}`, params };
+}
+
+function mapAdminOperatorActivationRow(row) {
+  const metadata = parseMetadata(row.metadata);
+  return {
+    id: row.id,
+    operatorId: row.operatorId,
+    operatorName: row.operatorName,
+    operatorEmail: row.operatorEmail,
+    amount: roundMoney(row.amount),
+    balanceAfter: roundMoney(row.balanceAfter),
+    currencyCode: row.currencyCode || config.wallet.currencyCode,
+    reference: row.reference,
+    notes: row.notes || metadata.notes || '',
+    staffName: row.staffName || metadata.staffName || 'Staff',
+    staffEmail: row.staffEmail || metadata.staffEmail || null,
+    trialAccounts: metadata.trialAccounts || metadata.trialDays || 0,
+    createdAt: row.createdAt,
+  };
+}
+
+const ADMIN_OPERATOR_ACTIVATIONS_SELECT = `
+  SELECT wt.id, wt.operator_id AS operatorId, wt.net_amount AS amount,
+         wt.balance_after AS balanceAfter, wt.currency_code AS currencyCode,
+         wt.reference, wt.description AS notes, wt.metadata, wt.created_at AS createdAt,
+         o.client_name AS operatorName, o.email AS operatorEmail,
+         a.name AS staffName, a.email AS staffEmail
+  FROM wallet_transactions wt
+  JOIN operators o ON o.id = wt.operator_id
+  LEFT JOIN admins a ON a.id = wt.created_by_id
+`;
+
+export async function listAdminOperatorActivations({
+  page = 1,
+  limit = 20,
+  search = '',
+  startDate,
+  endDate,
+} = {}) {
+  const { page: pageNum, limit: limitNum, clause } = paginationSql(page, limit);
+  const { where, params } = buildAdminOperatorActivationsFilters({ search, startDate, endDate });
+
+  const rows = await query(
+    `${ADMIN_OPERATOR_ACTIVATIONS_SELECT}
+     ${where}
+     ORDER BY wt.created_at DESC
+     ${clause}`,
+    params
+  );
+
+  const [countRow] = await query(
+    `SELECT COUNT(*) AS total
+     FROM wallet_transactions wt
+     JOIN operators o ON o.id = wt.operator_id
+     LEFT JOIN admins a ON a.id = wt.created_by_id
+     ${where}`,
+    params
+  );
+
+  return {
+    activations: rows.map(mapAdminOperatorActivationRow),
+    pagination: {
+      page: pageNum,
+      limit: limitNum,
+      total: Number(countRow.total) || 0,
+      totalPages: Math.ceil((Number(countRow.total) || 0) / limitNum) || 1,
+    },
+  };
+}
+
+export async function exportAdminOperatorActivations({ search = '', startDate, endDate } = {}) {
+  const { where, params } = buildAdminOperatorActivationsFilters({ search, startDate, endDate });
+
+  const rows = await query(
+    `${ADMIN_OPERATOR_ACTIVATIONS_SELECT}
+     ${where}
+     ORDER BY wt.created_at DESC
+     LIMIT 10000`,
+    params
+  );
+
+  return {
+    generatedAt: new Date().toISOString(),
+    search: search || '',
+    startDate: startDate || '',
+    endDate: endDate || '',
+    activations: rows.map(mapAdminOperatorActivationRow),
+  };
+}
+
+function csvEscape(value) {
+  const text = value == null ? '' : String(value);
+  if (/[",\n]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+}
+
+export function operatorActivationsToCsv(report) {
+  const lines = [
+    'Medianet Voucher — Operator Wallet Activation Report',
+    `Generated,${report.generatedAt}`,
+    report.search ? `Search filter,${report.search}` : 'Search filter,All',
+    report.startDate ? `Start date,${report.startDate}` : 'Start date,All',
+    report.endDate ? `End date,${report.endDate}` : 'End date,All',
+    `Total records,${report.activations.length}`,
+    '',
+    [
+      'Date',
+      'Operator',
+      'Operator Email',
+      'Amount',
+      'Currency',
+      'Balance After',
+      'Activated By',
+      'Staff Email',
+      'Free Accounts Granted',
+      'Notes',
+      'Reference',
+    ].join(','),
+  ];
+
+  for (const row of report.activations) {
+    lines.push(
+      [
+        row.createdAt ? new Date(row.createdAt).toISOString() : '',
+        row.operatorName,
+        row.operatorEmail,
+        row.amount,
+        row.currencyCode,
+        row.balanceAfter,
+        row.staffName,
+        row.staffEmail || '',
+        row.trialAccounts || 0,
+        row.notes,
+        row.reference,
+      ]
+        .map(csvEscape)
+        .join(',')
+    );
+  }
+
+  return `\ufeff${lines.join('\n')}`;
+}
+
 export async function adminAdjustWallet(adminId, operatorId, amount, description, reqMeta = {}) {
   const adjustment = roundMoney(amount);
   if (!adjustment) {
@@ -910,12 +1235,97 @@ function parseMetadata(raw) {
   }
 }
 
+export function normalizeTopupWalletBalances(balanceBefore, balanceAfter, creditedAmount) {
+  const credited = roundMoney(creditedAmount);
+  let before = roundMoney(balanceBefore);
+  let after = roundMoney(balanceAfter);
+
+  if (after != null && !Number.isNaN(after)) {
+    before = roundMoney(after - credited);
+  } else if (before != null && !Number.isNaN(before)) {
+    after = roundMoney(before + credited);
+  }
+
+  return { balanceBefore: before, balanceAfter: after };
+}
+
+export function buildWalletTopupBill(transaction, operator = {}) {
+  const metadata = readTransactionMetadata(transaction.metadata);
+  const amountPaid = roundMoney(metadata.amountPaid ?? transaction.amount);
+  const grossTotal = roundMoney(metadata.grossTotal ?? amountPaid);
+  const commissionAmount = roundMoney(
+    metadata.commissionAmount ?? transaction.commission_amount ?? 0
+  );
+  const gstRate = metadata.gstRate ?? config.wallet.gstRate;
+  const gstRatePercent =
+    metadata.gstRatePercent ?? roundMoney(Number(gstRate || 0) * 100);
+  const gstAmount = roundMoney(metadata.gstAmount ?? 0);
+  const creditedAmount = roundMoney(metadata.creditedAmount ?? transaction.net_amount);
+  const { balanceBefore, balanceAfter } = normalizeTopupWalletBalances(
+    transaction.balance_before,
+    transaction.balance_after,
+    creditedAmount
+  );
+
+  return {
+    billNumber: transaction.reference,
+    transactionId: transaction.id,
+    issuedAt: transaction.completed_at || transaction.created_at,
+    operatorName: operator.client_name || operator.clientName || '',
+    operatorEmail: operator.email || '',
+    paymentMethod: 'Bank of Maldives',
+    paymentRef: transaction.payment_ref || metadata.bmlTransactionId || null,
+    currencyCode: transaction.currency_code || config.wallet.currencyCode,
+    amountPaid,
+    grossTotal,
+    commissionAmount,
+    gstRatePercent,
+    gstAmount,
+    creditedAmount,
+    balanceBefore,
+    balanceAfter,
+    description: transaction.description || 'Wallet top-up',
+  };
+}
+
+export async function getWalletTopupBill(operatorId, reference) {
+  const rows = await query(
+    `SELECT wt.*, o.client_name, o.email
+     FROM wallet_transactions wt
+     JOIN operators o ON o.id = wt.operator_id
+     WHERE wt.operator_id = ? AND wt.reference = ? AND wt.type = 'topup'
+     LIMIT 1`,
+    [operatorId, reference]
+  );
+
+  const tx = rows[0];
+  if (!tx) {
+    throw new AppError('Top-up not found', 404, 'NOT_FOUND');
+  }
+
+  if (tx.status !== 'completed') {
+    throw new AppError('Bill is available only for completed payments', 400, 'BILL_NOT_READY');
+  }
+
+  const bill = buildWalletTopupBill(tx, { client_name: tx.client_name, email: tx.email });
+
+  if (Math.abs(roundMoney(tx.balance_before) - bill.balanceBefore) > 0.009) {
+    await query(`UPDATE wallet_transactions SET balance_before = ? WHERE id = ?`, [
+      bill.balanceBefore,
+      tx.id,
+    ]);
+  }
+
+  return bill;
+}
+
 function formatActivityLabel(metadata = {}) {
   if (metadata.activity === 'create_account') return 'Create Account';
   if (metadata.activity === 'customer_crm_topup') return 'Customer Top-up';
   if (metadata.activity === 'customer_subscribe') return 'Customer Subscribe';
   if (metadata.activity === 'customer_topup') return 'Customer Top-up';
   if (metadata.activity === 'bulk_create') return 'Bulk Create';
+  if (metadata.activity === 'admin_operator_activation') return 'Operator Activation';
   return null;
 }
 
@@ -993,13 +1403,33 @@ export async function listWalletTransactions(
   };
 }
 
+export function resolveWalletTransactionBalances(row) {
+  const type = row.type;
+  const status = row.status;
+  const netAmount = roundMoney(row.netAmount ?? row.net_amount);
+  let balanceBefore = roundMoney(row.balanceBefore ?? row.balance_before);
+  let balanceAfter = roundMoney(row.balanceAfter ?? row.balance_after);
+
+  if (type === 'topup' && status === 'completed') {
+    ({ balanceBefore, balanceAfter } = normalizeTopupWalletBalances(
+      balanceBefore,
+      balanceAfter,
+      netAmount
+    ));
+  }
+
+  return { balanceBefore, balanceAfter, netAmount };
+}
+
 export function mapTransactionRow(row) {
+  const { balanceBefore, balanceAfter, netAmount } = resolveWalletTransactionBalances(row);
+
   return {
     ...row,
     amount: roundMoney(row.amount),
-    commissionAmount: roundMoney(row.commissionAmount),
-    netAmount: roundMoney(row.netAmount),
-    balanceBefore: roundMoney(row.balanceBefore),
-    balanceAfter: roundMoney(row.balanceAfter),
+    commissionAmount: roundMoney(row.commissionAmount ?? row.commission_amount),
+    netAmount,
+    balanceBefore,
+    balanceAfter,
   };
 }

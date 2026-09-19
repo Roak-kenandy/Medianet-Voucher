@@ -28,20 +28,6 @@ export default function WalletTopupBreakdown({
           <span className="wallet-topup-line-value">{formatMoney(preview.amountPaid ?? preview.amount, currencyCode)}</span>
         </div>
 
-        <div className="wallet-topup-line wallet-topup-line-deduct">
-          <span className="wallet-topup-line-label">
-            GST ({formatPercent(preview.gstRatePercent ?? preview.gstRate * 100)})
-          </span>
-          <span className="wallet-topup-line-value">
-            − {formatMoney(preview.gstAmount, currencyCode)}
-          </span>
-        </div>
-
-        <div className="wallet-topup-line wallet-topup-line-subtotal">
-          <span className="wallet-topup-line-label">Wallet credit (after GST)</span>
-          <span className="wallet-topup-line-value">{formatMoney(preview.afterGst, currencyCode)}</span>
-        </div>
-
         {preview.commission > 0 && (
           <div className="wallet-topup-line wallet-topup-line-bonus">
             <span className="wallet-topup-line-label">Operator bonus</span>
@@ -50,6 +36,24 @@ export default function WalletTopupBreakdown({
             </span>
           </div>
         )}
+
+        {(preview.grossTotal ?? preview.amountPaid) > (preview.amountPaid ?? preview.amount) && (
+          <div className="wallet-topup-line wallet-topup-line-subtotal">
+            <span className="wallet-topup-line-label">Total before GST</span>
+            <span className="wallet-topup-line-value">
+              {formatMoney(preview.grossTotal ?? preview.amountPaid, currencyCode)}
+            </span>
+          </div>
+        )}
+
+        <div className="wallet-topup-line wallet-topup-line-deduct">
+          <span className="wallet-topup-line-label">
+            GST ({formatPercent(preview.gstRatePercent ?? preview.gstRate * 100)})
+          </span>
+          <span className="wallet-topup-line-value">
+            − {formatMoney(preview.gstAmount, currencyCode)}
+          </span>
+        </div>
 
         <div className="wallet-topup-total">
           <span className="wallet-topup-total-label">Added to wallet balance</span>

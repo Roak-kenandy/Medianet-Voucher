@@ -100,6 +100,7 @@ export default function WalletPaymentStatusCard({
   reference,
   amount,
   credited,
+  balanceBefore,
   balance,
   currencyCode = 'MVR',
   onCheckStatus,
@@ -130,7 +131,13 @@ export default function WalletPaymentStatusCard({
               {formatMoney(credited, currencyCode)} credited to your wallet.
             </p>
           )}
-          {balance != null && (
+          {balanceBefore != null && balance != null && (
+            <p>
+              Wallet balance: {formatMoney(balanceBefore, currencyCode)} →{' '}
+              {formatMoney(balance, currencyCode)}
+            </p>
+          )}
+          {balanceBefore == null && balance != null && (
             <p>New balance: {formatMoney(balance, currencyCode)}</p>
           )}
         </div>

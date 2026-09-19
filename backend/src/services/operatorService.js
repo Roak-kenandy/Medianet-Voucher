@@ -8,6 +8,11 @@ import { paginationSql } from '../utils/pagination.js';
 import { getOperatorPackageIds, getOperatorPackages, sumPackagePrices, assertPackagesAssignable } from './packageService.js';
 import { debitWallet } from './walletService.js';
 import { assertServiceTag, getAllowedServiceTags } from '../constants/serviceTags.js';
+import {
+  formatTrialForResponse,
+  getTrialQuotaInfo,
+  countPaidAccountCreations,
+} from '../utils/trial.js';
 
 async function getOperatorServiceScope(operatorId, connection = null) {
   const runner = connection
@@ -59,7 +64,8 @@ async function resolveAccountPackageIds(operatorId, packageIds, connection) {
 export async function getOperatorStats(operatorId) {
   const [operator] = await query(
     `SELECT o.id, o.client_name, o.package_id, o.package_type, o.service_scope, o.wallet_balance, o.accounts_created, o.is_active,
-            o.wallet_commission_type, o.wallet_commission_value
+            o.wallet_commission_type, o.wallet_commission_value,
+            o.trial_account_limit, o.trial_accounts_used
      FROM operators o
      WHERE o.id = ? LIMIT 1`,
     [operatorId]
@@ -203,7 +209,11 @@ export async function getOperatorStats(operatorId) {
 
   const packagePrices = packages.map((pkg) => Number(pkg.price_amount) || 0).filter((price) => price > 0);
   const minPackagePrice = packagePrices.length ? Math.min(...packagePrices) : 0;
-  const lowBalance = minPackagePrice > 0 && walletBalance < minPackagePrice;
+  const trialQuota = getTrialQuotaInfo(operator.trial_account_limit, operator.trial_accounts_used);
+  const lowBalance =
+    minPackagePrice > 0 &&
+    walletBalance < minPackagePrice &&
+    trialQuota.trialAccountsRemaining <= 0;
 
   function mapRecentTransaction(row) {
     let metadata = {};
@@ -256,6 +266,7 @@ export async function getOperatorStats(operatorId) {
     currencyCode: config.wallet.currencyCode,
     walletCommissionType: operator.wallet_commission_type || 'none',
     walletCommissionValue: Number(operator.wallet_commission_value) || 0,
+    ...formatTrialForResponse(operator.trial_account_limit, operator.trial_accounts_used),
     accountsCreated,
     minPackagePrice,
     lowBalance,
@@ -292,8 +303,7 @@ export async function getOperatorStats(operatorId) {
   };
 }
 
-export async function listAccounts(operatorId, { page = 1, limit = 20, search = '' } = {}) {
-  const { page: pageNum, limit: limitNum, clause } = paginationSql(page, limit);
+function buildAccountListFilters(operatorId, { search = '', startDate, endDate } = {}) {
   const filters = ['va.operator_id = ?'];
   const params = [operatorId];
 
@@ -303,17 +313,39 @@ export async function listAccounts(operatorId, { page = 1, limit = 20, search = 
     params.push(term, term, term);
   }
 
-  const where = `WHERE ${filters.join(' AND ')}`;
+  if (startDate) {
+    filters.push('va.created_at >= ?');
+    params.push(`${startDate} 00:00:00`);
+  }
+
+  if (endDate) {
+    filters.push('va.created_at <= ?');
+    params.push(`${endDate} 23:59:59`);
+  }
+
+  return { where: `WHERE ${filters.join(' AND ')}`, params };
+}
+
+const ACCOUNTS_SELECT = `
+  SELECT va.id, va.full_name, va.phone_number, va.service_tag, va.status, va.external_ref, va.error_message,
+         va.created_at, va.package_id, va.amount_charged,
+         GROUP_CONCAT(DISTINCT p.name ORDER BY p.name SEPARATOR ', ') AS package_names
+  FROM voucher_accounts va
+  LEFT JOIN voucher_account_packages vap ON vap.voucher_account_id = va.id
+  LEFT JOIN packages p ON p.id = COALESCE(vap.package_id, va.package_id)
+`;
+
+export async function listAccounts(
+  operatorId,
+  { page = 1, limit = 20, search = '', startDate, endDate } = {}
+) {
+  const { page: pageNum, limit: limitNum, clause } = paginationSql(page, limit);
+  const { where, params } = buildAccountListFilters(operatorId, { search, startDate, endDate });
 
   const accounts = await query(
-    `SELECT va.id, va.full_name, va.phone_number, va.service_tag, va.status, va.external_ref, va.error_message,
-            va.created_at, va.package_id, va.amount_charged,
-            GROUP_CONCAT(DISTINCT p.name ORDER BY p.name SEPARATOR ', ') AS package_names
-     FROM voucher_accounts va
-     LEFT JOIN voucher_account_packages vap ON vap.voucher_account_id = va.id
-     LEFT JOIN packages p ON p.id = COALESCE(vap.package_id, va.package_id)
+    `${ACCOUNTS_SELECT}
      ${where}
-     GROUP BY va.id, va.full_name, va.phone_number, va.status, va.external_ref, va.error_message,
+     GROUP BY va.id, va.full_name, va.phone_number, va.service_tag, va.status, va.external_ref, va.error_message,
               va.created_at, va.package_id, va.amount_charged
      ORDER BY va.created_at DESC
      ${clause}`,
@@ -336,6 +368,79 @@ export async function listAccounts(operatorId, { page = 1, limit = 20, search = 
       totalPages: Math.ceil(total / limitNum) || 1,
     },
   };
+}
+
+function csvEscape(value) {
+  const text = value == null ? '' : String(value);
+  if (/[",\n]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+}
+
+export async function exportAccountsCsv(
+  operatorId,
+  { search = '', startDate, endDate } = {}
+) {
+  const { where, params } = buildAccountListFilters(operatorId, { search, startDate, endDate });
+
+  const [operator] = await query(
+    `SELECT client_name, email FROM operators WHERE id = ? LIMIT 1`,
+    [operatorId]
+  );
+
+  const accounts = await query(
+    `${ACCOUNTS_SELECT}
+     ${where}
+     GROUP BY va.id, va.full_name, va.phone_number, va.service_tag, va.status, va.external_ref, va.error_message,
+              va.created_at, va.package_id, va.amount_charged
+     ORDER BY va.created_at DESC
+     LIMIT 10000`,
+    params
+  );
+
+  const lines = [
+    'Medianet Voucher — Accounts Report',
+    `Generated,${new Date().toISOString()}`,
+    `Operator,${operator?.client_name || ''}`,
+    `Email,${operator?.email || ''}`,
+    startDate ? `Start date,${startDate}` : 'Start date,All',
+    endDate ? `End date,${endDate}` : 'End date,All',
+    search ? `Search filter,${search}` : 'Search filter,All',
+    `Total records,${accounts.length}`,
+    '',
+    [
+      'Created At',
+      'Full Name',
+      'Phone Number',
+      'Service Tag',
+      'Package(s)',
+      'Status',
+      'Amount Charged',
+      'External Reference',
+      'Error Message',
+    ].join(','),
+  ];
+
+  for (const row of accounts) {
+    lines.push(
+      [
+        row.created_at ? new Date(row.created_at).toISOString() : '',
+        row.full_name,
+        row.phone_number,
+        row.service_tag,
+        row.package_names || '',
+        row.status,
+        row.amount_charged ?? 0,
+        row.external_ref || '',
+        row.error_message || '',
+      ]
+        .map(csvEscape)
+        .join(',')
+    );
+  }
+
+  return `\ufeff${lines.join('\n')}`;
 }
 
 async function provisionExistingContactInCrm(
@@ -556,7 +661,8 @@ export async function subscribeCustomer(operatorId, data, reqMeta = {}) {
     await connection.beginTransaction();
 
     const [operatorRows] = await connection.execute(
-      `SELECT id, wallet_balance, accounts_created, is_active, client_name, service_scope
+      `SELECT id, wallet_balance, accounts_created, is_active, client_name, service_scope,
+              trial_account_limit, trial_accounts_used
        FROM operators WHERE id = ? FOR UPDATE`,
       [operatorId]
     );
@@ -581,6 +687,8 @@ export async function subscribeCustomer(operatorId, data, reqMeta = {}) {
     const pricing = await sumPackagePrices(resolvedPackageIds, { connection });
     const unitCost = pricing.total;
     const walletBalance = Math.round(Number(operator.wallet_balance) * 100) / 100;
+    const trialQuota = getTrialQuotaInfo(operator.trial_account_limit, operator.trial_accounts_used);
+    const usesTrialSlot = trialQuota.trialAccountsRemaining > 0;
 
     if (!amountsMatch(unitCost, data.amount)) {
       throw new AppError(
@@ -590,7 +698,7 @@ export async function subscribeCustomer(operatorId, data, reqMeta = {}) {
       );
     }
 
-    if (walletBalance < unitCost) {
+    if (!usesTrialSlot && walletBalance < unitCost) {
       throw new AppError(
         `Insufficient wallet balance. Required ${unitCost} ${pricing.currencyCode}, available ${walletBalance} ${pricing.currencyCode}.`,
         403,
@@ -626,9 +734,9 @@ export async function subscribeCustomer(operatorId, data, reqMeta = {}) {
     let amountCharged = 0;
     if (provision.success) {
       const packageNames = pricing.packages.map((pkg) => pkg.name);
-      await debitWallet(connection, {
+      const charge = await applyAccountCreationCharge(connection, {
         operatorId,
-        amount: unitCost,
+        unitCost,
         voucherAccountId,
         description: buildChargeDescription(
           'customer_subscribe',
@@ -647,18 +755,12 @@ export async function subscribeCustomer(operatorId, data, reqMeta = {}) {
           serviceTag: data.serviceTag,
           crmContactId: data.crmContactId,
         },
+        trialState: {
+          limit: Number(operator.trial_account_limit) || 0,
+          used: Number(operator.trial_accounts_used) || 0,
+        },
       });
-
-      amountCharged = unitCost;
-      await connection.execute(
-        `UPDATE voucher_accounts SET amount_charged = ? WHERE id = ?`,
-        [unitCost, voucherAccountId]
-      );
-
-      await connection.execute(
-        `UPDATE operators SET accounts_created = accounts_created + 1 WHERE id = ?`,
-        [operatorId]
-      );
+      amountCharged = charge.amountCharged;
     }
 
     await connection.commit();
@@ -756,6 +858,59 @@ function buildChargeDescription(activity, customerName, phoneNumber, packageName
   return `Create account — ${packagesLabel} for ${customerLabel}`;
 }
 
+async function applyAccountCreationCharge(
+  connection,
+  {
+    operatorId,
+    unitCost,
+    voucherAccountId,
+    description,
+    metadata,
+    createdByType,
+    createdById,
+    trialState,
+  }
+) {
+  const hasTrialSlot = trialState.limit > 0 && trialState.used < trialState.limit;
+
+  if (hasTrialSlot) {
+    trialState.used += 1;
+    await connection.execute(
+      `UPDATE operators
+       SET trial_accounts_used = trial_accounts_used + 1,
+           accounts_created = accounts_created + 1
+       WHERE id = ?`,
+      [operatorId]
+    );
+    await connection.execute(
+      `UPDATE voucher_accounts SET amount_charged = 0 WHERE id = ?`,
+      [voucherAccountId]
+    );
+    return { amountCharged: 0, trialFree: true };
+  }
+
+  await debitWallet(connection, {
+    operatorId,
+    amount: unitCost,
+    voucherAccountId,
+    description,
+    createdByType,
+    createdById,
+    metadata,
+  });
+
+  await connection.execute(
+    `UPDATE voucher_accounts SET amount_charged = ? WHERE id = ?`,
+    [unitCost, voucherAccountId]
+  );
+  await connection.execute(
+    `UPDATE operators SET accounts_created = accounts_created + 1 WHERE id = ?`,
+    [operatorId]
+  );
+
+  return { amountCharged: unitCost, trialFree: false };
+}
+
 async function createAndProvisionAccounts(
   connection,
   operatorId,
@@ -763,7 +918,7 @@ async function createAndProvisionAccounts(
   packageIds,
   unitCost,
   serviceTag,
-  { activity = 'create_account', packageNames = [] } = {}
+  { activity = 'create_account', packageNames = [], trialState = { limit: 0, used: 0 } } = {}
 ) {
   const results = [];
 
@@ -793,10 +948,11 @@ async function createAndProvisionAccounts(
     );
 
     let amountCharged = 0;
+    let trialFree = false;
     if (provision.success) {
-      await debitWallet(connection, {
+      const charge = await applyAccountCreationCharge(connection, {
         operatorId,
-        amount: unitCost,
+        unitCost,
         voucherAccountId,
         description: buildChargeDescription(
           activity,
@@ -814,18 +970,10 @@ async function createAndProvisionAccounts(
           customerName: account.fullName.trim(),
           serviceTag,
         },
+        trialState,
       });
-
-      amountCharged = unitCost;
-      await connection.execute(
-        `UPDATE voucher_accounts SET amount_charged = ? WHERE id = ?`,
-        [unitCost, voucherAccountId]
-      );
-
-      await connection.execute(
-        `UPDATE operators SET accounts_created = accounts_created + 1 WHERE id = ?`,
-        [operatorId]
-      );
+      amountCharged = charge.amountCharged;
+      trialFree = charge.trialFree;
     }
 
     results.push({
@@ -834,6 +982,7 @@ async function createAndProvisionAccounts(
       phoneNumber: account.phoneNumber.trim(),
       packageIds,
       amountCharged,
+      trialFree,
       status: provision.success ? 'created' : 'failed',
       externalRef: provision.externalRef || null,
       errorMessage: provision.error || null,
@@ -861,7 +1010,8 @@ export async function createSingleAccount(operatorId, account, reqMeta = {}) {
     await connection.beginTransaction();
 
     const [operatorRows] = await connection.execute(
-      `SELECT id, wallet_balance, accounts_created, is_active, service_scope
+      `SELECT id, wallet_balance, accounts_created, is_active, service_scope,
+              trial_account_limit, trial_accounts_used
        FROM operators WHERE id = ? FOR UPDATE`,
       [operatorId]
     );
@@ -885,14 +1035,22 @@ export async function createSingleAccount(operatorId, account, reqMeta = {}) {
     const packageNames = pricing.packages.map((pkg) => pkg.name);
     const unitCost = pricing.total;
     const walletBalance = Math.round(Number(operator.wallet_balance) * 100) / 100;
+    const trialQuota = getTrialQuotaInfo(operator.trial_account_limit, operator.trial_accounts_used);
+    const paidCount = countPaidAccountCreations(1, trialQuota.trialAccountsRemaining);
+    const requiredBalance = Math.round(unitCost * paidCount * 100) / 100;
 
-    if (walletBalance < unitCost) {
+    if (walletBalance < requiredBalance) {
       throw new AppError(
-        `Insufficient wallet balance. Required ${unitCost} ${pricing.currencyCode}, available ${walletBalance} ${pricing.currencyCode}.`,
+        `Insufficient wallet balance. Required ${requiredBalance} ${pricing.currencyCode}, available ${walletBalance} ${pricing.currencyCode}.`,
         403,
         'INSUFFICIENT_WALLET_BALANCE'
       );
     }
+
+    const trialState = {
+      limit: trialQuota.trialAccountLimit,
+      used: trialQuota.trialAccountsUsed,
+    };
 
     const created = await createAndProvisionAccounts(
       connection,
@@ -901,7 +1059,7 @@ export async function createSingleAccount(operatorId, account, reqMeta = {}) {
       resolvedPackageIds,
       unitCost,
       serviceTag,
-      { activity: 'create_account', packageNames }
+      { activity: 'create_account', packageNames, trialState }
     );
 
     await connection.commit();
@@ -977,7 +1135,8 @@ export async function createBulkAccounts(operatorId, accounts, reqMeta = {}, pac
     await connection.beginTransaction();
 
     const [operatorRows] = await connection.execute(
-      `SELECT id, wallet_balance, accounts_created, is_active, client_name, package_id, package_type
+      `SELECT id, wallet_balance, accounts_created, is_active, client_name, package_id, package_type,
+              trial_account_limit, trial_accounts_used
        FROM operators WHERE id = ? FOR UPDATE`,
       [operatorId]
     );
@@ -1002,8 +1161,10 @@ export async function createBulkAccounts(operatorId, accounts, reqMeta = {}, pac
     const pricing = await assertPackagesMatchServiceTag(resolvedPackageIds, serviceTag, connection);
     const packageNames = pricing.packages.map((pkg) => pkg.name);
     const unitCost = pricing.total;
-    const totalCost = Math.round(unitCost * accounts.length * 100) / 100;
     const walletBalance = Math.round(Number(operator.wallet_balance) * 100) / 100;
+    const trialQuota = getTrialQuotaInfo(operator.trial_account_limit, operator.trial_accounts_used);
+    const paidCount = countPaidAccountCreations(accounts.length, trialQuota.trialAccountsRemaining);
+    const totalCost = Math.round(unitCost * paidCount * 100) / 100;
 
     if (walletBalance < totalCost) {
       throw new AppError(
@@ -1013,6 +1174,11 @@ export async function createBulkAccounts(operatorId, accounts, reqMeta = {}, pac
       );
     }
 
+    const trialState = {
+      limit: trialQuota.trialAccountLimit,
+      used: trialQuota.trialAccountsUsed,
+    };
+
     const created = await createAndProvisionAccounts(
       connection,
       operatorId,
@@ -1020,7 +1186,7 @@ export async function createBulkAccounts(operatorId, accounts, reqMeta = {}, pac
       resolvedPackageIds,
       unitCost,
       serviceTag,
-      { activity: 'bulk_create', packageNames }
+      { activity: 'bulk_create', packageNames, trialState }
     );
     const successCount = created.filter((item) => item.status === 'created').length;
     const totalCharged = created.reduce((sum, item) => sum + (item.amountCharged || 0), 0);

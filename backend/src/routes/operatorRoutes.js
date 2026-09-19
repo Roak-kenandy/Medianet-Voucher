@@ -6,6 +6,7 @@ import { getClientMeta } from '../services/auditService.js';
 import {
   getOperatorStats,
   listAccounts,
+  exportAccountsCsv,
   createSingleAccount,
   createBulkAccounts,
   searchCustomers,
@@ -20,6 +21,7 @@ import {
   getOperatorWallet,
   getPendingWalletTopup,
   initiateTopup,
+  getWalletTopupBill,
   listWalletTransactions,
   calculateTopupCredit,
 } from '../services/walletService.js';
@@ -27,10 +29,12 @@ import { reconcileTopupPayment } from '../services/bmlWebhookService.js';
 import {
   createAccountSchema,
   bulkAccountsSchema,
-  listQuerySchema,
+  operatorAccountsQuerySchema,
+  operatorAccountsExportSchema,
   operatorReportQuerySchema,
   walletTopupSchema,
   walletTopupStatusQuerySchema,
+  walletTopupBillQuerySchema,
   customerSearchQuerySchema,
   customerCrmTopupSchema,
   subscribeCustomerSchema,
@@ -141,6 +145,16 @@ router.get(
 );
 
 router.get(
+  '/wallet/topup/bill',
+  walletStatusLimiter,
+  asyncHandler(async (req, res) => {
+    const { reference } = walletTopupBillQuerySchema.parse(req.query);
+    const bill = await getWalletTopupBill(req.user.id, reference);
+    success(res, bill);
+  })
+);
+
+router.get(
   '/customers/search',
   asyncHandler(async (req, res) => {
     const { phone, serviceTag } = customerSearchQuerySchema.parse(req.query);
@@ -180,9 +194,20 @@ router.get(
 router.get(
   '/accounts',
   asyncHandler(async (req, res) => {
-    const queryParams = listQuerySchema.parse(req.query);
+    const queryParams = operatorAccountsQuerySchema.parse(req.query);
     const result = await listAccounts(req.user.id, queryParams);
     success(res, result);
+  })
+);
+
+router.get(
+  '/accounts/export',
+  asyncHandler(async (req, res) => {
+    const filters = operatorAccountsExportSchema.parse(req.query);
+    const csv = await exportAccountsCsv(req.user.id, filters);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="accounts-report.csv"');
+    res.send(csv);
   })
 );
 

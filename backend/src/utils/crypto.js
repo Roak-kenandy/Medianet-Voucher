@@ -9,6 +9,7 @@ export function generateRefreshToken() {
 }
 
 import { isStaffRole } from '../constants/permissions.js';
+import { formatTrialForResponse } from './trial.js';
 
 export function sanitizeUser(user, role) {
   const base = {
@@ -39,6 +40,7 @@ export function sanitizeUser(user, role) {
       walletBalance: Math.round(Number(user.wallet_balance) * 100) / 100,
       currencyCode: user.currency_code || undefined,
       accountsCreated: user.accounts_created,
+      ...formatTrialForResponse(user.trial_account_limit, user.trial_accounts_used),
     };
   }
 

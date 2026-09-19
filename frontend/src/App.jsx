@@ -21,6 +21,7 @@ import WalletPaymentReturnPage from './pages/operator/WalletPaymentReturnPage';
 import CustomerActionsPage from './pages/operator/CustomerActionsPage';
 import TransactionReportsPage from './pages/operator/TransactionReportsPage';
 import PackagesPage from './pages/admin/PackagesPage';
+import OperatorTopupPage from './pages/admin/OperatorTopupPage';
 import { STAFF_ROLES } from './constants/permissions';
 
 const staffRoute = (element) => (
@@ -42,6 +43,7 @@ export default function App() {
           <Route path="/admin/packages" element={staffRoute(<PackagesPage />)} />
           <Route path="/admin/admins" element={staffRoute(<AdminsPage />)} />
           <Route path="/admin/reports" element={staffRoute(<ReportsPage />)} />
+          <Route path="/admin/operator-topup" element={staffRoute(<OperatorTopupPage />)} />
           <Route path="/admin/help" element={staffRoute(<HelpCenterPage />)} />
           <Route path="/admin/settings" element={staffRoute(<SettingsPage />)} />
           <Route path="/admin/users" element={<Navigate to="/admin/operators" replace />} />

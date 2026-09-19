@@ -13,18 +13,24 @@ export const ROLE_PERMISSIONS = {
     manageAdminStatus: true,
     createPackage: true,
     managePackageStatus: true,
+    manageOperators: true,
+    adjustWallet: true,
   },
   sales: {
     createAdmin: false,
     manageAdminStatus: true,
     createPackage: true,
     managePackageStatus: true,
+    manageOperators: true,
+    adjustWallet: false,
   },
   finance: {
     createAdmin: true,
     manageAdminStatus: true,
     createPackage: false,
     managePackageStatus: false,
+    manageOperators: false,
+    adjustWallet: true,
   },
 };
 

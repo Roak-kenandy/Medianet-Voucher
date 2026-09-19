@@ -17,9 +17,14 @@ import {
 import {
   getOperatorWallet,
   adminAdjustWallet,
+  adminOperatorTopup,
   completeTopup,
+  listAdminOperatorActivations,
+  exportAdminOperatorActivations,
+  operatorActivationsToCsv,
   listWalletTransactions,
 } from '../services/walletService.js';
+import { findUserById } from '../services/authService.js';
 import {
   listPackages,
   createPackage,
@@ -32,8 +37,11 @@ import {
   createPackageSchema,
   updateOperatorSchema,
   walletAdjustSchema,
+  adminOperatorTopupSchema,
   reportQuerySchema,
   listQuerySchema,
+  operatorActivationsQuerySchema,
+  operatorActivationsExportSchema,
 } from '../validators/schemas.js';
 
 const router = Router();
@@ -193,6 +201,50 @@ router.post(
     const { amount, description } = walletAdjustSchema.parse(req.body);
     const result = await adminAdjustWallet(req.user.id, operatorId, amount, description, getClientMeta(req));
     success(res, result);
+  })
+);
+
+router.get(
+  '/operator-activations',
+  requirePermission('adjustWallet'),
+  asyncHandler(async (req, res) => {
+    const queryParams = operatorActivationsQuerySchema.parse(req.query);
+    const result = await listAdminOperatorActivations(queryParams);
+    success(res, result);
+  })
+);
+
+router.get(
+  '/operator-activations/export',
+  requirePermission('adjustWallet'),
+  asyncHandler(async (req, res) => {
+    const filters = operatorActivationsExportSchema.parse(req.query);
+    const report = await exportAdminOperatorActivations(filters);
+    const csv = operatorActivationsToCsv(report);
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="operator-wallet-activations.csv"'
+    );
+    res.send(csv);
+  })
+);
+
+router.post(
+  '/operators/:id/wallet/topup',
+  requirePermission('adjustWallet'),
+  asyncHandler(async (req, res) => {
+    const operatorId = parseInt(req.params.id, 10);
+    const payload = adminOperatorTopupSchema.parse(req.body);
+    const staff = await findUserById('admin', req.user.id);
+    const result = await adminOperatorTopup(
+      req.user.id,
+      operatorId,
+      payload,
+      getClientMeta(req),
+      { name: staff?.name, email: staff?.email }
+    );
+    success(res, result, 201);
   })
 );
 

@@ -17,7 +17,7 @@ const ADMIN_FAQ = [
   },
   {
     q: 'How do I create an operator?',
-    a: 'Go to Operators, click Create Operator, select one or more packages, fill in client details, set an optional top-up commission bonus (fixed MVR or percent), and save. Partners top up their own wallet — you do not assign a starting balance.',
+    a: 'Go to Operators, click Create Operator, select one or more packages, fill in client details, set an optional top-up multiplier (e.g. 1.15 credits 15% bonus on the post-GST amount), and save. Partners top up their own wallet — you do not assign a starting balance.',
   },
   {
     q: 'How do I add another staff account?',

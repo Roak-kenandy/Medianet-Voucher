@@ -213,7 +213,8 @@ export async function listOperators({ page = 1, limit = 20, search = '' } = {}) 
   const operators = await query(
     `SELECT DISTINCT
        o.id, o.client_name, o.package_id, o.package_type, o.service_scope, o.notes, o.email, o.wallet_balance,
-       o.wallet_commission_type, o.wallet_commission_value, o.accounts_created,
+       o.wallet_commission_type, o.wallet_commission_value,
+       o.trial_account_limit, o.trial_accounts_used, o.accounts_created,
        o.is_active, o.created_at, o.updated_at,
        a.name AS created_by_name
      FROM operators o

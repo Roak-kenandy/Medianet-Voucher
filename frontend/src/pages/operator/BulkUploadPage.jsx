@@ -8,6 +8,7 @@ import { operatorApi } from '../../api/client';
 import { useToast } from '../../context/ToastContext';
 import { sanitizePhoneInput, getPhoneValidationMessage, PHONE_HINT, PHONE_TEMPLATE_EXAMPLES } from '../../utils/phone';
 import { formatMoney, sumPackagePrices } from '../../utils/money';
+import { computeAccountCreationCharge } from '../../utils/trial';
 import PackageSelector from '../../components/admin/PackageSelector';
 
 const MAX_BULK = 10;
@@ -34,6 +35,7 @@ export default function BulkUploadPage() {
   const [packages, setPackages] = useState([]);
   const [packageIds, setPackageIds] = useState([]);
   const [walletBalance, setWalletBalance] = useState(null);
+  const [trialAccountsRemaining, setTrialAccountsRemaining] = useState(0);
   const [currencyCode, setCurrencyCode] = useState('MVR');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -42,6 +44,7 @@ export default function BulkUploadPage() {
   useEffect(() => {
     operatorApi.getStats().then((s) => {
       setWalletBalance(s.walletBalance);
+      setTrialAccountsRemaining(s.trialAccountsRemaining || 0);
       setCurrencyCode(s.currencyCode || 'MVR');
       setPackages(s.packages || []);
       if (s.packages?.length === 1) {
@@ -60,8 +63,14 @@ export default function BulkUploadPage() {
       : [];
 
   const unitCost = sumPackagePrices(packages, activePackageIds);
-  const totalCost = unitCost * filledRows.length;
-  const canAfford = walletBalance == null || totalCost === 0 || walletBalance >= totalCost;
+  const chargePreview = computeAccountCreationCharge(
+    unitCost,
+    filledRows.length,
+    trialAccountsRemaining
+  );
+  const totalCost = chargePreview.effectiveCharge;
+  const canAfford =
+    walletBalance == null || totalCost === 0 || chargePreview.usesTrial || walletBalance >= totalCost;
 
   const addRow = () => {
     if (rows.length >= MAX_BULK) return;
@@ -119,6 +128,10 @@ export default function BulkUploadPage() {
       );
       setWalletBalance(result.walletBalance);
       setResults(result.created);
+      const freeCount = result.created.filter((r) => r.status === 'created' && !r.amountCharged).length;
+      if (freeCount > 0) {
+        setTrialAccountsRemaining((prev) => Math.max(0, prev - freeCount));
+      }
 
       const successCount = result.created.filter((r) => r.status === 'created').length;
       const failedCount = result.created.length - successCount;
@@ -223,7 +236,21 @@ export default function BulkUploadPage() {
 
           {unitCost > 0 && filledRows.length > 0 && (
             <div className="alert alert-info" style={{ background: 'var(--color-bg)' }}>
-              Estimated cost: {formatMoney(totalCost, currencyCode)} ({formatMoney(unitCost, currencyCode)} × {filledRows.length} account(s))
+              {chargePreview.usesTrial ? (
+                <>
+                  Estimated charge: {totalCost > 0 ? formatMoney(totalCost, currencyCode) : 'Free'}
+                  {' · '}
+                  {chargePreview.freeCount} free trial account{chargePreview.freeCount === 1 ? '' : 's'}
+                  {chargePreview.paidCount > 0
+                    ? ` · ${chargePreview.paidCount} paid at ${formatMoney(unitCost, currencyCode)} each`
+                    : ''}
+                </>
+              ) : (
+                <>
+                  Estimated cost: {formatMoney(totalCost, currencyCode)} ({formatMoney(unitCost, currencyCode)} ×{' '}
+                  {filledRows.length} account(s))
+                </>
+              )}
             </div>
           )}
 

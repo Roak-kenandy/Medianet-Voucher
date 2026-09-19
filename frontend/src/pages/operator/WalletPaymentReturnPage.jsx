@@ -4,6 +4,7 @@ import Layout from '../../components/Layout';
 import Sidebar from '../../components/Sidebar';
 import Header from '../../components/Header';
 import WalletPaymentStatusCard from '../../components/operator/WalletPaymentStatusCard';
+import WalletTopupBill from '../../components/operator/WalletTopupBill';
 import { operatorApi } from '../../api/client';
 import { useToast } from '../../context/ToastContext';
 import '../admin/admin-shared.css';
@@ -37,6 +38,7 @@ export default function WalletPaymentReturnPage() {
   const [searchParams] = useSearchParams();
   const [phase, setPhase] = useState('confirming');
   const [details, setDetails] = useState(null);
+  const [bill, setBill] = useState(null);
 
   const reference =
     searchParams.get('reference') || sessionStorage.getItem('pendingTopupReference') || '';
@@ -65,8 +67,15 @@ export default function WalletPaymentReturnPage() {
 
         if (nextPhase === 'completed') {
           setPhase('completed');
+          setBill(result.bill || null);
           sessionStorage.removeItem('pendingTopupReference');
           toastRef.current.success('Wallet topped up successfully');
+          if (!result.bill && reference) {
+            operatorApi
+              .getWalletTopupBill(reference)
+              .then(setBill)
+              .catch(() => {});
+          }
           return;
         }
 
@@ -114,10 +123,19 @@ export default function WalletPaymentReturnPage() {
         <WalletPaymentStatusCard
           phase={phase}
           reference={reference || details?.reference}
-          amount={details?.amountPaid ?? details?.amount}
-          credited={details?.credited ?? details?.netAmount}
-          balance={details?.balance}
+          amount={bill?.amountPaid ?? details?.amountPaid ?? details?.amount}
+          credited={bill?.creditedAmount ?? details?.credited ?? details?.netAmount}
+          balanceBefore={
+            bill?.balanceBefore ??
+            (details?.balance != null && (details?.credited ?? details?.netAmount) != null
+              ? Math.round((Number(details.balance) - Number(details.credited ?? details.netAmount)) * 100) /
+                100
+              : undefined)
+          }
+          balance={bill?.balanceAfter ?? details?.balance}
         />
+
+        {phase === 'completed' && bill && <WalletTopupBill bill={bill} />}
 
         {(phase === 'confirming' || phase === 'pending') && (
           <div className="workflow-footer-links wallet-payment-return-links">

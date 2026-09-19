@@ -21,6 +21,7 @@ import './Sidebar.css';
 const adminNav = [
   { to: '/admin', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/admin/operators', label: 'Operators', icon: Users },
+  { to: '/admin/operator-topup', label: 'Operator Topup', icon: Wallet },
   { to: '/admin/packages', label: 'Packages', icon: Package },
   { to: '/admin/admins', label: 'Staff', icon: Shield },
   { to: '/admin/reports', label: 'Reports', icon: FileBarChart },

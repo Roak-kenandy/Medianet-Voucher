@@ -19,6 +19,7 @@ import DonutChart from '../../components/charts/DonutChart';
 import BarChart from '../../components/charts/BarChart';
 import { operatorApi } from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
+import TrialBanner from '../../components/operator/TrialBanner';
 import { getServiceScopeLabel, getServiceTagLabel } from '../../constants/serviceTags';
 import './operator-dashboard.css';
 
@@ -139,6 +140,15 @@ export default function OperatorDashboard() {
           </div>
         </div>
       </div>
+
+      {!loading && (
+        <TrialBanner
+          trialActive={stats?.trialActive ?? user?.trialActive}
+          trialAccountsRemaining={stats?.trialAccountsRemaining ?? user?.trialAccountsRemaining}
+          trialAccountLimit={stats?.trialAccountLimit ?? user?.trialAccountLimit}
+          trialAccountsUsed={stats?.trialAccountsUsed ?? user?.trialAccountsUsed}
+        />
+      )}
 
       {loading ? (
         <div className="loading-screen" style={{ height: 240 }}>

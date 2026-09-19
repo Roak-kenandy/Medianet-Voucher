@@ -395,7 +395,7 @@ export default function PackagesTab() {
                 value={form.priceAmount}
                 onChange={(e) => setForm({ ...form, priceAmount: e.target.value })}
                 min={0}
-                step="0.01"
+                step="any"
                 required
               />
             </div>
