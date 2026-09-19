@@ -141,6 +141,7 @@ export async function getOperatorStats(operatorId) {
   const chargeBreakdown = {
     createAccount: { count: 0, amount: 0 },
     customerTopup: { count: 0, amount: 0 },
+    customerSubscribe: { count: 0, amount: 0 },
     bulkCreate: { count: 0, amount: 0 },
     other: { count: 0, amount: 0 },
   };
@@ -159,9 +160,12 @@ export async function getOperatorStats(operatorId) {
     if (activity === 'create_account') {
       chargeBreakdown.createAccount.count += 1;
       chargeBreakdown.createAccount.amount += amount;
-    } else if (activity === 'customer_topup') {
+    } else if (activity === 'customer_crm_topup' || activity === 'customer_topup') {
       chargeBreakdown.customerTopup.count += 1;
       chargeBreakdown.customerTopup.amount += amount;
+    } else if (activity === 'customer_subscribe') {
+      chargeBreakdown.customerSubscribe.count += 1;
+      chargeBreakdown.customerSubscribe.amount += amount;
     } else if (activity === 'bulk_create') {
       chargeBreakdown.bulkCreate.count += 1;
       chargeBreakdown.bulkCreate.amount += amount;
@@ -213,6 +217,8 @@ export async function getOperatorStats(operatorId) {
 
     let activityLabel = 'Transaction';
     if (metadata.activity === 'create_account') activityLabel = 'Create Account';
+    else if (metadata.activity === 'customer_crm_topup') activityLabel = 'Customer Top-up';
+    else if (metadata.activity === 'customer_subscribe') activityLabel = 'Customer Subscribe';
     else if (metadata.activity === 'customer_topup') activityLabel = 'Customer Top-up';
     else if (metadata.activity === 'bulk_create') activityLabel = 'Bulk Create';
     else if (metadata.activity === 'wallet_topup' || row.type === 'topup') activityLabel = 'Wallet Top-up';
@@ -445,7 +451,105 @@ export async function searchCustomers(operatorId, phoneNumber, serviceTag = 'OTT
   return crmService.searchCustomersByPhone(phoneNumber, serviceTag);
 }
 
-export async function activateCustomer(operatorId, data, reqMeta = {}) {
+export async function crmTopupCustomer(operatorId, data, reqMeta = {}) {
+  const connection = await getConnection();
+  const amount = Math.round(Number(data.amount) * 100) / 100;
+
+  try {
+    await connection.beginTransaction();
+
+    const [operatorRows] = await connection.execute(
+      `SELECT id, wallet_balance, is_active, service_scope
+       FROM operators WHERE id = ? FOR UPDATE`,
+      [operatorId]
+    );
+
+    const operator = operatorRows[0];
+    if (!operator) {
+      throw new AppError('Operator not found', 404, 'NOT_FOUND');
+    }
+    if (!operator.is_active) {
+      throw new AppError('Operator account is inactive', 403, 'FORBIDDEN');
+    }
+
+    assertOperatorServiceTag(operator.service_scope || 'BOTH', data.serviceTag);
+
+    const walletBalance = Math.round(Number(operator.wallet_balance) * 100) / 100;
+    if (walletBalance < amount) {
+      throw new AppError(
+        `Insufficient wallet balance. Required ${amount} MVR, available ${walletBalance} MVR.`,
+        403,
+        'INSUFFICIENT_WALLET_BALANCE'
+      );
+    }
+
+    const crmResult = await crmService.postCustomerPayment(data.crmContactId, amount);
+
+    await debitWallet(connection, {
+      operatorId,
+      amount,
+      description: buildChargeDescription(
+        'customer_crm_topup',
+        data.fullName.trim(),
+        data.phoneNumber.trim()
+      ),
+      createdByType: 'operator',
+      createdById: operatorId,
+      metadata: {
+        activity: 'customer_crm_topup',
+        phoneNumber: data.phoneNumber.trim(),
+        customerName: data.fullName.trim(),
+        serviceTag: data.serviceTag,
+        crmContactId: data.crmContactId,
+        crmPaymentId: crmResult.paymentId,
+        topupAmount: amount,
+      },
+    });
+
+    await connection.commit();
+
+    const [balanceRow] = await query(
+      `SELECT wallet_balance FROM operators WHERE id = ? LIMIT 1`,
+      [operatorId]
+    );
+
+    await logAudit({
+      actorType: 'operator',
+      actorId: operatorId,
+      action: 'CUSTOMER_CRM_TOPUP',
+      resourceType: 'crm_contact',
+      resourceId: data.crmContactId,
+      ipAddress: reqMeta.ipAddress,
+      userAgent: reqMeta.userAgent,
+      metadata: {
+        crmContactId: data.crmContactId,
+        amount,
+        serviceTag: data.serviceTag,
+        phoneNumber: data.phoneNumber.trim(),
+        crmPaymentId: crmResult.paymentId,
+      },
+    });
+
+    return {
+      fullName: data.fullName.trim(),
+      phoneNumber: data.phoneNumber.trim(),
+      serviceTag: data.serviceTag,
+      amountCharged: amount,
+      crmPaymentId: crmResult.paymentId,
+      walletBalance: Math.round(Number(balanceRow.wallet_balance) * 100) / 100,
+      currencyCode: 'MVR',
+      balanceBefore: walletBalance,
+      balanceAfter: Math.round(Number(balanceRow.wallet_balance) * 100) / 100,
+    };
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
+}
+
+export async function subscribeCustomer(operatorId, data, reqMeta = {}) {
   const connection = await getConnection();
 
   try {
@@ -477,6 +581,14 @@ export async function activateCustomer(operatorId, data, reqMeta = {}) {
     const pricing = await sumPackagePrices(resolvedPackageIds, { connection });
     const unitCost = pricing.total;
     const walletBalance = Math.round(Number(operator.wallet_balance) * 100) / 100;
+
+    if (!amountsMatch(unitCost, data.amount)) {
+      throw new AppError(
+        `Amount must exactly match the selected package total (${unitCost} ${pricing.currencyCode}).`,
+        400,
+        'AMOUNT_MISMATCH'
+      );
+    }
 
     if (walletBalance < unitCost) {
       throw new AppError(
@@ -519,7 +631,7 @@ export async function activateCustomer(operatorId, data, reqMeta = {}) {
         amount: unitCost,
         voucherAccountId,
         description: buildChargeDescription(
-          'customer_topup',
+          'customer_subscribe',
           data.fullName.trim(),
           data.phoneNumber.trim(),
           packageNames
@@ -527,7 +639,7 @@ export async function activateCustomer(operatorId, data, reqMeta = {}) {
         createdByType: 'operator',
         createdById: operatorId,
         metadata: {
-          activity: 'customer_topup',
+          activity: 'customer_subscribe',
           packageIds: resolvedPackageIds,
           packageNames,
           phoneNumber: data.phoneNumber.trim(),
@@ -563,7 +675,7 @@ export async function activateCustomer(operatorId, data, reqMeta = {}) {
     await logAudit({
       actorType: 'operator',
       actorId: operatorId,
-      action: 'CUSTOMER_TOPUP',
+      action: 'CUSTOMER_SUBSCRIBE',
       resourceType: 'voucher_account',
       resourceId: voucherAccountId,
       ipAddress: reqMeta.ipAddress,
@@ -617,9 +729,21 @@ async function assertPackagesMatchServiceTag(packageIds, serviceTag, connection)
   return sumPackagePrices(packageIds, { connection });
 }
 
+function amountsMatch(expected, provided) {
+  return Math.round(Number(expected) * 100) === Math.round(Number(provided) * 100);
+}
+
 function buildChargeDescription(activity, customerName, phoneNumber, packageNames = []) {
   const packagesLabel = packageNames.length ? packageNames.join(', ') : 'package';
   const customerLabel = `${customerName} (${phoneNumber})`;
+
+  if (activity === 'customer_crm_topup') {
+    return `Customer wallet top-up for ${customerLabel}`;
+  }
+
+  if (activity === 'customer_subscribe') {
+    return `Customer subscribe — ${packagesLabel} for ${customerLabel}`;
+  }
 
   if (activity === 'customer_topup') {
     return `Customer top-up — ${packagesLabel} for ${customerLabel}`;
@@ -720,8 +844,13 @@ async function createAndProvisionAccounts(
   return results;
 }
 
+/** @deprecated use subscribeCustomer */
+export async function activateCustomer(operatorId, data, reqMeta = {}) {
+  return subscribeCustomer(operatorId, data, reqMeta);
+}
+
 export async function topupCustomer(operatorId, data, reqMeta = {}) {
-  return activateCustomer(operatorId, data, reqMeta);
+  return crmTopupCustomer(operatorId, data, reqMeta);
 }
 
 export async function createSingleAccount(operatorId, account, reqMeta = {}) {

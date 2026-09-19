@@ -201,13 +201,13 @@ export const operatorApi = {
     ),
   searchCustomers: (phone, serviceTag) =>
     apiRequest(`/operator/customers/search${buildQuery({ phone, serviceTag })}`),
-  activateCustomer: (payload) =>
-    apiRequest('/operator/customers/activate', {
+  crmTopupCustomer: (payload) =>
+    apiRequest('/operator/customers/crm-topup', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  topupCustomer: (payload) =>
-    apiRequest('/operator/customers/topup', {
+  subscribeCustomer: (payload) =>
+    apiRequest('/operator/customers/subscribe', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

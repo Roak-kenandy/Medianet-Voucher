@@ -17,7 +17,7 @@ import AccountsPage from './pages/operator/AccountsPage';
 import OperatorReportsPage from './pages/operator/OperatorReportsPage';
 import WalletPage from './pages/operator/WalletPage';
 import WalletPaymentReturnPage from './pages/operator/WalletPaymentReturnPage';
-import ActivatePage from './pages/operator/ActivatePage';
+import CustomerActionsPage from './pages/operator/CustomerActionsPage';
 import TransactionReportsPage from './pages/operator/TransactionReportsPage';
 import PackagesPage from './pages/admin/PackagesPage';
 import { STAFF_ROLES } from './constants/permissions';
@@ -46,14 +46,16 @@ export default function App() {
 
           <Route path="/operator" element={<ProtectedRoute allowedRoles={['operator']}><OperatorDashboard /></ProtectedRoute>} />
           <Route path="/operator/create" element={<ProtectedRoute allowedRoles={['operator']}><CreateAccountPage /></ProtectedRoute>} />
-          <Route path="/operator/customer-topup" element={<ProtectedRoute allowedRoles={['operator']}><ActivatePage /></ProtectedRoute>} />
-          <Route path="/operator/activate" element={<Navigate to="/operator/customer-topup" replace />} />
+          <Route path="/operator/customers" element={<ProtectedRoute allowedRoles={['operator']}><CustomerActionsPage /></ProtectedRoute>} />
+          <Route path="/operator/topup" element={<Navigate to="/operator/customers?mode=topup" replace />} />
+          <Route path="/operator/subscribe" element={<Navigate to="/operator/customers?mode=subscribe" replace />} />
+          <Route path="/operator/customer-topup" element={<Navigate to="/operator/customers?mode=subscribe" replace />} />
+          <Route path="/operator/activate" element={<Navigate to="/operator/customers?mode=subscribe" replace />} />
           <Route path="/operator/transactions" element={<ProtectedRoute allowedRoles={['operator']}><TransactionReportsPage /></ProtectedRoute>} />
           <Route path="/operator/bulk" element={<ProtectedRoute allowedRoles={['operator']}><BulkUploadPage /></ProtectedRoute>} />
           <Route path="/operator/accounts" element={<ProtectedRoute allowedRoles={['operator']}><AccountsPage /></ProtectedRoute>} />
           <Route path="/operator/wallet" element={<ProtectedRoute allowedRoles={['operator']}><WalletPage /></ProtectedRoute>} />
           <Route path="/operator/wallet/payment/return" element={<ProtectedRoute allowedRoles={['operator']}><WalletPaymentReturnPage /></ProtectedRoute>} />
-          <Route path="/operator/topup" element={<Navigate to="/operator/wallet" replace />} />
           <Route path="/operator/reports" element={<ProtectedRoute allowedRoles={['operator']}><OperatorReportsPage /></ProtectedRoute>} />
           <Route path="/operator/help" element={<ProtectedRoute allowedRoles={['operator']}><HelpCenterPage /></ProtectedRoute>} />
           <Route path="/operator/settings" element={<ProtectedRoute allowedRoles={['operator']}><SettingsPage /></ProtectedRoute>} />

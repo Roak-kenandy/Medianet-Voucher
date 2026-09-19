@@ -9,8 +9,8 @@ import {
   createSingleAccount,
   createBulkAccounts,
   searchCustomers,
-  activateCustomer,
-  topupCustomer,
+  crmTopupCustomer,
+  subscribeCustomer,
 } from '../services/operatorService.js';
 import {
   generateWalletTransactionReport,
@@ -32,7 +32,8 @@ import {
   walletTopupSchema,
   walletTopupStatusQuerySchema,
   customerSearchQuerySchema,
-  activateCustomerSchema,
+  customerCrmTopupSchema,
+  subscribeCustomerSchema,
   walletTransactionQuerySchema,
 } from '../validators/schemas.js';
 import {
@@ -149,21 +150,21 @@ router.get(
 );
 
 router.post(
-  '/customers/activate',
+  '/customers/crm-topup',
   createAccountLimiter,
   asyncHandler(async (req, res) => {
-    const data = activateCustomerSchema.parse(req.body);
-    const result = await activateCustomer(req.user.id, data, getClientMeta(req));
+    const data = customerCrmTopupSchema.parse(req.body);
+    const result = await crmTopupCustomer(req.user.id, data, getClientMeta(req));
     success(res, result, 201);
   })
 );
 
 router.post(
-  '/customers/topup',
+  '/customers/subscribe',
   createAccountLimiter,
   asyncHandler(async (req, res) => {
-    const data = activateCustomerSchema.parse(req.body);
-    const result = await topupCustomer(req.user.id, data, getClientMeta(req));
+    const data = subscribeCustomerSchema.parse(req.body);
+    const result = await subscribeCustomer(req.user.id, data, getClientMeta(req));
     success(res, result, 201);
   })
 );

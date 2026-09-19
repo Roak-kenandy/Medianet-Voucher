@@ -258,7 +258,8 @@ export default function WalletPage() {
             <div className="workflow-footer-links">
               <Link to="/operator/transactions"><Receipt size={14} /> Transaction reports</Link>
               <Link to="/operator/create">Create account</Link>
-              <Link to="/operator/customer-topup">Customer top-up</Link>
+              <Link to="/operator/customers?mode=topup">Topup</Link>
+              <Link to="/operator/customers?mode=subscribe">Subscribe</Link>
             </div>
           </div>
 

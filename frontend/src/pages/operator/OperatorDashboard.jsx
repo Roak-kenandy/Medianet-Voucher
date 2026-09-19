@@ -4,6 +4,7 @@ import {
   Wallet,
   UserPlus,
   CircleDollarSign,
+  PackageCheck,
   Upload,
   Receipt,
   List,
@@ -58,10 +59,16 @@ const QUICK_ACTIONS = [
     primary: true,
   },
   {
-    to: '/operator/customer-topup',
-    title: 'Customer Top-up',
-    desc: 'Add package to existing customer',
+    to: '/operator/customers?mode=topup',
+    title: 'Topup',
+    desc: 'Add credit to a customer\'s account',
     icon: CircleDollarSign,
+  },
+  {
+    to: '/operator/customers?mode=subscribe',
+    title: 'Subscribe',
+    desc: 'Add package subscription to customer',
+    icon: PackageCheck,
   },
   {
     to: '/operator/wallet',
@@ -107,7 +114,8 @@ export default function OperatorDashboard() {
 
     return [
       { key: 'createAccount', label: 'Create Account', ...breakdown.createAccount },
-      { key: 'customerTopup', label: 'Customer Top-up', ...breakdown.customerTopup },
+      { key: 'customerTopup', label: 'Customer Topup', ...breakdown.customerTopup },
+      { key: 'customerSubscribe', label: 'Customer Subscribe', ...breakdown.customerSubscribe },
       { key: 'bulkCreate', label: 'Bulk Create', ...breakdown.bulkCreate },
     ].filter((row) => row.count > 0 || row.amount > 0);
   }, [stats?.chargeBreakdown]);

@@ -30,7 +30,7 @@ const operatorNav = [
   { to: '/operator', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/operator/wallet', label: 'Wallet', icon: Wallet },
   { to: '/operator/create', label: 'Create Account', icon: UserPlus },
-  { to: '/operator/customer-topup', label: 'Customer Top-up', icon: CircleDollarSign },
+  { to: '/operator/customers', label: 'Topup & Subscribe', icon: CircleDollarSign },
   { to: '/operator/bulk', label: 'Bulk Upload', icon: Upload },
   { to: '/operator/accounts', label: 'Accounts', icon: List },
   { to: '/operator/transactions', label: 'Transaction Reports', icon: Receipt },

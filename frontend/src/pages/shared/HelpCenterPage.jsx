@@ -39,8 +39,8 @@ const OPERATOR_FAQ = [
     a: 'Go to Create Account, choose Mobile or TV, select the package(s) to activate, enter name and phone, and submit. The customer is registered with a subscription and your wallet is charged immediately. Your balance and charge are shown before you confirm.',
   },
   {
-    q: 'How do I top up an existing customer?',
-    a: 'Go to Customer Top-up, choose Mobile or TV, select the package(s), search by phone number, and click Top up on the matching customer. The cost is deducted from your wallet and shown in Transaction Reports.',
+    q: 'What is the difference between Topup and Subscribe?',
+    a: 'Both are on the Topup & Subscribe page — use the tabs at the top to switch. Topup adds credit to the customer\'s account only: search the customer, enter any amount, and confirm. Subscribe activates a package: select the package, enter the exact package amount, search the customer, then click Subscribe.',
   },
   {
     q: 'How does bulk upload work?',

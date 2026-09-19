@@ -183,13 +183,29 @@ export const customerSearchQuerySchema = z.object({
   serviceTag: serviceTagSchema.default('OTT'),
 });
 
-export const activateCustomerSchema = z.object({
+const customerAmountSchema = z.coerce
+  .number()
+  .positive('Amount must be greater than zero');
+
+export const customerCrmTopupSchema = z.object({
+  crmContactId: z.string().uuid('Invalid customer reference'),
+  fullName: z.string().trim().min(2, 'Customer name is required').max(200),
+  phoneNumber: phoneSchema,
+  serviceTag: serviceTagSchema,
+  amount: customerAmountSchema,
+});
+
+export const subscribeCustomerSchema = z.object({
   crmContactId: z.string().uuid('Invalid customer reference'),
   fullName: z.string().trim().min(2, 'Customer name is required').max(200),
   phoneNumber: phoneSchema,
   serviceTag: serviceTagSchema,
   packageIds: packageIdsSchema,
+  amount: customerAmountSchema,
 });
+
+/** @deprecated use subscribeCustomerSchema */
+export const activateCustomerSchema = subscribeCustomerSchema;
 
 export const walletTransactionQuerySchema = operatorReportQuerySchema.extend({
   type: z.enum(['topup', 'debit', 'adjustment', 'refund']).optional(),

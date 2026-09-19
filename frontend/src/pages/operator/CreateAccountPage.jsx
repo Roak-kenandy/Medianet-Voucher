@@ -265,7 +265,7 @@ export default function CreateAccountPage() {
           </WorkflowStep>
 
           <div className="workflow-footer-links">
-            <Link to="/operator/customer-topup">Customer top-up instead</Link>
+            <Link to="/operator/customers?mode=subscribe">Subscribe instead</Link>
             <Link to="/operator/accounts"><List size={14} /> View all accounts</Link>
             <Link to="/operator/transactions"><Receipt size={14} /> Transaction reports</Link>
           </div>

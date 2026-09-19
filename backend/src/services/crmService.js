@@ -1025,6 +1025,27 @@ class CRMService {
     };
   }
 
+  async postCustomerPayment(contactId, amount) {
+    this.assertConfigured();
+    const normalizedAmount = Number(amount);
+    if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+      throw new AppError('Top-up amount must be greater than zero', 400, 'VALIDATION_ERROR');
+    }
+
+    const accountId = await this.ensureContactAccount(contactId);
+    const paymentResult = await this.createPayment(contactId, accountId, normalizedAmount);
+    if (!paymentResult.success) {
+      throw new Error(`Payment failed: ${paymentResult.message}`);
+    }
+
+    return {
+      contactId,
+      accountId,
+      paymentId: paymentResult.data?.id || null,
+      amount: normalizedAmount,
+    };
+  }
+
   async activatePackagesForContact(contactId, packageIds) {
     this.assertConfigured();
     const serviceTag = await this.resolveServiceTagFromPackageIds(packageIds);
