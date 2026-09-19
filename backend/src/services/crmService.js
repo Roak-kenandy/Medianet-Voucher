@@ -477,18 +477,18 @@ class CRMService {
     let lastFailureMessage = 'Payment API failed';
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      const paymentRef = `DHIOTT${Date.now()}${uuidv4().slice(0, 8)}`;
+      const paymentRef = `MTVOTT${Date.now()}${uuidv4().slice(0, 8)}`;
       const payload = {
         contact_id: contactId,
         account_id: accountId,
         amount,
         currency_code: 'MVR',
-        notes: 'OTT Payment',
+        notes: 'MTV & OTT Dealer Payment',
         payment_method: { type: 'ELECTRONIC_TRANSFER' },
         state: 'POSTED',
         backoffice_code: paymentRef,
         type_id: this.paymentTypeId,
-        external_payable: ['OTT Payment'],
+        external_payable: ['MTV & OTT Dealer Payment'],
       };
 
       try {

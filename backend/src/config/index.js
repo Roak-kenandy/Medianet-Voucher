@@ -54,7 +54,7 @@ export const config = {
     classificationId: process.env.CLASSIFICATION_ID || '',
     currencyCode: process.env.CURRENCY_CODE || 'MVR',
     paymentTermsId: process.env.PAYMENT_TERMS_ID || '',
-    paymentTypeId: process.env.PAYMENT_TYPE_ID || 'a3afdee8-3596-4e3a-8df4-1ddc99f86107',
+    paymentTypeId: process.env.PAYMENT_TYPE_ID || '199f072f-977d-4056-8262-d7e467bbccbb7',
     salesModelName: process.env.CRM_SALES_MODEL_NAME || 'Retail',
   },
   wallet: {
