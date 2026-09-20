@@ -10,10 +10,17 @@ const rateLimitDefaults = {
   keyGenerator: clientIpKey,
 };
 
+function isAuthenticatedPortalRequest(req) {
+  return Boolean(req.headers.authorization?.startsWith('Bearer '));
+}
+
 export const globalLimiter = rateLimit({
   ...rateLimitDefaults,
   windowMs: 15 * 60 * 1000,
   max: 1000,
+  // Staff/operator sessions share one nginx IP in production — do not throttle
+  // normal logged-in portal usage with the anonymous API bucket.
+  skip: isAuthenticatedPortalRequest,
   message: {
     success: false,
     code: 'RATE_LIMIT',

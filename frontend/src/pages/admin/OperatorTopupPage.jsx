@@ -54,12 +54,14 @@ export default function OperatorTopupPage() {
   const [reportEndDate, setReportEndDate] = useState(defaultReportRange.endDate);
   const [activations, setActivations] = useState([]);
   const [reportLoading, setReportLoading] = useState(true);
+  const [reportError, setReportError] = useState('');
   const [exporting, setExporting] = useState(false);
   const [reportPage, setReportPage] = useState(1);
   const [reportPagination, setReportPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 1 });
 
   const loadActivations = useCallback(() => {
     setReportLoading(true);
+    setReportError('');
     adminApi
       .getOperatorActivations({
         page: reportPage,
@@ -72,9 +74,12 @@ export default function OperatorTopupPage() {
         setActivations(result.activations || []);
         setReportPagination(result.pagination || { page: 1, limit: 20, total: 0, totalPages: 1 });
       })
-      .catch(() => toast.error('Failed to load activation report'))
+      .catch((err) => {
+        setActivations([]);
+        setReportError(err.message || 'Failed to load activation report');
+      })
       .finally(() => setReportLoading(false));
-  }, [reportPage, reportSearch, reportStartDate, reportEndDate, toast]);
+  }, [reportPage, reportSearch, reportStartDate, reportEndDate]);
 
   useEffect(() => {
     loadActivations();
@@ -93,15 +98,12 @@ export default function OperatorTopupPage() {
       adminApi
         .getOperators({ page: 1, limit: 100, search: term })
         .then((result) => setOperators(result.operators || []))
-        .catch(() => {
-          setOperators([]);
-          toast.error('Failed to search operators');
-        })
+        .catch(() => setOperators([]))
         .finally(() => setSearchLoading(false));
     }, 300);
 
     return () => clearTimeout(timer);
-  }, [search, toast]);
+  }, [search]);
 
   useEffect(() => {
     if (!selectedOperator?.id) {
@@ -426,6 +428,19 @@ export default function OperatorTopupPage() {
           placeholder="Search activations by operator, staff, or notes..."
         />
         <div className="card-body" style={{ padding: 0 }}>
+          {reportError && !reportLoading && (
+            <div className="alert alert-danger" style={{ margin: 16 }}>
+              {reportError}
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                style={{ marginLeft: 12 }}
+                onClick={loadActivations}
+              >
+                Retry
+              </button>
+            </div>
+          )}
           {reportLoading ? (
             <div className="loading-screen" style={{ height: 200 }}>
               <div className="spinner spinner-lg" />
