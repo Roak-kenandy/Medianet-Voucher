@@ -27,7 +27,7 @@ const emptyForm = () => ({
   packageIds: [],
   email: '',
   password: '',
-  walletCommissionMultiplier: 1,
+  walletCommissionMultiplier: '',
   canSelfTopup: true,
   notes: '',
   isActive: true,
@@ -37,7 +37,7 @@ function multiplierFromOperator(operator) {
   const type = operator.wallet_commission_type || 'none';
   const value = Number(operator.wallet_commission_value) || 1;
   if (type === 'multiplier' && value > 1) return value;
-  return 1;
+  return '';
 }
 
 function commissionPayload(multiplier) {
@@ -348,7 +348,7 @@ export default function OperatorsTab() {
         />
       </div>
       <div className="form-group">
-        <label className="form-label">Top-up multiplier</label>
+        <label className="form-label">Top-up multiplier (optional)</label>
         <input
           type="number"
           className="form-input"
@@ -361,10 +361,10 @@ export default function OperatorsTab() {
           }
           min={1}
           step="any"
-          required
+          placeholder="e.g. 1.15 for 15% bonus"
         />
         <p className="form-hint">
-          Payment total is multiplied by this value before GST. e.g. 1.15 adds a 15% bonus. Use 1 for no bonus.
+          Optional. Leave blank for no bonus. e.g. 1.15 multiplies the payment total by 15% before GST.
         </p>
       </div>
       <div className="form-group form-group-full">
