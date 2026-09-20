@@ -1,11 +1,19 @@
 import rateLimit from 'express-rate-limit';
-import { config } from '../config/index.js';
 
-export const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 300,
+function clientIpKey(req) {
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+const rateLimitDefaults = {
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: clientIpKey,
+};
+
+export const globalLimiter = rateLimit({
+  ...rateLimitDefaults,
+  windowMs: 15 * 60 * 1000,
+  max: 1000,
   message: {
     success: false,
     code: 'RATE_LIMIT',
@@ -13,11 +21,11 @@ export const globalLimiter = rateLimit({
   },
 });
 
-export const authLimiter = rateLimit({
+export const loginLimiter = rateLimit({
+  ...rateLimitDefaults,
   windowMs: 15 * 60 * 1000,
-  max: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
+  max: 30,
+  skipSuccessfulRequests: true,
   message: {
     success: false,
     code: 'RATE_LIMIT',
@@ -25,11 +33,22 @@ export const authLimiter = rateLimit({
   },
 });
 
+export const refreshLimiter = rateLimit({
+  ...rateLimitDefaults,
+  windowMs: 15 * 60 * 1000,
+  max: 120,
+  skipSuccessfulRequests: true,
+  message: {
+    success: false,
+    code: 'RATE_LIMIT',
+    message: 'Too many session refresh attempts. Please try again shortly.',
+  },
+});
+
 export const createAccountLimiter = rateLimit({
+  ...rateLimitDefaults,
   windowMs: 60 * 1000,
   max: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
   message: {
     success: false,
     code: 'RATE_LIMIT',
@@ -38,10 +57,9 @@ export const createAccountLimiter = rateLimit({
 });
 
 export const walletTopupLimiter = rateLimit({
+  ...rateLimitDefaults,
   windowMs: 15 * 60 * 1000,
   max: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
   message: {
     success: false,
     code: 'RATE_LIMIT',
@@ -50,10 +68,9 @@ export const walletTopupLimiter = rateLimit({
 });
 
 export const walletStatusLimiter = rateLimit({
+  ...rateLimitDefaults,
   windowMs: 60 * 1000,
   max: 60,
-  standardHeaders: true,
-  legacyHeaders: false,
   message: {
     success: false,
     code: 'RATE_LIMIT',
@@ -62,10 +79,9 @@ export const walletStatusLimiter = rateLimit({
 });
 
 export const webhookLimiter = rateLimit({
+  ...rateLimitDefaults,
   windowMs: 60 * 1000,
   max: 120,
-  standardHeaders: true,
-  legacyHeaders: false,
   message: {
     success: false,
     code: 'RATE_LIMIT',

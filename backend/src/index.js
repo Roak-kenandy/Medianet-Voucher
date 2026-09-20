@@ -38,13 +38,15 @@ app.use(
 );
 app.use(express.json({ limit: '100kb' }));
 app.use(cookieParser());
-app.use(globalLimiter);
 
 app.get('/api/health', (_req, res) => {
   res.json({ success: true, data: { status: 'ok', timestamp: new Date().toISOString() } });
 });
 
+// Auth routes use dedicated limiters — keep them outside the global API bucket so
+// login is not blocked by unrelated traffic on the same IP (common behind nginx).
 app.use('/api/auth', authRoutes);
+app.use(globalLimiter);
 app.use('/api/admin', adminRoutes);
 app.use('/api/operator', operatorRoutes);
 app.use('/api/payments', paymentRoutes);
