@@ -17,7 +17,7 @@ export const ROLE_PERMISSIONS = {
     createPackage: true,
     managePackageStatus: true,
     manageOperators: true,
-    adjustWallet: false,
+    adjustWallet: true,
     completeTopup: false,
     viewReports: true,
   },
