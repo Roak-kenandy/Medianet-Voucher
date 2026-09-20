@@ -213,7 +213,7 @@ export async function listOperators({ page = 1, limit = 20, search = '' } = {}) 
   const operators = await query(
     `SELECT DISTINCT
        o.id, o.client_name, o.package_id, o.package_type, o.service_scope, o.notes, o.email, o.wallet_balance,
-       o.wallet_commission_type, o.wallet_commission_value,
+       o.wallet_commission_type, o.wallet_commission_value, o.wallet_self_topup_enabled,
        o.trial_account_limit, o.trial_accounts_used, o.accounts_created,
        o.is_active, o.created_at, o.updated_at,
        a.name AS created_by_name
@@ -281,8 +281,9 @@ export async function createOperator(adminId, data, reqMeta = {}) {
     const [result] = await connection.execute(
       `INSERT INTO operators
          (admin_id, client_name, package_type, service_scope, package_id, notes, email, password_hash,
-          account_quota, wallet_balance, wallet_commission_type, wallet_commission_value)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`,
+          account_quota, wallet_balance, wallet_commission_type, wallet_commission_value,
+          wallet_self_topup_enabled)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)`,
       [
         adminId,
         data.clientName.trim(),
@@ -294,6 +295,7 @@ export async function createOperator(adminId, data, reqMeta = {}) {
         passwordHash,
         data.walletCommissionType,
         data.walletCommissionValue,
+        data.canSelfTopup === false ? 0 : 1,
       ]
     );
 
@@ -316,6 +318,7 @@ export async function createOperator(adminId, data, reqMeta = {}) {
         packageNames: plans.map((plan) => plan.name),
         walletCommissionType: data.walletCommissionType,
         walletCommissionValue: data.walletCommissionValue,
+        canSelfTopup: data.canSelfTopup !== false,
         serviceScope: data.serviceScope || 'BOTH',
       },
     });
@@ -332,6 +335,7 @@ export async function createOperator(adminId, data, reqMeta = {}) {
       walletBalance: 0,
       walletCommissionType: data.walletCommissionType,
       walletCommissionValue: data.walletCommissionValue,
+      canSelfTopup: data.canSelfTopup !== false,
       accountsCreated: 0,
       isActive: true,
     };
@@ -433,6 +437,7 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
       normalizedEmail,
       data.walletCommissionType,
       data.walletCommissionValue,
+      data.canSelfTopup === false ? 0 : 1,
       data.isActive ? 1 : 0,
       operatorId,
     ];
@@ -440,7 +445,8 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
     let sql = `
       UPDATE operators
       SET client_name = ?, package_type = ?, service_scope = ?, package_id = ?, notes = ?, email = ?,
-          wallet_commission_type = ?, wallet_commission_value = ?, is_active = ?
+          wallet_commission_type = ?, wallet_commission_value = ?, wallet_self_topup_enabled = ?,
+          is_active = ?
       WHERE id = ?
     `;
 
@@ -449,10 +455,11 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
       sql = `
         UPDATE operators
         SET client_name = ?, package_type = ?, service_scope = ?, package_id = ?, notes = ?, email = ?,
-            wallet_commission_type = ?, wallet_commission_value = ?, is_active = ?, password_hash = ?
+            wallet_commission_type = ?, wallet_commission_value = ?, wallet_self_topup_enabled = ?,
+            is_active = ?, password_hash = ?
         WHERE id = ?
       `;
-      fields.splice(9, 0, passwordHash);
+      fields.splice(10, 0, passwordHash);
     }
 
     await connection.execute(sql, fields);
@@ -474,6 +481,7 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
         packageNames: plans.map((plan) => plan.name),
         walletCommissionType: data.walletCommissionType,
         walletCommissionValue: data.walletCommissionValue,
+        canSelfTopup: data.canSelfTopup !== false,
         serviceScope: data.serviceScope || 'BOTH',
         isActive: data.isActive,
         passwordChanged: Boolean(data.password?.trim()),
@@ -496,6 +504,7 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
       walletBalance: Number(updated?.wallet_balance) || 0,
       walletCommissionType: data.walletCommissionType,
       walletCommissionValue: data.walletCommissionValue,
+      canSelfTopup: data.canSelfTopup !== false,
       accountsCreated: operator.accounts_created,
       isActive: data.isActive,
     };

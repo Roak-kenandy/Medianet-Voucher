@@ -7,7 +7,7 @@ import Header from '../../components/Header';
 import ServiceTypePicker from '../../components/operator/ServiceTypePicker';
 import PackagePicker from '../../components/operator/PackagePicker';
 import WorkflowSummary, {
-  WorkflowHeaderWallet,
+  WorkflowHeaderStats,
   WorkflowStep,
   formatResultCharge,
 } from '../../components/operator/WorkflowSummary';
@@ -35,6 +35,8 @@ export default function CreateAccountPage() {
   const [packages, setPackages] = useState([]);
   const [serviceTags, setServiceTags] = useState([]);
   const [walletBalance, setWalletBalance] = useState(null);
+  const [trialAccountLimit, setTrialAccountLimit] = useState(0);
+  const [trialAccountsUsed, setTrialAccountsUsed] = useState(0);
   const [trialAccountsRemaining, setTrialAccountsRemaining] = useState(0);
   const [currencyCode, setCurrencyCode] = useState('MVR');
   const [packageIds, setPackageIds] = useState([]);
@@ -49,6 +51,8 @@ export default function CreateAccountPage() {
       setServiceTags(tags);
       setPackages(stats.packages || []);
       setWalletBalance(stats.walletBalance);
+      setTrialAccountLimit(stats.trialAccountLimit || 0);
+      setTrialAccountsUsed(stats.trialAccountsUsed || 0);
       setTrialAccountsRemaining(stats.trialAccountsRemaining || 0);
       setCurrencyCode(stats.currencyCode || 'MVR');
       const defaultTag = defaultServiceTag(stats.serviceScope);
@@ -129,6 +133,7 @@ export default function CreateAccountPage() {
       setWalletBalance(result.walletBalance);
       if (!result.amountCharged) {
         setTrialAccountsRemaining((prev) => Math.max(0, prev - 1));
+        setTrialAccountsUsed((prev) => prev + 1);
       }
       toast.success(`Account created for ${result.fullName}`);
       setLastResult(result);
@@ -160,7 +165,13 @@ export default function CreateAccountPage() {
             Register a new customer with subscription in one step. Review the order summary on the right before confirming.
           </p>
         </div>
-        <WorkflowHeaderWallet balance={walletBalance} currencyCode={currencyCode} />
+        <WorkflowHeaderStats
+          balance={walletBalance}
+          currencyCode={currencyCode}
+          trialAccountLimit={trialAccountLimit}
+          trialAccountsUsed={trialAccountsUsed}
+          trialAccountsRemaining={trialAccountsRemaining}
+        />
       </div>
 
       <div className="workflow-layout">

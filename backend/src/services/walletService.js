@@ -157,6 +157,32 @@ async function getOperatorCommissionSettings(operatorId, connection = null) {
   });
 }
 
+export async function assertOperatorCanSelfTopup(operatorId, connection = null) {
+  const runner = connection
+    ? (sql, params) => connection.execute(sql, params).then(([rows]) => rows[0])
+    : async (sql, params) => {
+        const rows = await query(sql, params);
+        return rows[0];
+      };
+
+  const operator = await runner(
+    `SELECT wallet_self_topup_enabled FROM operators WHERE id = ? LIMIT 1`,
+    [operatorId]
+  );
+
+  if (!operator) {
+    throw new AppError('Operator not found', 404, 'NOT_FOUND');
+  }
+
+  if (!operator.wallet_self_topup_enabled) {
+    throw new AppError(
+      'Wallet top-up is managed by Medianet for your account. Contact support to add funds.',
+      403,
+      'SELF_TOPUP_DISABLED'
+    );
+  }
+}
+
 export async function getOperatorWallet(operatorId, connection = null) {
   const runner = connection
     ? (sql, params) => connection.execute(sql, params).then(([rows]) => rows[0])
@@ -167,7 +193,7 @@ export async function getOperatorWallet(operatorId, connection = null) {
 
   const operator = await runner(
     `SELECT id, wallet_balance, accounts_created, client_name, is_active,
-            wallet_commission_type, wallet_commission_value,
+            wallet_commission_type, wallet_commission_value, wallet_self_topup_enabled,
             trial_account_limit, trial_accounts_used
      FROM operators WHERE id = ? LIMIT 1`,
     [operatorId]
@@ -194,6 +220,7 @@ export async function getOperatorWallet(operatorId, connection = null) {
     gstRatePercent: roundMoney(config.wallet.gstRate * 100),
     minTopupAmount: config.wallet.minTopupAmount,
     maxTopupAmount: config.wallet.maxTopupAmount,
+    canSelfTopup: Boolean(operator.wallet_self_topup_enabled),
     ...formatTrialForResponse(operator.trial_account_limit, operator.trial_accounts_used),
   };
 }
@@ -417,6 +444,7 @@ function buildPendingTopupResponse(pending, breakdown, commissionSettings) {
 }
 
 export async function initiateTopup(operatorId, amount, reqMeta = {}) {
+  await assertOperatorCanSelfTopup(operatorId);
   const commissionSettings = await getOperatorCommissionSettings(operatorId);
   const breakdown = calculateTopupCredit(amount, {
     commissionType: commissionSettings.commissionType,

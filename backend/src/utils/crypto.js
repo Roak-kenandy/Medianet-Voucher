@@ -40,6 +40,7 @@ export function sanitizeUser(user, role) {
       walletBalance: Math.round(Number(user.wallet_balance) * 100) / 100,
       currencyCode: user.currency_code || undefined,
       accountsCreated: user.accounts_created,
+      canSelfTopup: user.wallet_self_topup_enabled !== 0,
       ...formatTrialForResponse(user.trial_account_limit, user.trial_accounts_used),
     };
   }

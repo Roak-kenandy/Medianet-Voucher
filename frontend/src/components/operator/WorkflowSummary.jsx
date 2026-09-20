@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Wallet } from 'lucide-react';
+import { Wallet, Users } from 'lucide-react';
 import { formatMoney } from '../../utils/money';
 
 export default function WorkflowSummary({
@@ -154,6 +154,55 @@ export function WorkflowHeaderWallet({ balance, currencyCode = 'MVR' }) {
         <div className="workflow-header-wallet-label">Available balance</div>
         <div className="workflow-header-wallet-value">{formatMoney(balance, currencyCode)}</div>
       </div>
+    </div>
+  );
+}
+
+export function WorkflowHeaderFreeAccounts({
+  trialAccountLimit = 0,
+  trialAccountsUsed = 0,
+  trialAccountsRemaining = 0,
+}) {
+  if (trialAccountLimit <= 0) return null;
+
+  return (
+    <div className="workflow-header-wallet workflow-header-free-accounts">
+      <div className="workflow-header-wallet-icon workflow-header-free-accounts-icon">
+        <Users size={20} />
+      </div>
+      <div>
+        <div className="workflow-header-wallet-label">Free accounts</div>
+        <div className="workflow-header-wallet-value">{trialAccountsRemaining} remaining</div>
+        <div className="workflow-header-free-accounts-meta">
+          {trialAccountsUsed} of {trialAccountLimit} used
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function WorkflowHeaderStats({
+  balance,
+  currencyCode = 'MVR',
+  trialAccountLimit = 0,
+  trialAccountsUsed = 0,
+  trialAccountsRemaining = 0,
+}) {
+  const showWallet = balance != null;
+  const showFreeAccounts = trialAccountLimit > 0;
+
+  if (!showWallet && !showFreeAccounts) return null;
+
+  return (
+    <div className="workflow-header-stats">
+      {showWallet && <WorkflowHeaderWallet balance={balance} currencyCode={currencyCode} />}
+      {showFreeAccounts && (
+        <WorkflowHeaderFreeAccounts
+          trialAccountLimit={trialAccountLimit}
+          trialAccountsUsed={trialAccountsUsed}
+          trialAccountsRemaining={trialAccountsRemaining}
+        />
+      )}
     </div>
   );
 }

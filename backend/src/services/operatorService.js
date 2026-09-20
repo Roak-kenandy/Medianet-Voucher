@@ -64,7 +64,7 @@ async function resolveAccountPackageIds(operatorId, packageIds, connection) {
 export async function getOperatorStats(operatorId) {
   const [operator] = await query(
     `SELECT o.id, o.client_name, o.package_id, o.package_type, o.service_scope, o.wallet_balance, o.accounts_created, o.is_active,
-            o.wallet_commission_type, o.wallet_commission_value,
+            o.wallet_commission_type, o.wallet_commission_value, o.wallet_self_topup_enabled,
             o.trial_account_limit, o.trial_accounts_used
      FROM operators o
      WHERE o.id = ? LIMIT 1`,
@@ -266,6 +266,7 @@ export async function getOperatorStats(operatorId) {
     currencyCode: config.wallet.currencyCode,
     walletCommissionType: operator.wallet_commission_type || 'none',
     walletCommissionValue: Number(operator.wallet_commission_value) || 0,
+    canSelfTopup: Boolean(operator.wallet_self_topup_enabled),
     ...formatTrialForResponse(operator.trial_account_limit, operator.trial_accounts_used),
     accountsCreated,
     minPackagePrice,

@@ -108,8 +108,9 @@ export default function WalletPage() {
   };
 
   const currencyCode = wallet?.currencyCode || 'MVR';
+  const canSelfTopup = wallet?.canSelfTopup !== false;
   const payAmount = Number(amount) || 0;
-  const canSubmit = payAmount > 0 && preview && !submitting && !paymentFlow;
+  const canSubmit = canSelfTopup && payAmount > 0 && preview && !submitting && !paymentFlow;
 
   return (
     <Layout sidebar={<Sidebar role="operator" />} header={<Header />}>
@@ -170,54 +171,75 @@ export default function WalletPage() {
       {!paymentFlow && (
         <div className="wallet-page-layout">
           <div className="wallet-page-main">
-            <section className="workflow-step">
-              <div className="workflow-step-header">
-                <span className="workflow-step-num">1</span>
-                <div>
-                  <h3 className="workflow-step-title">Enter payment amount</h3>
-                  <p className="workflow-step-desc">
-                    You will be redirected to Bank of Maldives to pay securely.
-                  </p>
-                </div>
+            {!canSelfTopup && (
+              <div className="alert alert-info" style={{ marginBottom: 20 }}>
+                Wallet top-up is managed by Medianet for your account. Contact support@medianet.mv to add funds.
+                You can still use your current balance to create accounts and serve customers.
               </div>
-              <div className="workflow-step-body">
-                <form onSubmit={handleTopup}>
-                  <div className="form-group">
-                    <label htmlFor="topupAmount" className="form-label">
-                      Amount to pay ({currencyCode})
-                    </label>
-                    <input
-                      id="topupAmount"
-                      type="number"
-                      min={wallet?.minTopupAmount ?? 1}
-                      max={wallet?.maxTopupAmount || 1000000}
-                      step="any"
-                      className="form-input wallet-amount-input"
-                      value={amount}
-                      onChange={(e) => setAmount(e.target.value)}
-                      placeholder="e.g. 3000"
-                    />
-                    <p className="form-hint">
-                      Minimum {formatMoney(wallet?.minTopupAmount ?? 1, currencyCode)}
-                      {commissionHint(wallet) ? ` · ${commissionHint(wallet)}` : ''}
+            )}
+
+            {canSelfTopup ? (
+              <section className="workflow-step">
+                <div className="workflow-step-header">
+                  <span className="workflow-step-num">1</span>
+                  <div>
+                    <h3 className="workflow-step-title">Enter payment amount</h3>
+                    <p className="workflow-step-desc">
+                      You will be redirected to Bank of Maldives to pay securely.
                     </p>
                   </div>
+                </div>
+                <div className="workflow-step-body">
+                  <form onSubmit={handleTopup}>
+                    <div className="form-group">
+                      <label htmlFor="topupAmount" className="form-label">
+                        Amount to pay ({currencyCode})
+                      </label>
+                      <input
+                        id="topupAmount"
+                        type="number"
+                        min={wallet?.minTopupAmount ?? 1}
+                        max={wallet?.maxTopupAmount || 1000000}
+                        step="any"
+                        className="form-input wallet-amount-input"
+                        value={amount}
+                        onChange={(e) => setAmount(e.target.value)}
+                        placeholder="e.g. 3000"
+                      />
+                      <p className="form-hint">
+                        Minimum {formatMoney(wallet?.minTopupAmount ?? 1, currencyCode)}
+                        {commissionHint(wallet) ? ` · ${commissionHint(wallet)}` : ''}
+                      </p>
+                    </div>
 
-                  <button
-                    type="submit"
-                    className="btn btn-primary btn-lg wallet-submit-btn"
-                    disabled={!canSubmit}
-                  >
-                    <Plus size={18} />
-                    {submitting
-                      ? 'Initiating payment…'
-                      : preview
-                        ? `Pay ${formatMoney(preview.amountPaid ?? preview.amount, currencyCode)} · Credit ${formatMoney(preview.net, currencyCode)}`
-                        : 'Top Up Wallet'}
-                  </button>
-                </form>
-              </div>
-            </section>
+                    <button
+                      type="submit"
+                      className="btn btn-primary btn-lg wallet-submit-btn"
+                      disabled={!canSubmit}
+                    >
+                      <Plus size={18} />
+                      {submitting
+                        ? 'Initiating payment…'
+                        : preview
+                          ? `Pay ${formatMoney(preview.amountPaid ?? preview.amount, currencyCode)} · Credit ${formatMoney(preview.net, currencyCode)}`
+                          : 'Top Up Wallet'}
+                    </button>
+                  </form>
+                </div>
+              </section>
+            ) : (
+              <section className="workflow-step">
+                <div className="workflow-step-header">
+                  <span className="workflow-step-num">—</span>
+                  <div>
+                    <h3 className="workflow-step-title">Wallet balance</h3>
+                    <p className="workflow-step-desc">
+                      View your balance and transaction history below. Self-service top-up is not enabled for your account.
+                    </p>
+                  </div>
+                </div>
+              </section>
+            )}
 
             <div className="workflow-footer-links">
               <Link to="/operator/transactions"><Receipt size={14} /> Transaction reports</Link>
@@ -227,20 +249,22 @@ export default function WalletPage() {
             </div>
           </div>
 
-          <aside className="wallet-page-sidebar">
-            <WalletTopupBreakdown
-              preview={preview}
-              currencyCode={currencyCode}
-              currentBalance={wallet?.balance ?? null}
-            />
+          {canSelfTopup && (
+            <aside className="wallet-page-sidebar">
+              <WalletTopupBreakdown
+                preview={preview}
+                currencyCode={currencyCode}
+                currentBalance={wallet?.balance ?? null}
+              />
 
-            {!preview && (
-              <div className="wallet-topup-placeholder">
-                <Receipt size={28} strokeWidth={1.5} />
-                <p>Enter an amount to see a full payment breakdown before you confirm.</p>
-              </div>
-            )}
-          </aside>
+              {!preview && (
+                <div className="wallet-topup-placeholder">
+                  <Receipt size={28} strokeWidth={1.5} />
+                  <p>Enter an amount to see a full payment breakdown before you confirm.</p>
+                </div>
+              )}
+            </aside>
+          )}
         </div>
       )}
     </Layout>

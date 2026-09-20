@@ -28,6 +28,7 @@ const emptyForm = () => ({
   email: '',
   password: '',
   walletCommissionMultiplier: 1,
+  canSelfTopup: true,
   notes: '',
   isActive: true,
 });
@@ -148,6 +149,7 @@ export default function OperatorsTab() {
       email: operator.email,
       password: '',
       walletCommissionMultiplier: multiplierFromOperator(operator),
+      canSelfTopup: operator.wallet_self_topup_enabled !== 0,
       notes: operator.notes || '',
       isActive: Boolean(operator.is_active),
     });
@@ -365,6 +367,19 @@ export default function OperatorsTab() {
           Payment total is multiplied by this value before GST. e.g. 1.15 adds a 15% bonus. Use 1 for no bonus.
         </p>
       </div>
+      <div className="form-group form-group-full">
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={Boolean(form.canSelfTopup)}
+            onChange={(e) => setForm({ ...form, canSelfTopup: e.target.checked })}
+          />
+          <span>Operator can top up wallet themselves</span>
+        </label>
+        <p className="form-hint">
+          When unchecked, Medianet staff must add wallet credit for this operator. They can still view balance and use the wallet.
+        </p>
+      </div>
       {isEdit && (
         <div className="form-group">
           <label className="form-label">Current Wallet Balance</label>
@@ -372,7 +387,10 @@ export default function OperatorsTab() {
             {formatMoney(editModal?.wallet_balance, 'MVR')}
           </p>
           <p className="form-hint">
-            {editModal?.accounts_created || 0} accounts created. Partners top up their own balance via the wallet page.
+            {editModal?.accounts_created || 0} accounts created.
+            {form.canSelfTopup
+              ? ' Operator can pay via the wallet page.'
+              : ' Wallet top-up is handled by Medianet staff only.'}
           </p>
         </div>
       )}

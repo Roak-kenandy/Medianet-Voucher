@@ -7,7 +7,7 @@ import Header from '../../components/Header';
 import ServiceTypePicker from '../../components/operator/ServiceTypePicker';
 import PackagePicker from '../../components/operator/PackagePicker';
 import WorkflowSummary, {
-  WorkflowHeaderWallet,
+  WorkflowHeaderStats,
   WorkflowStep,
   formatResultCharge,
 } from '../../components/operator/WorkflowSummary';
@@ -66,6 +66,8 @@ export default function CustomerActionsPage() {
   const [packageIds, setPackageIds] = useState([]);
   const [amountInput, setAmountInput] = useState('');
   const [walletBalance, setWalletBalance] = useState(null);
+  const [trialAccountLimit, setTrialAccountLimit] = useState(0);
+  const [trialAccountsUsed, setTrialAccountsUsed] = useState(0);
   const [trialAccountsRemaining, setTrialAccountsRemaining] = useState(0);
   const [currencyCode, setCurrencyCode] = useState('MVR');
   const [searching, setSearching] = useState(false);
@@ -79,6 +81,8 @@ export default function CustomerActionsPage() {
   useEffect(() => {
     operatorApi.getStats().then((stats) => {
       setWalletBalance(stats.walletBalance);
+      setTrialAccountLimit(stats.trialAccountLimit || 0);
+      setTrialAccountsUsed(stats.trialAccountsUsed || 0);
       setTrialAccountsRemaining(stats.trialAccountsRemaining || 0);
       setCurrencyCode(stats.currencyCode || 'MVR');
       setPackages(stats.packages || []);
@@ -260,6 +264,7 @@ export default function CustomerActionsPage() {
       setWalletBalance(result.walletBalance);
       if (!result.amountCharged) {
         setTrialAccountsRemaining((prev) => Math.max(0, prev - 1));
+        setTrialAccountsUsed((prev) => prev + 1);
       }
       setLastResult({ type: 'subscribe', ...result });
       toast.success(`Subscription created for ${customer.name}`);
@@ -279,7 +284,13 @@ export default function CustomerActionsPage() {
           <h1 className="page-title">Topup & Subscribe</h1>
           <p className="page-subtitle">{modeConfig.subtitle}</p>
         </div>
-        <WorkflowHeaderWallet balance={walletBalance} currencyCode={currencyCode} />
+        <WorkflowHeaderStats
+          balance={walletBalance}
+          currencyCode={currencyCode}
+          trialAccountLimit={isSubscribe ? trialAccountLimit : 0}
+          trialAccountsUsed={isSubscribe ? trialAccountsUsed : 0}
+          trialAccountsRemaining={isSubscribe ? trialAccountsRemaining : 0}
+        />
       </div>
 
       <div className="workflow-mode-tabs" role="tablist" aria-label="Customer action type">

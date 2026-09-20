@@ -64,6 +64,7 @@ export const createOperatorSchema = z
     email: emailSchema,
     password: passwordSchema,
     notes: z.string().trim().max(2000).optional().default(''),
+    canSelfTopup: z.boolean().optional().default(true),
     ...walletCommissionFields,
   })
   .superRefine(validateWalletCommission);
@@ -90,6 +91,7 @@ export const updateOperatorSchema = z
       ),
     isActive: z.boolean(),
     notes: z.string().trim().max(2000).optional().default(''),
+    canSelfTopup: z.boolean().optional().default(true),
     ...walletCommissionFields,
   })
   .superRefine(validateWalletCommission);

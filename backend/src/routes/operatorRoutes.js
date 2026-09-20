@@ -19,6 +19,7 @@ import {
 } from '../services/walletTransactionReportService.js';
 import {
   getOperatorWallet,
+  assertOperatorCanSelfTopup,
   getPendingWalletTopup,
   initiateTopup,
   getWalletTopupBill,
@@ -101,6 +102,7 @@ router.get(
 router.post(
   '/wallet/topup/preview',
   asyncHandler(async (req, res) => {
+    await assertOperatorCanSelfTopup(req.user.id);
     const { amount } = walletTopupSchema.parse(req.body);
     const wallet = await getOperatorWallet(req.user.id);
     const breakdown = calculateTopupCredit(amount, {

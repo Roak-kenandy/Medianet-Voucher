@@ -161,7 +161,13 @@ export default function OperatorDashboard() {
               <AlertTriangle size={18} />
               <span>
                 Wallet balance is below your lowest package price ({formatMoney(stats.minPackagePrice, currencyCode)}).{' '}
-                <Link to="/operator/wallet">Top up your wallet</Link> to continue creating accounts.
+                {stats?.canSelfTopup !== false ? (
+                  <>
+                    <Link to="/operator/wallet">Top up your wallet</Link> to continue creating accounts.
+                  </>
+                ) : (
+                  <>Contact Medianet to add wallet funds and continue creating accounts.</>
+                )}
               </span>
             </div>
           )}
