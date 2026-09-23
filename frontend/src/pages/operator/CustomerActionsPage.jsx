@@ -475,6 +475,7 @@ export default function CustomerActionsPage() {
                         <th>Customer name</th>
                         <th>Phone</th>
                         <th>Type</th>
+                        <th>Code</th>
                         <th>Package(s)</th>
                         <th>Amount</th>
                         <th style={{ width: 140 }}>Action</th>
@@ -490,6 +491,9 @@ export default function CustomerActionsPage() {
                               {customer.serviceTypeShort ||
                                 (customer.serviceTag === 'MEDIANET_TV' ? 'TV' : 'Mobile')}
                             </span>
+                          </td>
+                          <td style={{ fontFamily: 'var(--font-mono, monospace)', letterSpacing: '0.04em' }}>
+                            {customer.deviceCodeMasked || '—'}
                           </td>
                           <td style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
                             {selectedPackages.map((p) => p.name).join(', ') || '—'}
@@ -523,6 +527,7 @@ export default function CustomerActionsPage() {
                         <th>Customer name</th>
                         <th>Phone</th>
                         <th>Type</th>
+                        <th>Code</th>
                         <th style={{ width: 160 }}>Top-up amount</th>
                         <th style={{ width: 120 }}>Action</th>
                       </tr>
@@ -545,6 +550,9 @@ export default function CustomerActionsPage() {
                                 {customer.serviceTypeShort ||
                                   (customer.serviceTag === 'MEDIANET_TV' ? 'TV' : 'Mobile')}
                               </span>
+                            </td>
+                            <td style={{ fontFamily: 'var(--font-mono, monospace)', letterSpacing: '0.04em' }}>
+                              {customer.deviceCodeMasked || '—'}
                             </td>
                             <td>
                               <input

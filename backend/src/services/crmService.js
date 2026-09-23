@@ -42,6 +42,25 @@ function formatCrmError(data = {}) {
   return `${message} (${parameters.join(', ')})`;
 }
 
+export function maskDeviceCustomFieldCode(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  if (raw.length <= 3) return `${raw}***`;
+  return `${raw.slice(0, 3)}***`;
+}
+
+function extractDeviceCodeFromDevices(devicesData) {
+  const devices = devicesData?.content || [];
+  for (const device of devices) {
+    const fields = device.custom_fields || [];
+    const codeField = fields.find((field) => String(field?.key || '').toLowerCase() === 'code');
+    if (codeField?.value != null && String(codeField.value).trim() !== '') {
+      return maskDeviceCustomFieldCode(codeField.value);
+    }
+  }
+  return null;
+}
+
 function isRetryableSubscriptionError(status, data = {}) {
   if (status >= 500) {
     return true;
@@ -435,6 +454,35 @@ class CRMService {
     await this.addContactTag(contactData.id, [tagConfig.crmTagId]);
 
     return { id: contactData.id };
+  }
+
+  async fetchDevicesByContactId(contactId, { size = 10, page = 1 } = {}) {
+    const queryParams = new URLSearchParams({
+      contact_id: contactId,
+      include_wifi: 'true',
+      include_application: 'true',
+      include_characteristics: 'true',
+      include_meter_readings: 'true',
+      include_custom_fields: 'true',
+      size: String(size),
+      page: String(page),
+    });
+
+    const response = await fetch(`${this.baseUrl}/devices?${queryParams}`, {
+      headers: this.headers,
+    });
+
+    return this.handleResponse(response, 'Fetch contact devices');
+  }
+
+  async fetchMaskedDeviceCodeForContact(contactId) {
+    try {
+      const devicesData = await this.fetchDevicesByContactId(contactId);
+      return extractDeviceCodeFromDevices(devicesData);
+    } catch (err) {
+      console.error(`[CRM] Device code lookup failed for contact ${contactId}:`, err.message);
+      return null;
+    }
   }
 
   async createDevice(contactId, serviceTag = 'OTT') {
@@ -999,6 +1047,8 @@ class CRMService {
               .map((tag) => tag.name)
               .filter(Boolean);
 
+            const deviceCodeMasked = await this.fetchMaskedDeviceCodeForContact(contact.id);
+
             return {
               id: contact.id,
               code: contact.code || null,
@@ -1009,6 +1059,7 @@ class CRMService {
               serviceTagLabel: tagConfig.label,
               serviceTypeShort: normalizedTag === 'MEDIANET_TV' ? 'TV' : 'Mobile',
               crmTags,
+              deviceCodeMasked,
             };
           } catch (err) {
             console.error(`[CRM] Tag lookup failed for contact ${contact.id}:`, err.message);
