@@ -35,6 +35,14 @@ export function errorHandler(err, req, res, _next) {
     });
   }
 
+  if (err?.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({
+      success: false,
+      code: 'VALIDATION_ERROR',
+      message: 'Image must be 5 MB or smaller',
+    });
+  }
+
   console.error('[Unhandled Error]', err);
   return res.status(500).json({
     success: false,

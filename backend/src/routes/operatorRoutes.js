@@ -1,5 +1,10 @@
 import { Router } from 'express';
-import { authenticate, ensureActiveAccount, requireRole } from '../middleware/auth.js';
+import {
+  authenticate,
+  ensureActiveAccount,
+  requireRole,
+  requireOperatorPermission,
+} from '../middleware/auth.js';
 import { createAccountLimiter, walletTopupLimiter, walletStatusLimiter } from '../middleware/rateLimit.js';
 import { asyncHandler, success } from '../utils/errors.js';
 import { getClientMeta } from '../services/auditService.js';
@@ -17,6 +22,11 @@ import {
   generateWalletTransactionReport,
   walletTransactionReportToCsv,
 } from '../services/walletTransactionReportService.js';
+import { listLiveMarketingAdsForOperators } from '../services/marketingAdService.js';
+import {
+  listActiveKnowledgeDocumentsForOperators,
+  getKnowledgeDocumentFile,
+} from '../services/knowledgeDocumentService.js';
 import {
   getOperatorWallet,
   assertOperatorCanSelfTopup,
@@ -43,8 +53,9 @@ import {
 } from '../validators/schemas.js';
 import {
   generateOperatorReport,
-  operatorReportToCsv,
+  streamOperatorReportCsv,
 } from '../services/operatorReportService.js';
+import { runWithReportSlot } from '../utils/reportConcurrency.js';
 
 const router = Router();
 
@@ -52,6 +63,7 @@ router.use(authenticate, ensureActiveAccount, requireRole('operator'));
 
 router.get(
   '/wallet',
+  requireOperatorPermission('wallet'),
   asyncHandler(async (req, res) => {
     const wallet = await getOperatorWallet(req.user.id);
     success(res, wallet);
@@ -60,6 +72,7 @@ router.get(
 
 router.get(
   '/wallet/transactions',
+  requireOperatorPermission('transactions'),
   asyncHandler(async (req, res) => {
     const queryParams = walletTransactionQuerySchema.parse(req.query);
     const result = await listWalletTransactions(req.user.id, queryParams);
@@ -69,6 +82,7 @@ router.get(
 
 router.get(
   '/wallet/transactions/report',
+  requireOperatorPermission('transactions'),
   asyncHandler(async (req, res) => {
     const filters = walletTransactionQuerySchema.parse(req.query);
     const report = await generateWalletTransactionReport(req.user.id, filters);
@@ -78,6 +92,7 @@ router.get(
 
 router.get(
   '/wallet/transactions/export',
+  requireOperatorPermission('transactions'),
   asyncHandler(async (req, res) => {
     const filters = walletTransactionQuerySchema.parse(req.query);
     const report = await generateWalletTransactionReport(req.user.id, filters);
@@ -93,6 +108,7 @@ router.get(
 
 router.get(
   '/wallet/topup/pending',
+  requireOperatorPermission('wallet'),
   asyncHandler(async (req, res) => {
     const pending = await getPendingWalletTopup(req.user.id);
     success(res, { pending });
@@ -101,6 +117,7 @@ router.get(
 
 router.post(
   '/wallet/topup/preview',
+  requireOperatorPermission('wallet'),
   asyncHandler(async (req, res) => {
     await assertOperatorCanSelfTopup(req.user.id);
     const { amount } = walletTopupSchema.parse(req.body);
@@ -123,6 +140,7 @@ router.post(
 
 router.post(
   '/wallet/topup',
+  requireOperatorPermission('wallet'),
   walletTopupLimiter,
   asyncHandler(async (req, res) => {
     const { amount } = walletTopupSchema.parse(req.body);
@@ -133,6 +151,7 @@ router.post(
 
 router.get(
   '/wallet/topup/status',
+  requireOperatorPermission('wallet'),
   walletStatusLimiter,
   asyncHandler(async (req, res) => {
     const { reference, transactionId } = walletTopupStatusQuerySchema.parse(req.query);
@@ -148,6 +167,7 @@ router.get(
 
 router.get(
   '/wallet/topup/bill',
+  requireOperatorPermission('wallet'),
   walletStatusLimiter,
   asyncHandler(async (req, res) => {
     const { reference } = walletTopupBillQuerySchema.parse(req.query);
@@ -158,6 +178,7 @@ router.get(
 
 router.get(
   '/customers/search',
+  requireOperatorPermission('customers'),
   asyncHandler(async (req, res) => {
     const { phone, serviceTag } = customerSearchQuerySchema.parse(req.query);
     const result = await searchCustomers(req.user.id, phone, serviceTag);
@@ -167,6 +188,7 @@ router.get(
 
 router.post(
   '/customers/crm-topup',
+  requireOperatorPermission('customers'),
   createAccountLimiter,
   asyncHandler(async (req, res) => {
     const data = customerCrmTopupSchema.parse(req.body);
@@ -177,6 +199,7 @@ router.post(
 
 router.post(
   '/customers/subscribe',
+  requireOperatorPermission('customers'),
   createAccountLimiter,
   asyncHandler(async (req, res) => {
     const data = subscribeCustomerSchema.parse(req.body);
@@ -187,6 +210,7 @@ router.post(
 
 router.get(
   '/stats',
+  requireOperatorPermission('dashboard'),
   asyncHandler(async (req, res) => {
     const stats = await getOperatorStats(req.user.id);
     success(res, stats);
@@ -194,7 +218,35 @@ router.get(
 );
 
 router.get(
+  '/marketing-ads',
+  requireOperatorPermission('dashboard'),
+  asyncHandler(async (_req, res) => {
+    const ads = await listLiveMarketingAdsForOperators();
+    success(res, { ads });
+  })
+);
+
+router.get(
+  '/knowledge-documents',
+  asyncHandler(async (_req, res) => {
+    const documents = await listActiveKnowledgeDocumentsForOperators();
+    success(res, { documents });
+  })
+);
+
+router.get(
+  '/knowledge-documents/:id/download',
+  asyncHandler(async (req, res) => {
+    const docId = parseInt(req.params.id, 10);
+    const { row, filePath } = await getKnowledgeDocumentFile(docId, { activeOnly: true });
+    res.setHeader('Content-Type', row.mime_type);
+    res.download(filePath, row.file_original_name);
+  })
+);
+
+router.get(
   '/accounts',
+  requireOperatorPermission('accounts'),
   asyncHandler(async (req, res) => {
     const queryParams = operatorAccountsQuerySchema.parse(req.query);
     const result = await listAccounts(req.user.id, queryParams);
@@ -204,17 +256,19 @@ router.get(
 
 router.get(
   '/accounts/export',
+  requireOperatorPermission('accounts'),
   asyncHandler(async (req, res) => {
     const filters = operatorAccountsExportSchema.parse(req.query);
     const csv = await exportAccountsCsv(req.user.id, filters);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', 'attachment; filename="accounts-report.csv"');
+    res.setHeader('Content-Disposition', 'attachment; filename="customer-history.csv"');
     res.send(csv);
   })
 );
 
 router.post(
   '/accounts',
+  requireOperatorPermission('createAccount'),
   createAccountLimiter,
   asyncHandler(async (req, res) => {
     const account = createAccountSchema.parse(req.body);
@@ -225,6 +279,7 @@ router.post(
 
 router.post(
   '/accounts/bulk',
+  requireOperatorPermission('bulkUpload'),
   createAccountLimiter,
   asyncHandler(async (req, res) => {
     const { accounts, packageIds } = bulkAccountsSchema.parse(req.body);
@@ -235,22 +290,24 @@ router.post(
 
 router.get(
   '/reports',
+  requireOperatorPermission('reports'),
   asyncHandler(async (req, res) => {
-    const filters = operatorReportQuerySchema.parse(req.query);
-    const report = await generateOperatorReport(req.user.id, filters);
-    success(res, report);
+    await runWithReportSlot(async () => {
+      const filters = operatorReportQuerySchema.parse(req.query);
+      const report = await generateOperatorReport(req.user.id, filters);
+      success(res, report);
+    });
   })
 );
 
 router.get(
   '/reports/export',
+  requireOperatorPermission('reports'),
   asyncHandler(async (req, res) => {
-    const filters = operatorReportQuerySchema.parse(req.query);
-    const report = await generateOperatorReport(req.user.id, filters);
-    const csv = operatorReportToCsv(report);
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename="operator-activity-report.csv"');
-    res.send(csv);
+    await runWithReportSlot(async () => {
+      const filters = operatorReportQuerySchema.parse(req.query);
+      await streamOperatorReportCsv(res, req.user.id, filters);
+    });
   })
 );
 

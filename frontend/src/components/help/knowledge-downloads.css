@@ -1,0 +1,77 @@
+.knowledge-downloads-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.knowledge-downloads-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 10px);
+  background: var(--color-surface);
+}
+
+.knowledge-downloads-icon {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.knowledge-downloads-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.knowledge-downloads-title {
+  font-weight: 600;
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+
+.knowledge-downloads-desc {
+  margin: 0 0 6px;
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.knowledge-downloads-file {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.knowledge-downloads-empty,
+.knowledge-downloads-loading {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.knowledge-downloads-item .btn {
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.spin {
+  animation: knowledge-spin 0.8s linear infinite;
+}
+
+@keyframes knowledge-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

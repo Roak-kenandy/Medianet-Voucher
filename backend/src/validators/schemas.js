@@ -44,6 +44,24 @@ const walletCommissionFields = {
   walletCommissionValue: z.coerce.number().min(0, 'Multiplier cannot be negative').default(1),
 };
 
+const operatorPortalPermissionsSchema = z
+  .object({
+    dashboard: z.boolean().optional(),
+    wallet: z.boolean().optional(),
+    createAccount: z.boolean().optional(),
+    customers: z.boolean().optional(),
+    bulkUpload: z.boolean().optional(),
+    accounts: z.boolean().optional(),
+    transactions: z.boolean().optional(),
+    reports: z.boolean().optional(),
+  })
+  .optional();
+
+const operatorPortalFields = {
+  portalRole: z.enum(['supervisor', 'user']).optional().default('supervisor'),
+  portalPermissions: operatorPortalPermissionsSchema,
+};
+
 function validateWalletCommission(data, ctx) {
   if (data.walletCommissionType === 'multiplier') {
     if (data.walletCommissionValue < 1) {
@@ -65,6 +83,7 @@ export const createOperatorSchema = z
     password: passwordSchema,
     notes: z.string().trim().max(2000).optional().default(''),
     canSelfTopup: z.boolean().optional().default(true),
+    ...operatorPortalFields,
     ...walletCommissionFields,
   })
   .superRefine(validateWalletCommission);
@@ -92,6 +111,7 @@ export const updateOperatorSchema = z
     isActive: z.boolean(),
     notes: z.string().trim().max(2000).optional().default(''),
     canSelfTopup: z.boolean().optional().default(true),
+    ...operatorPortalFields,
     ...walletCommissionFields,
   })
   .superRefine(validateWalletCommission);
@@ -144,8 +164,18 @@ export const reportQuerySchema = z.object({
   packageType: z.string().max(100).optional(),
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  page: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().positive().max(100).optional(),
+  search: z.string().max(200).optional(),
   reportType: z
-    .enum(['client_summary', 'accounts_by_period', 'package_breakdown', 'dealer_topup'])
+    .enum([
+      'client_summary',
+      'customer_summary',
+      'accounts_by_period',
+      'package_breakdown',
+      'dealer_topup',
+      'sales_report',
+    ])
     .default('client_summary'),
 });
 
@@ -195,19 +225,29 @@ export const operatorActivationsExportSchema = z.object({
   ...reportDateRangeSchema,
 });
 
+const customerHistoryActivitySchema = z
+  .enum(['all', 'new_account', 'subscribe', 'topup'])
+  .optional()
+  .default('all');
+
 export const operatorAccountsQuerySchema = paginationSchema.extend({
   search: z.string().trim().max(200).optional().default(''),
+  activity: customerHistoryActivitySchema,
   ...reportDateRangeSchema,
 });
 
 export const operatorAccountsExportSchema = z.object({
   search: z.string().trim().max(200).optional().default(''),
+  activity: customerHistoryActivitySchema,
   ...reportDateRangeSchema,
 });
 
 export const operatorReportQuerySchema = z.object({
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  page: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().positive().max(100).optional(),
+  search: z.string().max(200).optional(),
 });
 
 export const customerSearchQuerySchema = z.object({
@@ -244,3 +284,63 @@ export const walletTransactionQuerySchema = operatorReportQuerySchema.extend({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
+
+export const marketingAdFormSchema = z.object({
+  title: z.string().trim().min(2, 'Title is required').max(200),
+  description: z.string().trim().max(5000).optional().default(''),
+  displayStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Start date is required'),
+  displayEnd: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value) => (value === '' ? undefined : value))
+    .refine((value) => value === undefined || /^\d{4}-\d{2}-\d{2}$/.test(value), {
+      message: 'End date must be YYYY-MM-DD',
+    }),
+  linkUrl: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value) => (value === '' ? undefined : value))
+    .refine((value) => value === undefined || z.string().url().safeParse(value).success, {
+      message: 'Link must be a valid URL',
+    }),
+  sortOrder: z.coerce.number().int().min(0).max(999).optional().default(0),
+  isActive: z
+    .union([z.boolean(), z.string()])
+    .optional()
+    .transform((value) => value === true || value === 'true' || value === '1'),
+});
+
+export function marketingAdPayloadFromForm(form) {
+  const data = marketingAdFormSchema.parse(form);
+  return {
+    title: data.title,
+    description: data.description,
+    linkUrl: data.linkUrl || null,
+    displayStart: `${data.displayStart} 00:00:00`,
+    displayEnd: data.displayEnd ? `${data.displayEnd} 23:59:59` : null,
+    sortOrder: data.sortOrder,
+    isActive: data.isActive !== false,
+  };
+}
+
+export const knowledgeDocumentFormSchema = z.object({
+  title: z.string().trim().min(2, 'Title is required').max(200),
+  description: z.string().trim().max(5000).optional().default(''),
+  sortOrder: z.coerce.number().int().min(0).max(999).optional().default(0),
+  isActive: z
+    .union([z.boolean(), z.string()])
+    .optional()
+    .transform((value) => value === true || value === 'true' || value === '1'),
+});
+
+export function knowledgeDocumentPayloadFromForm(form) {
+  const data = knowledgeDocumentFormSchema.parse(form);
+  return {
+    title: data.title,
+    description: data.description,
+    sortOrder: data.sortOrder,
+    isActive: data.isActive !== false,
+  };
+}

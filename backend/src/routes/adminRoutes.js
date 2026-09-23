@@ -30,7 +30,23 @@ import {
   createPackage,
   updatePackageStatus,
 } from '../services/packageService.js';
-import { generateReport, reportToCsv } from '../services/reportService.js';
+import { generateReport, streamReportExport } from '../services/reportService.js';
+import { runWithReportSlot } from '../utils/reportConcurrency.js';
+import {
+  listMarketingAds,
+  createMarketingAd,
+  updateMarketingAd,
+  deleteMarketingAd,
+} from '../services/marketingAdService.js';
+import { marketingAdUpload } from '../middleware/uploadMarketingAd.js';
+import { marketingAdPayloadFromForm, knowledgeDocumentPayloadFromForm } from '../validators/schemas.js';
+import {
+  listKnowledgeDocuments,
+  createKnowledgeDocument,
+  updateKnowledgeDocument,
+  deleteKnowledgeDocument,
+} from '../services/knowledgeDocumentService.js';
+import { knowledgeDocumentUpload } from '../middleware/uploadKnowledgeDocument.js';
 import {
   createAdminSchema,
   createOperatorSchema,
@@ -274,23 +290,107 @@ router.patch(
 );
 
 router.get(
+  '/marketing-ads',
+  requirePermission('manageMarketingAds'),
+  asyncHandler(async (_req, res) => {
+    const ads = await listMarketingAds();
+    success(res, { ads });
+  })
+);
+
+router.post(
+  '/marketing-ads',
+  requirePermission('manageMarketingAds'),
+  marketingAdUpload.single('image'),
+  asyncHandler(async (req, res) => {
+    const payload = marketingAdPayloadFromForm(req.body);
+    const ad = await createMarketingAd(req.user.id, payload, req.file?.filename);
+    success(res, ad, 201);
+  })
+);
+
+router.put(
+  '/marketing-ads/:id',
+  requirePermission('manageMarketingAds'),
+  marketingAdUpload.single('image'),
+  asyncHandler(async (req, res) => {
+    const adId = parseInt(req.params.id, 10);
+    const payload = marketingAdPayloadFromForm(req.body);
+    const ad = await updateMarketingAd(adId, payload, req.file?.filename || null);
+    success(res, ad);
+  })
+);
+
+router.delete(
+  '/marketing-ads/:id',
+  requirePermission('manageMarketingAds'),
+  asyncHandler(async (req, res) => {
+    const adId = parseInt(req.params.id, 10);
+    const result = await deleteMarketingAd(adId);
+    success(res, result);
+  })
+);
+
+router.get(
+  '/knowledge-documents',
+  requirePermission('manageKnowledgeBase'),
+  asyncHandler(async (_req, res) => {
+    const documents = await listKnowledgeDocuments();
+    success(res, { documents });
+  })
+);
+
+router.post(
+  '/knowledge-documents',
+  requirePermission('manageKnowledgeBase'),
+  knowledgeDocumentUpload.single('file'),
+  asyncHandler(async (req, res) => {
+    const payload = knowledgeDocumentPayloadFromForm(req.body);
+    const doc = await createKnowledgeDocument(req.user.id, payload, req.file);
+    success(res, doc, 201);
+  })
+);
+
+router.put(
+  '/knowledge-documents/:id',
+  requirePermission('manageKnowledgeBase'),
+  knowledgeDocumentUpload.single('file'),
+  asyncHandler(async (req, res) => {
+    const docId = parseInt(req.params.id, 10);
+    const payload = knowledgeDocumentPayloadFromForm(req.body);
+    const doc = await updateKnowledgeDocument(docId, payload, req.file || null);
+    success(res, doc);
+  })
+);
+
+router.delete(
+  '/knowledge-documents/:id',
+  requirePermission('manageKnowledgeBase'),
+  asyncHandler(async (req, res) => {
+    const docId = parseInt(req.params.id, 10);
+    const result = await deleteKnowledgeDocument(docId);
+    success(res, result);
+  })
+);
+
+router.get(
   '/reports',
   asyncHandler(async (req, res) => {
-    const filters = reportQuerySchema.parse(req.query);
-    const report = await generateReport(filters);
-    success(res, report);
+    await runWithReportSlot(async () => {
+      const filters = reportQuerySchema.parse(req.query);
+      const report = await generateReport(filters);
+      success(res, report);
+    });
   })
 );
 
 router.get(
   '/reports/export',
   asyncHandler(async (req, res) => {
-    const filters = reportQuerySchema.parse(req.query);
-    const report = await generateReport(filters);
-    const csv = reportToCsv(report);
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename="report-${filters.reportType}.csv"`);
-    res.send(csv);
+    await runWithReportSlot(async () => {
+      const filters = reportQuerySchema.parse(req.query);
+      await streamReportExport(res, filters);
+    });
   })
 );
 

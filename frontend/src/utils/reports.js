@@ -21,7 +21,16 @@ const COLUMN_LABELS = {
   createdAccounts: 'Created Accounts',
   lifetimeAccountsCreated: 'Lifetime Created',
   fullName: 'Full Name',
+  customerName: 'Customer Name',
   phoneNumber: 'Phone Number',
+  serviceTag: 'Service',
+  packages: 'Packages',
+  activatedAt: 'Activated Date',
+  operatorName: 'Operator',
+  accountId: 'Account ID',
+  externalRef: 'External Ref',
+  errorMessage: 'Error',
+  amountCharged: 'Amount Charged',
   status: 'Status',
   createdAt: 'Created At',
   time: 'Date & Time',
@@ -36,12 +45,22 @@ const COLUMN_LABELS = {
   gstRatePercent: 'GST Rate %',
   processedBy: 'Processed By',
   paymentRef: 'Payment Reference',
+  source: 'Source',
+  onlineTopups: 'Online Top-ups',
+  manualTopups: 'Manual Top-ups',
+  walletSpend: 'Wallet Spend',
+  customerActions: 'Customer Actions',
 };
 
 const SUMMARY_LABELS = {
   totalClients: 'Total Clients',
   totalAccountsCreated: 'Total Accounts Created',
   totalInPeriod: 'Total In Period',
+  totalCustomers: 'Total Customers',
+  createdCount: 'Created',
+  pendingCount: 'Pending / Processing',
+  failedCount: 'Failed',
+  uniqueOperators: 'Operators',
   clientName: 'Client',
   packageType: 'Package',
   email: 'Email',
@@ -61,6 +80,15 @@ const SUMMARY_LABELS = {
   totalCredited: 'Total Credited',
   uniqueOperators: 'Operators',
   gstRatePercent: 'GST Rate %',
+  operatorsWithActivity: 'Operators With Activity',
+  totalOnlineTopups: 'Online Top-ups',
+  totalManualTopups: 'Manual Top-ups',
+  totalWalletSpend: 'Wallet Spend',
+  totalCustomerActions: 'Customer Actions',
+  totalAccountsCreated: 'Accounts Created',
+  totalAmountCharged: 'Amount Charged',
+  totalGstAmount: 'Total GST',
+  totalCommission: 'Total Commission',
 };
 
 export function formatColumnLabel(key) {
@@ -79,6 +107,8 @@ const MONEY_SUMMARY_KEYS = new Set([
   'totalGstAmount',
   'totalCommission',
   'totalCredited',
+  'totalWalletSpend',
+  'totalAmountCharged',
 ]);
 
 const TEXT_SUMMARY_KEYS = new Set(['clientName', 'packageType', 'email', 'currencyCode']);
@@ -100,6 +130,8 @@ const MONEY_COLUMN_KEYS = new Set([
   'credited',
   'gstAmount',
   'commission',
+  'amountCharged',
+  'walletSpend',
 ]);
 
 export function formatCellValue(key, value, currencyCode = 'MVR') {
@@ -107,8 +139,11 @@ export function formatCellValue(key, value, currencyCode = 'MVR') {
   if (key === 'packageType') return formatPackageLabel(value);
   if (MONEY_COLUMN_KEYS.has(key)) return formatMoney(value, currencyCode);
   if (key === 'gstRatePercent') return value != null ? `${value}%` : '—';
-  if (key === 'createdAt' && value) {
+  if ((key === 'createdAt' || key === 'activatedAt') && value) {
     return new Date(value).toLocaleString();
+  }
+  if (key === 'serviceTag' && value) {
+    return value === 'MEDIANET_TV' ? 'Medianet TV' : value === 'OTT' ? 'Mobile' : String(value);
   }
   if (key === 'date' && value) {
     return new Date(value).toLocaleDateString();
@@ -116,8 +151,7 @@ export function formatCellValue(key, value, currencyCode = 'MVR') {
   return String(value ?? '');
 }
 
-export function downloadCsv(content, filename) {
-  const blob = new Blob([content], { type: 'text/csv' });
+export function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -125,3 +159,10 @@ export function downloadCsv(content, filename) {
   a.click();
   URL.revokeObjectURL(url);
 }
+
+export function downloadCsv(content, filename) {
+  downloadBlob(new Blob([content], { type: 'text/csv' }), filename);
+}
+
+/** Report types that load one page at a time from the API (large datasets). */
+export const SERVER_PAGINATED_REPORT_TYPES = ['dealer_topup', 'customer_summary'];

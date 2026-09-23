@@ -1,6 +1,10 @@
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { getHomePathForRole } from '../constants/permissions';
+import { getHomePathForRole, getHomePathForUser } from '../constants/permissions';
+import {
+  operatorHasPermission,
+  permissionForOperatorPath,
+} from '../constants/operatorPermissions';
 
 export default function ProtectedRoute({ children, allowedRoles }) {
   const { user, loading } = useAuth();
@@ -20,7 +24,14 @@ export default function ProtectedRoute({ children, allowedRoles }) {
   }
 
   if (allowedRoles && !allowedRoles.includes(user.role)) {
-    return <Navigate to={getHomePathForRole(user.role)} replace />;
+    return <Navigate to={getHomePathForUser(user)} replace />;
+  }
+
+  if (user.role === 'operator') {
+    const requiredPermission = permissionForOperatorPath(location.pathname);
+    if (requiredPermission && !operatorHasPermission(user, requiredPermission)) {
+      return <Navigate to={getHomePathForUser(user)} replace />;
+    }
   }
 
   return children;

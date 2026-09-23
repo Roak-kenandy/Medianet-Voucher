@@ -1,4 +1,4 @@
-import TableToolbar, { useClientTable } from '../TableToolbar';
+import TableToolbar from '../TableToolbar';
 import TablePagination from '../TablePagination';
 import { formatMoney } from '../../utils/money';
 import '../../pages/admin/admin-shared.css';
@@ -21,47 +21,46 @@ const SUMMARY_LABELS = {
   totalCredited: 'Total Credited',
 };
 
-export default function TopupReportResults({ report, search, onSearchChange, page, onPageChange }) {
+export default function TopupReportResults({
+  report,
+  search,
+  onSearchChange,
+  page,
+  onPageChange,
+  pagination,
+  loading = false,
+}) {
   const currencyCode = report?.summary?.currencyCode || 'MVR';
-  const columns = [
-    'time',
-    'reference',
-    'operator',
-    'amountPaid',
-    'gstAmount',
-    'afterGst',
-    'commission',
-    'credited',
-    'processedBy',
-  ];
-
-  const { rows: pagedRows, pagination } = useClientTable(report?.rows || [], {
-    search,
-    page,
-    limit: 15,
-    columns,
-  });
+  const pagedRows = report?.rows || [];
+  const pageInfo = pagination || {
+    page: page || 1,
+    limit: pagedRows.length || 50,
+    total: report?.pagination?.total ?? pagedRows.length,
+    totalPages: report?.pagination?.totalPages ?? 1,
+  };
 
   if (!report) return null;
 
   return (
     <>
-      <div className="topup-report-summary">
-        {TOPUP_SUMMARY_KEYS.map((key) => (
-          <div className="topup-report-summary-card" key={key}>
-            <span className="topup-report-summary-label">{SUMMARY_LABELS[key]}</span>
-            <span className="topup-report-summary-value">
-              {key === 'totalRecords' || key === 'uniqueOperators'
-                ? report.summary[key]
-                : formatMoney(report.summary[key], currencyCode)}
-            </span>
+      {report.summary && (
+        <div className="topup-report-summary">
+          {TOPUP_SUMMARY_KEYS.map((key) => (
+            <div className="topup-report-summary-card" key={key}>
+              <span className="topup-report-summary-label">{SUMMARY_LABELS[key]}</span>
+              <span className="topup-report-summary-value">
+                {key === 'totalRecords' || key === 'uniqueOperators'
+                  ? Number(report.summary[key] ?? 0).toLocaleString()
+                  : formatMoney(report.summary[key], currencyCode)}
+              </span>
+            </div>
+          ))}
+          <div className="topup-report-summary-card topup-report-summary-meta">
+            <span className="topup-report-summary-label">GST Rate</span>
+            <span className="topup-report-summary-value">{report.summary.gstRatePercent}%</span>
           </div>
-        ))}
-        <div className="topup-report-summary-card topup-report-summary-meta">
-          <span className="topup-report-summary-label">GST Rate</span>
-          <span className="topup-report-summary-value">{report.summary.gstRatePercent}%</span>
         </div>
-      </div>
+      )}
 
       <div className="card topup-report-card">
         <div className="card-header topup-report-card-header">
@@ -72,20 +71,27 @@ export default function TopupReportResults({ report, search, onSearchChange, pag
               {report.filters.startDate && report.filters.endDate && (
                 <> · {report.filters.startDate} to {report.filters.endDate}</>
               )}
+              {pageInfo.total != null && (
+                <> · {pageInfo.total.toLocaleString()} transactions total</>
+              )}
             </p>
           </div>
         </div>
 
-        {report.rows.length > 0 && (
+        {(pageInfo.total > 0 || pagedRows.length > 0) && (
           <TableToolbar
             value={search}
             onChange={onSearchChange}
-            placeholder="Search by operator, reference, or email..."
+            placeholder="Search by operator, reference, source, or email..."
           />
         )}
 
         <div className="card-body" style={{ padding: 0 }}>
-          {report.rows.length === 0 ? (
+          {loading ? (
+            <div className="loading-screen" style={{ height: 120 }}>
+              <div className="spinner" />
+            </div>
+          ) : pageInfo.total === 0 ? (
             <div className="empty-state"><p>No top-ups found for the selected period</p></div>
           ) : pagedRows.length === 0 ? (
             <div className="empty-state"><p>No rows match your search</p></div>
@@ -98,6 +104,7 @@ export default function TopupReportResults({ report, search, onSearchChange, pag
                       <th>Date &amp; Time</th>
                       <th>Reference</th>
                       <th>Operator</th>
+                      <th>Source</th>
                       <th className="col-money">Amount Paid</th>
                       <th className="col-money">GST</th>
                       <th className="col-money">After GST</th>
@@ -119,6 +126,7 @@ export default function TopupReportResults({ report, search, onSearchChange, pag
                             <span className="topup-operator-email">{row.operatorEmail}</span>
                           )}
                         </td>
+                        <td>{row.source || '—'}</td>
                         <td className="col-money">{formatMoney(row.amountPaid, currencyCode)}</td>
                         <td className="col-money col-deduct">−{formatMoney(row.gstAmount, currencyCode)}</td>
                         <td className="col-money">{formatMoney(row.afterGst, currencyCode)}</td>
@@ -135,10 +143,10 @@ export default function TopupReportResults({ report, search, onSearchChange, pag
                 </table>
               </div>
               <TablePagination
-                page={pagination.page}
-                totalPages={pagination.totalPages}
-                total={pagination.total}
-                limit={pagination.limit}
+                page={pageInfo.page}
+                totalPages={pageInfo.totalPages}
+                total={pageInfo.total}
+                limit={pageInfo.limit}
                 onPageChange={onPageChange}
                 itemLabel="transactions"
               />

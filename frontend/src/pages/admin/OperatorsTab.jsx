@@ -19,6 +19,13 @@ import {
 import { Link } from 'react-router-dom';
 import PackageSelector from '../../components/admin/PackageSelector';
 import PackageBadgeOverflow from '../../components/admin/PackageBadgeOverflow';
+import {
+  OPERATOR_PERMISSION_KEYS,
+  OPERATOR_PERMISSION_LABELS,
+  OPERATOR_PORTAL_ROLE_LABELS,
+  defaultOperatorPermissions,
+  parseOperatorPermissions,
+} from '../../constants/operatorPermissions';
 import './admin-shared.css';
 
 const emptyForm = () => ({
@@ -29,9 +36,16 @@ const emptyForm = () => ({
   password: '',
   walletCommissionMultiplier: '',
   canSelfTopup: true,
+  portalRole: 'supervisor',
+  portalPermissions: defaultOperatorPermissions(false),
   notes: '',
   isActive: true,
 });
+
+function portalPermissionsFromOperator(operator) {
+  const role = operator.portal_role === 'user' ? 'user' : 'supervisor';
+  return parseOperatorPermissions(role, operator.portal_permissions);
+}
 
 function multiplierFromOperator(operator) {
   const type = operator.wallet_commission_type || 'none';
@@ -150,6 +164,8 @@ export default function OperatorsTab() {
       password: '',
       walletCommissionMultiplier: multiplierFromOperator(operator),
       canSelfTopup: operator.wallet_self_topup_enabled !== 0,
+      portalRole: operator.portal_role === 'user' ? 'user' : 'supervisor',
+      portalPermissions: portalPermissionsFromOperator(operator),
       notes: operator.notes || '',
       isActive: Boolean(operator.is_active),
     });
@@ -174,6 +190,8 @@ export default function OperatorsTab() {
       await adminApi.createOperator({
         ...formData,
         ...commissionPayload(walletCommissionMultiplier),
+        portalPermissions:
+          formData.portalRole === 'user' ? formData.portalPermissions : undefined,
       });
       setCreateModalOpen(false);
       resetCreateForm();
@@ -205,6 +223,8 @@ export default function OperatorsTab() {
       await adminApi.updateOperator(editModal.id, {
         ...formData,
         ...commissionPayload(walletCommissionMultiplier),
+        portalPermissions:
+          formData.portalRole === 'user' ? formData.portalPermissions : undefined,
       });
       setEditModal(null);
       toast.success('Operator updated successfully');
@@ -380,6 +400,62 @@ export default function OperatorsTab() {
           When unchecked, Medianet staff must add wallet credit for this operator. They can still view balance and use the wallet.
         </p>
       </div>
+      <div className="form-group form-group-full">
+        <label className="form-label">Portal role</label>
+        <div className="scope-selector">
+          {['supervisor', 'user'].map((roleKey) => (
+            <label
+              key={roleKey}
+              className={`scope-selector-item${form.portalRole === roleKey ? ' is-selected' : ''}`}
+            >
+              <input
+                type="radio"
+                name={`portalRole-${isEdit ? 'edit' : 'create'}`}
+                checked={form.portalRole === roleKey}
+                onChange={() =>
+                  setForm({
+                    ...form,
+                    portalRole: roleKey,
+                    portalPermissions:
+                      roleKey === 'user'
+                        ? form.portalPermissions || defaultOperatorPermissions(false)
+                        : defaultOperatorPermissions(true),
+                  })
+                }
+              />
+              <span>{OPERATOR_PORTAL_ROLE_LABELS[roleKey]}</span>
+            </label>
+          ))}
+        </div>
+        <p className="form-hint">
+          Supervisor has full portal access. Normal user only sees the sections you allow below.
+        </p>
+      </div>
+      {form.portalRole === 'user' && (
+        <div className="form-group form-group-full">
+          <label className="form-label">Normal user access</label>
+          <div className="operator-permissions-grid">
+            {OPERATOR_PERMISSION_KEYS.map((key) => (
+              <label key={key} className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.portalPermissions?.[key])}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      portalPermissions: {
+                        ...form.portalPermissions,
+                        [key]: e.target.checked,
+                      },
+                    })
+                  }
+                />
+                <span>{OPERATOR_PERMISSION_LABELS[key]}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
       {isEdit && (
         <div className="form-group">
           <label className="form-label">Current Wallet Balance</label>
@@ -485,6 +561,7 @@ export default function OperatorsTab() {
                     <th>Wallet</th>
                     <th>Multiplier</th>
                     <th>Accounts</th>
+                    <th>Portal</th>
                     <th>Status</th>
                     <th>Created</th>
                     <th>Actions</th>
@@ -510,6 +587,11 @@ export default function OperatorsTab() {
                       <td>{formatMoney(op.wallet_balance, 'MVR')}</td>
                       <td style={{ fontSize: 13 }}>{formatCommissionLabel(op)}</td>
                       <td>{op.accounts_created.toLocaleString()}</td>
+                      <td>
+                        <span className="badge badge-neutral">
+                          {OPERATOR_PORTAL_ROLE_LABELS[op.portal_role === 'user' ? 'user' : 'supervisor']}
+                        </span>
+                      </td>
                       <td><StatusBadge active={op.is_active} /></td>
                       <td>{new Date(op.created_at).toLocaleDateString()}</td>
                       <td>

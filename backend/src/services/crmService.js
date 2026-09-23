@@ -45,8 +45,8 @@ function formatCrmError(data = {}) {
 export function maskDeviceCustomFieldCode(value) {
   const raw = String(value ?? '').trim();
   if (!raw) return null;
-  if (raw.length <= 3) return `${raw}***`;
-  return `${raw.slice(0, 3)}***`;
+  if (raw.length <= 4) return `${raw}***`;
+  return `${raw.slice(0, 4)}***`;
 }
 
 function extractDeviceCodeFromDevices(devicesData) {

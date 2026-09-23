@@ -9,7 +9,12 @@ import TablePagination from '../../components/TablePagination';
 import { operatorApi } from '../../api/client';
 import { useToast } from '../../context/ToastContext';
 import { formatPackageLabel } from '../../constants/packages';
-import { getDefaultReportDateRange } from '../../utils/dates';
+import {
+  CUSTOMER_HISTORY_ACTIVITY_FILTERS,
+  customerHistoryActivityLabel,
+  customerHistoryServiceLabel,
+} from '../../constants/customerHistory';
+import { formatMoney } from '../../utils/money';
 import { downloadCsv } from '../../utils/reports';
 import '../admin/admin-shared.css';
 
@@ -19,13 +24,26 @@ function StatusBadge({ status }) {
     pending: 'badge-warning',
     processing: 'badge-info',
     created: 'badge-success',
+    completed: 'badge-success',
     failed: 'badge-danger',
   };
   return (
     <span className={`badge ${map[status] || 'badge-neutral'}`}>
-      {status}
+      {status === 'completed' ? 'completed' : status}
     </span>
   );
+}
+
+function ActivityBadge({ activity }) {
+  const label = customerHistoryActivityLabel(activity);
+  const map = {
+    customer_subscribe: 'badge-info',
+    bulk_create: 'badge-neutral',
+    customer_crm_topup: 'badge-success',
+    customer_topup: 'badge-success',
+    create_account: 'badge-neutral',
+  };
+  return <span className={`badge ${map[activity] || 'badge-neutral'}`}>{label}</span>;
 }
 
 function AccountCard({ acc, packageLabel }) {
@@ -33,33 +51,51 @@ function AccountCard({ acc, packageLabel }) {
     <div className="data-card">
       <div className="data-card-title">{acc.full_name}</div>
       <div className="data-card-row">
+        <span className="data-card-label">Activity</span>
+        <span className="data-card-value">
+          <ActivityBadge activity={acc.activity} />
+        </span>
+      </div>
+      <div className="data-card-row">
         <span className="data-card-label">Phone</span>
         <span className="data-card-value">{acc.phone_number}</span>
       </div>
       <div className="data-card-row">
-        <span className="data-card-label">Package</span>
-        <span className="data-card-value">
-          <span className="badge badge-info">{packageLabel}</span>
-        </span>
+        <span className="data-card-label">Service</span>
+        <span className="data-card-value">{customerHistoryServiceLabel(acc.service_tag)}</span>
       </div>
+      {packageLabel && packageLabel !== '—' && (
+        <div className="data-card-row">
+          <span className="data-card-label">Package</span>
+          <span className="data-card-value">
+            <span className="badge badge-info">{packageLabel}</span>
+          </span>
+        </div>
+      )}
       <div className="data-card-row">
         <span className="data-card-label">Status</span>
         <span className="data-card-value"><StatusBadge status={acc.status} /></span>
       </div>
+      {acc.amount_charged != null && Number(acc.amount_charged) > 0 && (
+        <div className="data-card-row">
+          <span className="data-card-label">Charged</span>
+          <span className="data-card-value">{formatMoney(acc.amount_charged, 'MVR')}</span>
+        </div>
+      )}
       {acc.status === 'failed' && acc.error_message && (
         <div className="data-card-row">
           <span className="data-card-label">Error</span>
           <span className="data-card-value error-cell">{acc.error_message}</span>
         </div>
       )}
-      {acc.external_ref && (
+      {(acc.external_ref || acc.wallet_reference) && (
         <div className="data-card-row">
           <span className="data-card-label">Reference</span>
-          <span className="data-card-value">{acc.external_ref}</span>
+          <span className="data-card-value">{acc.external_ref || acc.wallet_reference}</span>
         </div>
       )}
       <div className="data-card-row">
-        <span className="data-card-label">Created</span>
+        <span className="data-card-label">Date</span>
         <span className="data-card-value">{new Date(acc.created_at).toLocaleString()}</span>
       </div>
     </div>
@@ -68,22 +104,29 @@ function AccountCard({ acc, packageLabel }) {
 
 export default function AccountsPage() {
   const toast = useToast();
-  const defaultRange = getDefaultReportDateRange();
   const [data, setData] = useState({ accounts: [], pagination: {} });
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
-  const [startDate, setStartDate] = useState(defaultRange.startDate);
-  const [endDate, setEndDate] = useState(defaultRange.endDate);
+  const [activity, setActivity] = useState('all');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
   useEffect(() => {
     setLoading(true);
     operatorApi
-      .getAccounts({ page, limit: 20, search, startDate, endDate })
+      .getAccounts({
+        page,
+        limit: 20,
+        search,
+        ...(startDate ? { startDate } : {}),
+        ...(endDate ? { endDate } : {}),
+        activity,
+      })
       .then((accountsData) => setData(accountsData))
       .finally(() => setLoading(false));
-  }, [page, search, startDate, endDate]);
+  }, [page, search, startDate, endDate, activity]);
 
   const handleSearchChange = (value) => {
     setSearch(value);
@@ -93,13 +136,18 @@ export default function AccountsPage() {
   const handleExport = async () => {
     setExporting(true);
     try {
-      const csv = await operatorApi.exportAccounts({ search, startDate, endDate });
-      downloadCsv(csv, 'accounts-report.csv');
-      toast.success('Accounts report downloaded');
+      const csv = await operatorApi.exportAccounts({
+        search,
+        ...(startDate ? { startDate } : {}),
+        ...(endDate ? { endDate } : {}),
+        activity,
+      });
+      downloadCsv(csv, 'customer-history.csv');
+      toast.success('Customer history downloaded');
     } catch (err) {
       toast.error(err.message || 'Export failed');
     } finally {
-      setExporting(false);
+      setExportting(false);
     }
   };
 
@@ -111,15 +159,17 @@ export default function AccountsPage() {
   return (
     <Layout sidebar={<Sidebar role="operator" />} header={<Header />}>
       <div className="page-header">
-        <h1 className="page-title">Accounts</h1>
-        <p className="page-subtitle">View and download all voucher accounts you have created</p>
+        <h1 className="page-title">Customer History</h1>
+        <p className="page-subtitle">
+          New accounts, customer top-ups, and subscribe actions in one timeline
+        </p>
       </div>
 
       <div className="card">
         <div className="card-header activation-report-header">
           <div>
-            <h3 className="card-title">Account list</h3>
-            <p className="card-subtitle">Filter by date range and search, then download the full report as CSV</p>
+            <h3 className="card-title">History</h3>
+            <p className="card-subtitle">Filter by activity and date, then download the full report as CSV</p>
           </div>
           {pagination.total > 0 && (
             <button
@@ -135,6 +185,22 @@ export default function AccountsPage() {
         </div>
 
         <div className="activation-report-filters">
+          <div className="form-group">
+            <label htmlFor="historyActivity" className="form-label">Activity</label>
+            <select
+              id="historyActivity"
+              className="form-input"
+              value={activity}
+              onChange={(e) => {
+                setActivity(e.target.value);
+                setPage(1);
+              }}
+            >
+              {CUSTOMER_HISTORY_ACTIVITY_FILTERS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
           <div className="form-group">
             <label htmlFor="accountsStartDate" className="form-label">Start date</label>
             <input
@@ -166,7 +232,7 @@ export default function AccountsPage() {
         <TableToolbar
           value={search}
           onChange={handleSearchChange}
-          placeholder="Search by name, phone, or status..."
+          placeholder="Search by name, phone, activity, or reference..."
         />
         <div className="card-body" style={{ padding: 0 }}>
           {loading ? (
@@ -176,14 +242,16 @@ export default function AccountsPage() {
           ) : accounts.length === 0 ? (
             <div className="empty-state">
               <p className="empty-state-title">
-                {search || startDate || endDate ? 'No accounts match your filters' : 'No accounts yet'}
+                {search || startDate || endDate || activity !== 'all'
+                  ? 'No customers match your filters'
+                  : 'No customer history yet'}
               </p>
               <p>
-                {search || startDate || endDate
-                  ? 'Try a different date range or search term'
-                  : 'Create your first account to see it here'}
+                {search || startDate || endDate || activity !== 'all'
+                  ? 'Try a different filter or search term'
+                  : 'Actions from Create Account, Topup & Subscribe, and bulk upload appear here'}
               </p>
-              {!search && !startDate && !endDate && (
+              {!search && !startDate && !endDate && activity === 'all' && (
                 <div className="empty-state-action">
                   <Link to="/operator/create" className="btn btn-primary">
                     <UserPlus size={18} />
@@ -198,46 +266,67 @@ export default function AccountsPage() {
                 <table className="table">
                   <thead>
                     <tr>
-                      <th>Name</th>
+                      <th>Date</th>
+                      <th>Activity</th>
+                      <th>Customer</th>
                       <th>Phone</th>
-                      <th>Package</th>
+                      <th>Service</th>
+                      <th>Packages</th>
                       <th>Status</th>
+                      <th>Charged</th>
                       <th>Details</th>
-                      <th>Created</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {accounts.map((acc) => (
-                      <tr key={acc.id}>
-                        <td style={{ fontWeight: 500 }}>{acc.full_name}</td>
-                        <td>{acc.phone_number}</td>
-                        <td>
-                          <span className="badge badge-info">{accountPackageLabel(acc)}</span>
-                        </td>
-                        <td><StatusBadge status={acc.status} /></td>
-                        <td>
-                          {acc.status === 'failed' && acc.error_message ? (
-                            <span className="error-cell" title={acc.error_message}>
-                              {acc.error_message}
-                            </span>
-                          ) : acc.external_ref ? (
-                            <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
-                              Ref: {acc.external_ref}
-                            </span>
-                          ) : (
-                            <span style={{ color: 'var(--color-text-muted)' }}>—</span>
-                          )}
-                        </td>
-                        <td>{new Date(acc.created_at).toLocaleString()}</td>
-                      </tr>
-                    ))}
+                    {accounts.map((acc) => {
+                      const packages = accountPackageLabel(acc);
+                      return (
+                        <tr key={acc.id}>
+                          <td>{new Date(acc.created_at).toLocaleString()}</td>
+                          <td><ActivityBadge activity={acc.activity} /></td>
+                          <td style={{ fontWeight: 500 }}>{acc.full_name}</td>
+                          <td>{acc.phone_number}</td>
+                          <td>{customerHistoryServiceLabel(acc.service_tag)}</td>
+                          <td>
+                            {packages && packages !== '—' ? (
+                              <span className="badge badge-info">{packages}</span>
+                            ) : (
+                              <span style={{ color: 'var(--color-text-muted)' }}>—</span>
+                            )}
+                          </td>
+                          <td><StatusBadge status={acc.status} /></td>
+                          <td>
+                            {acc.amount_charged != null && Number(acc.amount_charged) > 0
+                              ? formatMoney(acc.amount_charged, 'MVR')
+                              : '—'}
+                          </td>
+                          <td>
+                            {acc.status === 'failed' && acc.error_message ? (
+                              <span className="error-cell" title={acc.error_message}>
+                                {acc.error_message}
+                              </span>
+                            ) : acc.external_ref ? (
+                              <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
+                                Ref: {acc.external_ref}
+                              </span>
+                            ) : (
+                              <span style={{ color: 'var(--color-text-muted)' }}>—</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
 
               <div className="data-cards">
                 {accounts.map((acc) => (
-                  <AccountCard key={acc.id} acc={acc} packageLabel={accountPackageLabel(acc)} />
+                  <AccountCard
+                    key={acc.id}
+                    acc={acc}
+                    packageLabel={accountPackageLabel(acc)}
+                  />
                 ))}
               </div>
 
@@ -247,7 +336,7 @@ export default function AccountsPage() {
                 total={pagination.total}
                 limit={pagination.limit}
                 onPageChange={setPage}
-                itemLabel="accounts"
+                itemLabel="records"
               />
             </>
           )}

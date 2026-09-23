@@ -1,15 +1,24 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { Download, FileBarChart } from 'lucide-react';
 import Layout from '../../components/Layout';
 import Sidebar from '../../components/Sidebar';
 import Header from '../../components/Header';
 import { operatorApi } from '../../api/client';
 import { useToast } from '../../context/ToastContext';
-import TableToolbar, { useClientTable } from '../../components/TableToolbar';
+import TableToolbar from '../../components/TableToolbar';
 import TablePagination from '../../components/TablePagination';
-import { formatColumnLabel, formatSummaryLabel, formatCellValue, formatSummaryValue, isTextSummaryKey, downloadCsv } from '../../utils/reports';
+import {
+  formatColumnLabel,
+  formatSummaryLabel,
+  formatCellValue,
+  formatSummaryValue,
+  isTextSummaryKey,
+  downloadBlob,
+} from '../../utils/reports';
 import { getDefaultReportDateRange } from '../../utils/dates';
 import '../admin/admin-shared.css';
+
+const REPORT_PAGE_SIZE = 50;
 
 export default function OperatorReportsPage() {
   const toast = useToast();
@@ -20,33 +29,54 @@ export default function OperatorReportsPage() {
   });
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [tableLoading, setTableLoading] = useState(false);
   const [tableSearch, setTableSearch] = useState('');
   const [tablePage, setTablePage] = useState(1);
 
-  const buildParams = () => ({
-    startDate: filters.startDate || undefined,
-    endDate: filters.endDate || undefined,
-  });
+  const buildParams = useCallback(
+    (overrides = {}) => ({
+      startDate: filters.startDate || undefined,
+      endDate: filters.endDate || undefined,
+      page: overrides.page ?? tablePage,
+      limit: REPORT_PAGE_SIZE,
+      search: overrides.search !== undefined ? overrides.search || undefined : tableSearch || undefined,
+    }),
+    [filters, tablePage, tableSearch]
+  );
 
-  const generate = async () => {
-    setLoading(true);
+  const loadReport = async ({ page = 1, search = '', fullScreenLoad = false, keepSummary = false }) => {
+    if (fullScreenLoad) setLoading(true);
+    else setTableLoading(true);
     try {
-      const data = await operatorApi.generateReport(buildParams());
-      setReport(data);
-      setTableSearch('');
-      setTablePage(1);
-      toast.success(`Report generated — ${data.rows?.length || 0} row(s)`);
+      const data = await operatorApi.generateReport(buildParams({ page, search: search || undefined }));
+      setReport((prev) => ({
+        ...data,
+        summary: data.summary ?? (keepSummary ? prev?.summary : null),
+      }));
+      setTablePage(page);
+      setTableSearch(search);
+      const total = data.pagination?.total ?? data.rows?.length ?? 0;
+      if (fullScreenLoad) {
+        toast.success(`Report ready — ${total.toLocaleString()} row(s) total`);
+      }
     } catch (err) {
       toast.error(err.message || 'Failed to generate report');
     } finally {
       setLoading(false);
+      setTableLoading(false);
     }
   };
 
+  const generate = () => loadReport({ page: 1, search: '', fullScreenLoad: true });
+
   const exportCsv = async () => {
     try {
-      const csv = await operatorApi.exportReport(buildParams());
-      downloadCsv(csv, 'my-activity-report.csv');
+      toast.success('Preparing download…');
+      const blob = await operatorApi.exportReport({
+        startDate: filters.startDate || undefined,
+        endDate: filters.endDate || undefined,
+      });
+      downloadBlob(blob, 'my-activity-report.csv');
       toast.success('Report downloaded successfully');
     } catch (err) {
       toast.error(err.message || 'Export failed');
@@ -54,23 +84,42 @@ export default function OperatorReportsPage() {
   };
 
   const columns = report?.rows?.[0] ? Object.keys(report.rows[0]) : [];
-  const { rows: pagedRows, pagination: tablePagination } = useClientTable(report?.rows || [], {
-    search: tableSearch,
+  const pagination = report?.pagination || {
     page: tablePage,
-    limit: 20,
-    columns,
-  });
+    limit: REPORT_PAGE_SIZE,
+    total: report?.rows?.length || 0,
+    totalPages: 1,
+  };
 
   const handleTableSearchChange = (value) => {
-    setTableSearch(value);
-    setTablePage(1);
+    if (report) {
+      loadReport({ page: 1, search: value, keepSummary: true });
+    } else {
+      setTableSearch(value);
+      setTablePage(1);
+    }
   };
+
+  const handleTablePageChange = (page) => {
+    if (report) {
+      loadReport({ page, search: tableSearch, keepSummary: true });
+    } else {
+      setTablePage(page);
+    }
+  };
+
+  const canExport =
+    (report?.pagination?.total ?? 0) > 0 ||
+    (report?.rows?.length ?? 0) > 0 ||
+    Boolean(report?.summary);
 
   return (
     <Layout sidebar={<Sidebar role="operator" />} header={<Header />}>
       <div className="page-header">
         <h1 className="page-title">Account Reports</h1>
-        <p className="page-subtitle">Account creation activity by date range</p>
+        <p className="page-subtitle">
+          Account creation activity by date range. Results load in pages; CSV export includes all rows.
+        </p>
       </div>
 
       <div className="card reports-panel" style={{ marginBottom: 24 }}>
@@ -101,8 +150,8 @@ export default function OperatorReportsPage() {
               <FileBarChart size={18} />
               {loading ? 'Generating...' : 'Generate Report'}
             </button>
-            {(report?.rows?.length > 0 || report?.summary) && (
-              <button className="btn btn-secondary" onClick={exportCsv}>
+            {canExport && (
+              <button className="btn btn-secondary" onClick={exportCsv} disabled={loading}>
                 <Download size={18} /> Download CSV
               </button>
             )}
@@ -134,9 +183,12 @@ export default function OperatorReportsPage() {
         <div className="card">
           <div className="card-header">
             <h3 className="card-title">Account Activity</h3>
-            <p className="card-subtitle">Generated {new Date(report.generatedAt).toLocaleString()}</p>
+            <p className="card-subtitle">
+              Generated {new Date(report.generatedAt).toLocaleString()}
+              {pagination.total != null && <> · {pagination.total.toLocaleString()} total rows</>}
+            </p>
           </div>
-          {report.rows.length > 0 && (
+          {(report.rows.length > 0 || pagination.total > 0) && (
             <TableToolbar
               value={tableSearch}
               onChange={handleTableSearchChange}
@@ -144,9 +196,13 @@ export default function OperatorReportsPage() {
             />
           )}
           <div className="card-body" style={{ padding: 0 }}>
-            {report.rows.length === 0 ? (
+            {tableLoading ? (
+              <div className="loading-screen" style={{ height: 120 }}>
+                <div className="spinner" />
+              </div>
+            ) : pagination.total === 0 ? (
               <div className="empty-state"><p>No accounts found for the selected period</p></div>
-            ) : pagedRows.length === 0 ? (
+            ) : report.rows.length === 0 ? (
               <div className="empty-state"><p>No rows match your search</p></div>
             ) : (
               <>
@@ -160,7 +216,7 @@ export default function OperatorReportsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {pagedRows.map((row, i) => (
+                      {report.rows.map((row, i) => (
                         <tr key={i}>
                           {columns.map((c) => (
                             <td key={c}>{formatCellValue(c, row[c])}</td>
@@ -171,11 +227,11 @@ export default function OperatorReportsPage() {
                   </table>
                 </div>
                 <TablePagination
-                  page={tablePagination.page}
-                  totalPages={tablePagination.totalPages}
-                  total={tablePagination.total}
-                  limit={tablePagination.limit}
-                  onPageChange={setTablePage}
+                  page={pagination.page}
+                  totalPages={pagination.totalPages}
+                  total={pagination.total}
+                  limit={pagination.limit}
+                  onPageChange={handleTablePageChange}
                   itemLabel="rows"
                 />
               </>

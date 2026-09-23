@@ -590,7 +590,7 @@ export default function CustomerActionsPage() {
 
           <div className="workflow-footer-links">
             <Link to="/operator/create"><UserPlus size={14} /> Create new account</Link>
-            <Link to="/operator/accounts"><List size={14} /> View all accounts</Link>
+            <Link to="/operator/accounts"><List size={14} /> View customer history</Link>
             <Link to="/operator/transactions"><Receipt size={14} /> Transaction reports</Link>
           </div>
         </div>

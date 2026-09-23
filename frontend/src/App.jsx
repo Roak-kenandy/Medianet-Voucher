@@ -22,6 +22,8 @@ import CustomerActionsPage from './pages/operator/CustomerActionsPage';
 import TransactionReportsPage from './pages/operator/TransactionReportsPage';
 import PackagesPage from './pages/admin/PackagesPage';
 import OperatorTopupPage from './pages/admin/OperatorTopupPage';
+import MarketingAdsPage from './pages/admin/MarketingAdsPage';
+import KnowledgeBasePage from './pages/admin/KnowledgeBasePage';
 import { STAFF_ROLES } from './constants/permissions';
 
 const staffRoute = (element) => (
@@ -44,6 +46,8 @@ export default function App() {
           <Route path="/admin/admins" element={staffRoute(<AdminsPage />)} />
           <Route path="/admin/reports" element={staffRoute(<ReportsPage />)} />
           <Route path="/admin/operator-topup" element={staffRoute(<OperatorTopupPage />)} />
+          <Route path="/admin/marketing-ads" element={staffRoute(<MarketingAdsPage />)} />
+          <Route path="/admin/knowledge-base" element={staffRoute(<KnowledgeBasePage />)} />
           <Route path="/admin/help" element={staffRoute(<HelpCenterPage />)} />
           <Route path="/admin/settings" element={staffRoute(<SettingsPage />)} />
           <Route path="/admin/users" element={<Navigate to="/admin/operators" replace />} />

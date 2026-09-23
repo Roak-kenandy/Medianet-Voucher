@@ -1,10 +1,11 @@
-import { useLocation } from 'react-router-dom';
-import { HelpCircle, Mail, BookOpen, MessageCircle } from 'lucide-react';
+import { useLocation, Link } from 'react-router-dom';
+import { HelpCircle, Mail, BookOpen, MessageCircle, Download } from 'lucide-react';
 import Layout from '../../components/Layout';
 import Sidebar from '../../components/Sidebar';
 import Header from '../../components/Header';
+import KnowledgeDownloads from '../../components/help/KnowledgeDownloads';
 import { useAuth } from '../../context/AuthContext';
-import { isStaffRole } from '../../constants/permissions';
+import { isStaffRole, hasPermission } from '../../constants/permissions';
 
 const ADMIN_FAQ = [
   {
@@ -25,7 +26,11 @@ const ADMIN_FAQ = [
   },
   {
     q: 'How do I generate reports?',
-    a: 'Go to Reports, choose report type (client summary, by period, or package breakdown), set filters (defaults to the last 30 days), and click Generate. Export as CSV when needed.',
+    a: 'Go to Reports, choose report type (client summary, customer summary, by period, or package breakdown), set filters (defaults to the last 30 days), and click Generate. Export as CSV when needed.',
+  },
+  {
+    q: 'How do I publish operator guidelines?',
+    a: 'Open Knowledge Base in the sidebar (Admin and Sales). Upload a PDF or Word file, add a title and description, and keep Published enabled. Operators download files from Help Center → Guidelines & downloads.',
   },
 ];
 
@@ -63,8 +68,16 @@ const OPERATOR_FAQ = [
     a: 'Go to Account Reports, optionally adjust the date range (defaults to the last 30 days), click Generate Report, then Download CSV for your account creation activity.',
   },
   {
+    q: 'What is Customer History?',
+    a: 'Customer History is a single timeline of your customer work: New account (Create Account or bulk upload), Subscribe (adding packages to an existing CRM customer), and Top-up (wallet credit on an existing customer). Filter by activity type or date, or download CSV.',
+  },
+  {
     q: 'Why did an account fail?',
-    a: 'Open Accounts and check the Details column for failed rows. Common reasons include invalid phone numbers or service setup errors. Contact support if you need help resolving a failure.',
+    a: 'Open Customer History and check the Details column for failed rows. Common reasons include invalid phone numbers or service setup errors. Contact support if you need help resolving a failure.',
+  },
+  {
+    q: 'Where are guidelines and manuals?',
+    a: 'Use the Guidelines & downloads section on this page to download PDF or Word documents published by Medianet (process guides, training material, etc.).',
   },
 ];
 
@@ -73,6 +86,8 @@ export default function HelpCenterPage() {
   const { user } = useAuth();
   const role = user?.role || (pathname.startsWith('/admin') ? 'admin' : 'operator');
   const faqs = isStaffRole(role) || role === 'admin' ? ADMIN_FAQ : OPERATOR_FAQ;
+  const isOperator = role === 'operator';
+  const canManageKnowledge = hasPermission(user?.role, 'manageKnowledgeBase');
 
   return (
     <Layout sidebar={<Sidebar role={role} />} header={<Header />}>
@@ -80,6 +95,28 @@ export default function HelpCenterPage() {
         <h1 className="page-title">Help Center</h1>
         <p className="page-subtitle">Guides, FAQs, and support contacts</p>
       </div>
+
+      {isOperator && (
+        <div className="card" style={{ marginBottom: 24 }}>
+          <div className="card-header">
+            <h3 className="card-title">
+              <Download size={18} style={{ verticalAlign: 'middle', marginRight: 8 }} />
+              Guidelines &amp; downloads
+            </h3>
+            <p className="card-subtitle">Official Medianet operator guides and reference documents</p>
+          </div>
+          <div className="card-body">
+            <KnowledgeDownloads />
+          </div>
+        </div>
+      )}
+
+      {canManageKnowledge && (
+        <div className="alert alert-info" style={{ marginBottom: 24 }}>
+          Upload or update operator guidelines in{' '}
+          <Link to="/admin/knowledge-base">Knowledge Base</Link>. Published files appear here for operators.
+        </div>
+      )}
 
       <div className="content-grid">
         <div className="card">

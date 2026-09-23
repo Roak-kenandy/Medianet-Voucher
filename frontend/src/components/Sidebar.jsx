@@ -13,8 +13,12 @@ import {
   Wallet,
   Receipt,
   CircleDollarSign,
+  Megaphone,
+  BookMarked,
 } from 'lucide-react';
-import { isStaffRole } from '../constants/permissions';
+import { isStaffRole, hasPermission } from '../constants/permissions';
+import { useAuth } from '../context/AuthContext';
+import { operatorHasPermission } from '../constants/operatorPermissions';
 import Logo from './Logo';
 import './Sidebar.css';
 
@@ -25,17 +29,19 @@ const adminNav = [
   { to: '/admin/packages', label: 'Packages', icon: Package },
   { to: '/admin/admins', label: 'Staff', icon: Shield },
   { to: '/admin/reports', label: 'Reports', icon: FileBarChart },
+  { to: '/admin/marketing-ads', label: 'Marketing Ads', icon: Megaphone, permission: 'manageMarketingAds' },
+  { to: '/admin/knowledge-base', label: 'Knowledge Base', icon: BookMarked, permission: 'manageKnowledgeBase' },
 ];
 
 const operatorNav = [
-  { to: '/operator', label: 'Dashboard', icon: LayoutDashboard, end: true },
-  { to: '/operator/wallet', label: 'Wallet', icon: Wallet },
-  { to: '/operator/create', label: 'Create Account', icon: UserPlus },
-  { to: '/operator/customers', label: 'Topup & Subscribe', icon: CircleDollarSign },
-  { to: '/operator/bulk', label: 'Bulk Upload', icon: Upload },
-  { to: '/operator/accounts', label: 'Accounts', icon: List },
-  { to: '/operator/transactions', label: 'Transaction Reports', icon: Receipt },
-  { to: '/operator/reports', label: 'Account Reports', icon: FileBarChart },
+  { to: '/operator', label: 'Dashboard', icon: LayoutDashboard, permission: 'dashboard', end: true },
+  { to: '/operator/wallet', label: 'Wallet', icon: Wallet, permission: 'wallet' },
+  { to: '/operator/create', label: 'Create Account', icon: UserPlus, permission: 'createAccount' },
+  { to: '/operator/customers', label: 'Topup & Subscribe', icon: CircleDollarSign, permission: 'customers' },
+  { to: '/operator/bulk', label: 'Bulk Upload', icon: Upload, permission: 'bulkUpload' },
+  { to: '/operator/accounts', label: 'Customer History', icon: List, permission: 'accounts' },
+  { to: '/operator/transactions', label: 'Transaction Reports', icon: Receipt, permission: 'transactions' },
+  { to: '/operator/reports', label: 'Account Reports', icon: FileBarChart, permission: 'reports' },
 ];
 
 const footerNav = (role) => [
@@ -52,7 +58,10 @@ const footerNav = (role) => [
 ];
 
 export default function Sidebar({ role, onNavigate }) {
-  const navItems = isStaffRole(role) ? adminNav : operatorNav;
+  const { user } = useAuth();
+  const navItems = isStaffRole(role)
+    ? adminNav.filter((item) => !item.permission || hasPermission(user?.role, item.permission))
+    : operatorNav.filter((item) => operatorHasPermission(user, item.permission));
 
   return (
     <nav className="sidebar">

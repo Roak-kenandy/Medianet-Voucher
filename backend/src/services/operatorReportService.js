@@ -2,6 +2,9 @@ import { config } from '../config/index.js';
 import { query } from '../db/pool.js';
 import { AppError } from '../utils/errors.js';
 import { getOperatorPackages } from './packageService.js';
+import { REPORT_DEFAULT_PAGE_SIZE } from '../constants/reportLimits.js';
+import { paginationSql } from '../utils/pagination.js';
+import { streamCsvFromOffsetBatches } from './reportPagination.js';
 
 function buildDateFilters(startDate, endDate, column = 'va.created_at') {
   const conditions = [];
@@ -19,7 +22,20 @@ function buildDateFilters(startDate, endDate, column = 'va.created_at') {
   return { conditions, params, clause: conditions.length ? conditions.join(' AND ') : null };
 }
 
-export async function generateOperatorReport(operatorId, { startDate, endDate } = {}) {
+function buildSearchFilter(search) {
+  const term = search?.trim();
+  if (!term) return { clause: '', params: [] };
+  const like = `%${term}%`;
+  return {
+    clause: 'AND (full_name LIKE ? OR phone_number LIKE ? OR status LIKE ?)',
+    params: [like, like, like],
+  };
+}
+
+export async function generateOperatorReport(
+  operatorId,
+  { startDate, endDate, page, limit, search } = {}
+) {
   const [operator] = await query(
     `SELECT o.id, o.client_name, o.package_type, o.email, o.wallet_balance, o.accounts_created
      FROM operators o
@@ -36,6 +52,25 @@ export async function generateOperatorReport(operatorId, { startDate, endDate } 
 
   const { conditions, params, clause } = buildDateFilters(startDate, endDate);
   const dateWhere = clause ? `AND ${clause}` : '';
+  const { clause: searchClause, params: searchParams } = buildSearchFilter(search);
+
+  const listParams = [operatorId, ...params, ...searchParams];
+
+  const [countRow] = await query(
+    `SELECT COUNT(*) AS total
+     FROM voucher_accounts va
+     WHERE operator_id = ? ${dateWhere} ${searchClause}`,
+    listParams
+  );
+  const total = Number(countRow.total) || 0;
+
+  const pageNum = page || 1;
+  const includeSummary = pageNum === 1;
+  const { page: safePage, limit: limitNum, clause: pageClause } = paginationSql(
+    pageNum,
+    limit || REPORT_DEFAULT_PAGE_SIZE,
+    100
+  );
 
   const rows = await query(
     `SELECT
@@ -45,30 +80,29 @@ export async function generateOperatorReport(operatorId, { startDate, endDate } 
        amount_charged AS amountCharged,
        created_at AS createdAt
      FROM voucher_accounts va
-     WHERE operator_id = ? ${dateWhere}
-     ORDER BY created_at DESC`,
-    [operatorId, ...params]
+     WHERE operator_id = ? ${dateWhere} ${searchClause}
+     ORDER BY created_at DESC
+     ${pageClause}`,
+    listParams
   );
 
-  const [statusCounts] = await query(
-    `SELECT
-       COUNT(*) AS total,
-       SUM(CASE WHEN status = 'created' THEN 1 ELSE 0 END) AS created,
-       SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
-       SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
-       COALESCE(SUM(CASE WHEN status = 'created' THEN amount_charged ELSE 0 END), 0) AS spent
-     FROM voucher_accounts va
-     WHERE operator_id = ? ${dateWhere}`,
-    [operatorId, ...params]
-  );
+  let summary = null;
+  if (includeSummary) {
+    const [statusCounts] = await query(
+      `SELECT
+         COUNT(*) AS total,
+         SUM(CASE WHEN status = 'created' THEN 1 ELSE 0 END) AS created,
+         SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
+         SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+         COALESCE(SUM(CASE WHEN status = 'created' THEN amount_charged ELSE 0 END), 0) AS spent
+       FROM voucher_accounts va
+       WHERE operator_id = ? ${dateWhere}`,
+      [operatorId, ...params]
+    );
 
-  const walletBalance = Math.round(Number(operator.wallet_balance) * 100) / 100;
+    const walletBalance = Math.round(Number(operator.wallet_balance) * 100) / 100;
 
-  return {
-    reportType: 'operator_activity',
-    generatedAt: new Date().toISOString(),
-    filters: { startDate, endDate },
-    summary: {
+    summary = {
       clientName: operator.client_name,
       packageType,
       email: operator.email,
@@ -80,12 +114,25 @@ export async function generateOperatorReport(operatorId, { startDate, endDate } 
       pendingInPeriod: Number(statusCounts.pending),
       failedInPeriod: Number(statusCounts.failed),
       spentInPeriod: Math.round(Number(statusCounts.spent) * 100) / 100,
-    },
+    };
+  }
+
+  return {
+    reportType: 'operator_activity',
+    generatedAt: new Date().toISOString(),
+    filters: { startDate, endDate, search: search?.trim() || null },
+    summary,
     rows: rows.map((row) => ({
       ...row,
       amountCharged: row.amountCharged != null ? Number(row.amountCharged) : null,
       createdAt: row.createdAt ? new Date(row.createdAt).toISOString() : '',
     })),
+    pagination: {
+      page: safePage,
+      limit: limitNum,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / limitNum) || 1),
+    },
   };
 }
 
@@ -99,22 +146,58 @@ export function operatorReportToCsv(report) {
     `Spent In Period,${report.summary.spentInPeriod}`,
     `Period Records,${report.summary.recordsInPeriod}`,
     '',
+    'Full Name,Phone,Status,Amount Charged,Created At',
   ];
 
-  if (!report.rows?.length) {
-    lines.push('No account records for selected period');
-    return lines.join('\n');
+  for (const row of report.rows) {
+    lines.push(
+      [
+        row.fullName,
+        row.phoneNumber,
+        row.status,
+        row.amountCharged ?? '',
+        row.createdAt,
+      ].join(',')
+    );
   }
 
-  const headers = ['Full Name', 'Phone Number', 'Status', 'Amount Charged', 'Created At'];
-  lines.push(headers.join(','));
-  report.rows.forEach((row) => {
-    lines.push(
-      [row.fullName, row.phoneNumber, row.status, row.amountCharged ?? '', row.createdAt]
-        .map((val) => `"${String(val ?? '').replace(/"/g, '""')}"`)
-        .join(',')
-    );
-  });
-
   return lines.join('\n');
+}
+
+export async function streamOperatorReportCsv(res, operatorId, filters) {
+  const report = await generateOperatorReport(operatorId, { ...filters, page: 1, limit: 1 });
+  const { conditions, params, clause } = buildDateFilters(filters.startDate, filters.endDate);
+  const dateWhere = clause ? `AND ${clause}` : '';
+
+  const titleLines = report.summary
+    ? [
+        'Operator Activity Report',
+        `Client,${report.summary.clientName}`,
+        `Package,${report.summary.packageType}`,
+        `Wallet Balance,${report.summary.walletBalance}`,
+        `Period Records,${report.summary.recordsInPeriod}`,
+        '',
+      ]
+    : ['Operator Activity Report', ''];
+
+  await streamCsvFromOffsetBatches(res, {
+    filename: 'operator-activity-report.csv',
+    titleLines,
+    headers: ['Full Name', 'Phone', 'Status', 'Amount Charged', 'Created At'],
+    rowToCells: (row) => [
+      row.fullName,
+      row.phoneNumber,
+      row.status,
+      row.amountCharged ?? '',
+      row.createdAt ? new Date(row.createdAt).toISOString() : '',
+    ],
+    countSql: `SELECT COUNT(*) AS total FROM voucher_accounts va WHERE operator_id = ? ${dateWhere}`,
+    countParams: [operatorId, ...params],
+    batchSql: `SELECT full_name AS fullName, phone_number AS phoneNumber, status,
+                      amount_charged AS amountCharged, created_at AS createdAt
+               FROM voucher_accounts va
+               WHERE operator_id = ? ${dateWhere}
+               ORDER BY created_at DESC`,
+    batchParams: [operatorId, ...params],
+  });
 }

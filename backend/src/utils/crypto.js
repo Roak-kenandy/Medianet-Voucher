@@ -9,6 +9,10 @@ export function generateRefreshToken() {
 }
 
 import { isStaffRole } from '../constants/permissions.js';
+import {
+  normalizePortalRole,
+  parseOperatorPermissions,
+} from '../constants/operatorPermissions.js';
 import { formatTrialForResponse } from './trial.js';
 
 export function sanitizeUser(user, role) {
@@ -41,6 +45,11 @@ export function sanitizeUser(user, role) {
       currencyCode: user.currency_code || undefined,
       accountsCreated: user.accounts_created,
       canSelfTopup: user.wallet_self_topup_enabled !== 0,
+      operatorPortalRole: normalizePortalRole(user.portal_role),
+      operatorPermissions: parseOperatorPermissions(
+        normalizePortalRole(user.portal_role),
+        user.portal_permissions
+      ),
       ...formatTrialForResponse(user.trial_account_limit, user.trial_accounts_used),
     };
   }

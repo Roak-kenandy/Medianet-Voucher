@@ -1,3 +1,5 @@
+import { getOperatorHomePath } from './operatorPermissions.js';
+
 export const STAFF_ROLES = ['admin', 'sales', 'finance'];
 
 export const ROLE_LABELS = {
@@ -15,6 +17,8 @@ export const ROLE_PERMISSIONS = {
     managePackageStatus: true,
     manageOperators: true,
     adjustWallet: true,
+    manageMarketingAds: true,
+    manageKnowledgeBase: true,
   },
   sales: {
     createAdmin: false,
@@ -23,6 +27,8 @@ export const ROLE_PERMISSIONS = {
     managePackageStatus: true,
     manageOperators: true,
     adjustWallet: true,
+    manageMarketingAds: true,
+    manageKnowledgeBase: true,
   },
   finance: {
     createAdmin: true,
@@ -31,6 +37,8 @@ export const ROLE_PERMISSIONS = {
     managePackageStatus: false,
     manageOperators: false,
     adjustWallet: true,
+    manageMarketingAds: false,
+    manageKnowledgeBase: false,
   },
 };
 
@@ -50,4 +58,10 @@ export function getHomePathForRole(role) {
   if (isStaffRole(role)) return getStaffHomePath();
   if (role === 'operator') return '/operator';
   return '/login';
+}
+
+export function getHomePathForUser(user) {
+  if (!user?.role) return '/login';
+  if (user.role === 'operator') return getOperatorHomePath(user);
+  return getHomePathForRole(user.role);
 }

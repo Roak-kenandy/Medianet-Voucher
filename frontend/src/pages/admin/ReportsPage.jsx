@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Download, FileBarChart } from 'lucide-react';
 import Layout from '../../components/Layout';
 import Sidebar from '../../components/Sidebar';
@@ -15,20 +16,31 @@ import {
   formatCellValue,
   formatSummaryValue,
   isTextSummaryKey,
-  downloadCsv,
+  downloadBlob,
+  SERVER_PAGINATED_REPORT_TYPES,
 } from '../../utils/reports';
 import { getDefaultReportDateRange } from '../../utils/dates';
 import { useAuth } from '../../context/AuthContext';
 import './admin-shared.css';
 
+const REPORT_PAGE_SIZE = 50;
+
 export default function ReportsPage() {
   const { user } = useAuth();
+  const [searchParams] = useSearchParams();
   const toast = useToast();
   const defaultRange = getDefaultReportDateRange();
+  const initialReportType = (() => {
+    const fromQuery = searchParams.get('type');
+    if (fromQuery && REPORT_TYPES.some((r) => r.value === fromQuery)) {
+      return fromQuery;
+    }
+    return user?.role === 'sales' ? 'sales_report' : 'dealer_topup';
+  })();
   const [operators, setOperators] = useState([]);
   const [packages, setPackages] = useState([]);
   const [filters, setFilters] = useState({
-    reportType: 'dealer_topup',
+    reportType: initialReportType,
     operatorId: '',
     packageType: '',
     startDate: defaultRange.startDate,
@@ -36,6 +48,7 @@ export default function ReportsPage() {
   });
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [tableLoading, setTableLoading] = useState(false);
   const [tableSearch, setTableSearch] = useState('');
   const [tablePage, setTablePage] = useState(1);
 
@@ -44,39 +57,81 @@ export default function ReportsPage() {
     adminApi.getPackages().then(setPackages).catch(() => setPackages([]));
   }, []);
 
-  const buildParams = () => ({
-    reportType: filters.reportType,
-    operatorId: filters.operatorId || undefined,
-    packageType: filters.packageType || undefined,
-    startDate: filters.startDate || undefined,
-    endDate: filters.endDate || undefined,
-  });
+  const isServerPaginated = SERVER_PAGINATED_REPORT_TYPES.includes(filters.reportType);
 
-  const generate = async () => {
-    setLoading(true);
+  const buildParams = useCallback(
+    (overrides = {}) => ({
+      reportType: filters.reportType,
+      operatorId: filters.operatorId || undefined,
+      packageType: filters.packageType || undefined,
+      startDate: filters.startDate || undefined,
+      endDate: filters.endDate || undefined,
+      ...(isServerPaginated
+        ? {
+            page: overrides.page ?? tablePage,
+            limit: REPORT_PAGE_SIZE,
+            search: overrides.search !== undefined ? overrides.search || undefined : tableSearch || undefined,
+          }
+        : {}),
+      ...overrides,
+    }),
+    [filters, isServerPaginated, tablePage, tableSearch]
+  );
+
+  const loadReport = async ({ page = 1, search = '', fullScreenLoad = false, keepSummary = false }) => {
+    if (fullScreenLoad) setLoading(true);
+    else setTableLoading(true);
     try {
-      const data = await adminApi.generateReport(buildParams());
-      setReport(data);
-      setTableSearch('');
-      setTablePage(1);
-      toast.success(`Report generated — ${data.rows?.length || 0} transaction(s)`);
+      const data = await adminApi.generateReport(
+        buildParams({ page, search: search || undefined })
+      );
+      setReport((prev) => ({
+        ...data,
+        summary: data.summary ?? (keepSummary ? prev?.summary : null),
+      }));
+      setTablePage(page);
+      setTableSearch(search);
+      const total = data.pagination?.total ?? data.rows?.length ?? 0;
+      if (fullScreenLoad) {
+        const unit =
+          filters.reportType === 'dealer_topup' ? 'transaction(s)' : 'row(s)';
+        toast.success(`Report ready — ${total.toLocaleString()} ${unit} total`);
+      }
+      return data;
     } catch (err) {
-      toast.error(err.message || 'Failed to generate report');
+      toast.error(err.message || 'Failed to load report');
+      throw err;
     } finally {
       setLoading(false);
+      setTableLoading(false);
     }
   };
 
+  const generate = () => loadReport({ page: 1, search: '', fullScreenLoad: true });
+
   const isTopupReport = filters.reportType === 'dealer_topup';
-  const showPackageFilter = filters.reportType !== 'package_breakdown' && !isTopupReport;
+  const isSalesReport = filters.reportType === 'sales_report';
+  const showPackageFilter =
+    filters.reportType !== 'package_breakdown' && !isTopupReport && !isSalesReport;
   const showOperatorFilter = filters.reportType !== 'package_breakdown';
 
   const exportCsv = async () => {
     try {
-      const csv = await adminApi.exportReport(buildParams());
-      downloadCsv(
-        csv,
-        isTopupReport ? 'operator-topup-report.csv' : `report-${filters.reportType}.csv`
+      toast.success('Preparing download…');
+      const blob = await adminApi.exportReport({
+        reportType: filters.reportType,
+        operatorId: filters.operatorId || undefined,
+        packageType: filters.packageType || undefined,
+        startDate: filters.startDate || undefined,
+        endDate: filters.endDate || undefined,
+      });
+      downloadBlob(
+        blob,
+        isTopupReport
+          ? 'operator-topup-report.csv'
+          : isSalesReport
+            ? 'sales-report.csv'
+            : `report-${filters.reportType}.csv`
       );
       toast.success('Report exported successfully');
     } catch (err) {
@@ -86,24 +141,51 @@ export default function ReportsPage() {
 
   const reportCurrency = report?.summary?.currencyCode || 'MVR';
   const columns = !isTopupReport && report?.rows?.[0] ? Object.keys(report.rows[0]) : [];
-  const { rows: pagedRows, pagination: tablePagination } = useClientTable(report?.rows || [], {
-    search: tableSearch,
-    page: tablePage,
-    limit: 20,
-    columns,
-  });
+
+  const { rows: clientPagedRows, pagination: clientPagination } = useClientTable(
+    isServerPaginated ? [] : report?.rows || [],
+    {
+      search: tableSearch,
+      page: tablePage,
+      limit: 20,
+      columns,
+    }
+  );
 
   const handleTableSearchChange = (value) => {
+    if (isServerPaginated && report) {
+      loadReport({ page: 1, search: value, keepSummary: true });
+      return;
+    }
     setTableSearch(value);
     setTablePage(1);
   };
+
+  const handleTablePageChange = (page) => {
+    if (isServerPaginated && report) {
+      loadReport({ page, search: tableSearch, keepSummary: true });
+      return;
+    }
+    setTablePage(page);
+  };
+
+  const tableRows = isServerPaginated ? report?.rows || [] : clientPagedRows;
+  const tablePagination = isServerPaginated
+    ? report?.pagination || { page: 1, limit: REPORT_PAGE_SIZE, total: 0, totalPages: 1 }
+    : clientPagination;
+
+  const canExport =
+    (report?.pagination?.total ?? 0) > 0 ||
+    (report?.rows?.length ?? 0) > 0 ||
+    Boolean(report?.summary);
 
   return (
     <Layout sidebar={<Sidebar role={user?.role || 'admin'} />} header={<Header />}>
       <div className="page-header">
         <h1 className="page-title">Reports</h1>
         <p className="page-subtitle">
-          Operator top-up, client summary, account activity, and package breakdown reports
+          Sales summary, operator top-ups, client and customer reports, and package breakdown.
+          Large reports load in pages; CSV export includes all matching rows.
         </p>
       </div>
 
@@ -115,7 +197,10 @@ export default function ReportsPage() {
               <select
                 className="form-input"
                 value={filters.reportType}
-                onChange={(e) => setFilters({ ...filters, reportType: e.target.value })}
+                onChange={(e) => {
+                  setFilters({ ...filters, reportType: e.target.value });
+                  setReport(null);
+                }}
               >
                 {REPORT_TYPES.map((r) => (
                   <option key={r.value} value={r.value}>{r.label}</option>
@@ -181,8 +266,8 @@ export default function ReportsPage() {
               <FileBarChart size={18} />
               {loading ? 'Generating...' : 'Generate Report'}
             </button>
-            {(report?.rows?.length > 0 || report?.summary) && (
-              <button className="btn btn-secondary" onClick={exportCsv}>
+            {canExport && (
+              <button className="btn btn-secondary" onClick={exportCsv} disabled={loading}>
                 <Download size={18} />
                 {isTopupReport ? 'Download Excel (CSV)' : 'Export CSV'}
               </button>
@@ -196,8 +281,10 @@ export default function ReportsPage() {
           report={report}
           search={tableSearch}
           onSearchChange={handleTableSearchChange}
-          page={tablePage}
-          onPageChange={setTablePage}
+          page={tablePagination.page}
+          onPageChange={handleTablePageChange}
+          pagination={tablePagination}
+          loading={tableLoading}
         />
       )}
 
@@ -225,9 +312,14 @@ export default function ReportsPage() {
         <div className="card">
           <div className="card-header">
             <h3 className="card-title">Results</h3>
-            <p className="card-subtitle">Generated {new Date(report.generatedAt).toLocaleString()}</p>
+            <p className="card-subtitle">
+              Generated {new Date(report.generatedAt).toLocaleString()}
+              {report.pagination?.total != null && (
+                <> · {report.pagination.total.toLocaleString()} total rows</>
+              )}
+            </p>
           </div>
-          {report.rows.length > 0 && (
+          {(report.rows.length > 0 || isServerPaginated) && (
             <TableToolbar
               value={tableSearch}
               onChange={handleTableSearchChange}
@@ -235,9 +327,13 @@ export default function ReportsPage() {
             />
           )}
           <div className="card-body" style={{ padding: 0 }}>
-            {report.rows.length === 0 ? (
+            {tableLoading ? (
+              <div className="loading-screen" style={{ height: 120 }}>
+                <div className="spinner" />
+              </div>
+            ) : report.rows.length === 0 && (report.pagination?.total ?? 0) === 0 ? (
               <div className="empty-state"><p>No data for selected filters</p></div>
-            ) : pagedRows.length === 0 ? (
+            ) : tableRows.length === 0 ? (
               <div className="empty-state"><p>No rows match your search</p></div>
             ) : (
               <>
@@ -251,7 +347,7 @@ export default function ReportsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {pagedRows.map((row, i) => (
+                      {tableRows.map((row, i) => (
                         <tr key={i}>
                           {columns.map((c) => (
                             <td key={c}>{formatCellValue(c, row[c], reportCurrency)}</td>
@@ -266,7 +362,7 @@ export default function ReportsPage() {
                   totalPages={tablePagination.totalPages}
                   total={tablePagination.total}
                   limit={tablePagination.limit}
-                  onPageChange={setTablePage}
+                  onPageChange={handleTablePageChange}
                   itemLabel="rows"
                 />
               </>

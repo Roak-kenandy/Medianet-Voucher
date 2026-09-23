@@ -9,6 +9,7 @@ import {
   Receipt,
   List,
   AlertTriangle,
+  ChevronRight,
 } from 'lucide-react';
 import { formatMoney } from '../../utils/money';
 import Layout from '../../components/Layout';
@@ -19,7 +20,9 @@ import DonutChart from '../../components/charts/DonutChart';
 import BarChart from '../../components/charts/BarChart';
 import { operatorApi } from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
+import { operatorHasPermission } from '../../constants/operatorPermissions';
 import TrialBanner from '../../components/operator/TrialBanner';
+import OperatorMarketingAds from '../../components/operator/OperatorMarketingAds';
 import { getServiceScopeLabel, getServiceTagLabel } from '../../constants/serviceTags';
 import './operator-dashboard.css';
 
@@ -57,6 +60,7 @@ const QUICK_ACTIONS = [
     title: 'Create Account',
     desc: 'New customer with subscription',
     icon: UserPlus,
+    permission: 'createAccount',
     primary: true,
   },
   {
@@ -64,37 +68,78 @@ const QUICK_ACTIONS = [
     title: 'Topup',
     desc: 'Add credit to a customer\'s account',
     icon: CircleDollarSign,
+    permission: 'customers',
   },
   {
     to: '/operator/customers?mode=subscribe',
     title: 'Subscribe',
     desc: 'Add package subscription to customer',
     icon: PackageCheck,
+    permission: 'customers',
   },
   {
     to: '/operator/wallet',
     title: 'Top Up Wallet',
     desc: 'Add funds to your balance',
     icon: Wallet,
+    permission: 'wallet',
   },
   {
     to: '/operator/transactions',
     title: 'Transactions',
     desc: 'View charges and top-ups',
     icon: Receipt,
+    permission: 'transactions',
   },
 ];
+
+function QuickActionLinks({ actions, variant = 'grid' }) {
+  const isHero = variant === 'hero';
+  return (
+    <div className={`operator-dashboard-actions${isHero ? ' is-hero' : ''}`}>
+      {actions.map(({ to, title, desc, icon: Icon, primary }) => (
+        <Link key={to} to={to} className={`operator-action-card${primary ? ' primary' : ''}`}>
+          <div className="operator-action-icon">
+            <Icon size={18} />
+          </div>
+          {isHero ? (
+            <>
+              <div className="operator-action-text">
+                <span className="operator-action-title">{title}</span>
+                <span className="operator-action-desc">{desc}</span>
+              </div>
+              <ChevronRight size={20} className="operator-action-chevron" aria-hidden />
+            </>
+          ) : (
+            <>
+              <span className="operator-action-title">{title}</span>
+              <span className="operator-action-desc">{desc}</span>
+            </>
+          )}
+        </Link>
+      ))}
+    </div>
+  );
+}
 
 export default function OperatorDashboard() {
   const { user } = useAuth();
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [marketingAds, setMarketingAds] = useState(null);
 
   useEffect(() => {
     operatorApi
       .getStats()
       .then(setStats)
       .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    operatorApi
+      .getMarketingAds()
+      .then((items) => setMarketingAds(items || []))
+      .catch(() => setMarketingAds([]));
   }, []);
 
   const today = new Date().toLocaleDateString('en-US', {
@@ -123,21 +168,33 @@ export default function OperatorDashboard() {
 
   const maxSpend = spendRows.reduce((max, row) => Math.max(max, row.amount), 0);
 
+  const quickActions = useMemo(
+    () => QUICK_ACTIONS.filter((action) => operatorHasPermission(user, action.permission)),
+    [user]
+  );
+
+  const showMarketingHero = marketingAds && marketingAds.length > 0;
+
   return (
     <Layout sidebar={<Sidebar role="operator" />} header={<Header />}>
-      <div className="operator-dashboard-welcome">
+      <div className={`operator-dashboard-welcome${showMarketingHero ? ' is-compact' : ''}`}>
         <div>
-          <h1 className="page-title">Welcome back{user?.clientName || stats?.clientName ? `, ${user?.clientName || stats?.clientName}` : ''}</h1>
+          <h1 className="page-title">
+            Welcome back
+            {user?.clientName || stats?.clientName ? `, ${user?.clientName || stats?.clientName}` : ''}
+          </h1>
           <p className="page-subtitle">{today}</p>
-          <div className="operator-dashboard-welcome-meta">
-            <span className="badge badge-info">{getServiceScopeLabel(stats?.serviceScope || 'BOTH')}</span>
-            {(stats?.packageNames || []).slice(0, 3).map((name) => (
-              <span key={name} className="badge badge-neutral">{name}</span>
-            ))}
-            {(stats?.packageNames?.length || 0) > 3 && (
-              <span className="badge badge-neutral">+{(stats.packageNames.length - 3)} more</span>
-            )}
-          </div>
+          {!showMarketingHero && (
+            <div className="operator-dashboard-welcome-meta">
+              <span className="badge badge-info">{getServiceScopeLabel(stats?.serviceScope || 'BOTH')}</span>
+              {(stats?.packageNames || []).slice(0, 3).map((name) => (
+                <span key={name} className="badge badge-neutral">{name}</span>
+              ))}
+              {(stats?.packageNames?.length || 0) > 3 && (
+                <span className="badge badge-neutral">+{(stats.packageNames.length - 3)} more</span>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -172,17 +229,36 @@ export default function OperatorDashboard() {
             </div>
           )}
 
-          <div className="operator-dashboard-actions">
-            {QUICK_ACTIONS.map(({ to, title, desc, icon: Icon, primary }) => (
-              <Link key={to} to={to} className={`operator-action-card${primary ? ' primary' : ''}`}>
-                <div className="operator-action-icon">
-                  <Icon size={18} />
+          {showMarketingHero ? (
+            <section className="operator-spotlight" aria-labelledby="operator-spotlight-heading">
+              <div className="operator-spotlight-grid">
+                <OperatorMarketingAds ads={marketingAds} variant="spotlight" />
+                <div className="operator-spotlight-services">
+                  <div className="operator-spotlight-services-card">
+                    <header className="operator-spotlight-services-header">
+                      <h2 id="operator-spotlight-heading" className="operator-spotlight-services-title">
+                        Select a service
+                      </h2>
+                      <p className="operator-spotlight-services-sub">
+                        Choose how you&apos;d like to proceed
+                      </p>
+                      <div className="operator-dashboard-welcome-meta operator-spotlight-meta">
+                        <span className="badge badge-info">
+                          {getServiceScopeLabel(stats?.serviceScope || 'BOTH')}
+                        </span>
+                        {(stats?.packageNames || []).slice(0, 2).map((name) => (
+                          <span key={name} className="badge badge-neutral">{name}</span>
+                        ))}
+                      </div>
+                    </header>
+                    <QuickActionLinks actions={quickActions} variant="hero" />
+                  </div>
                 </div>
-                <span className="operator-action-title">{title}</span>
-                <span className="operator-action-desc">{desc}</span>
-              </Link>
-            ))}
-          </div>
+              </div>
+            </section>
+          ) : (
+            <QuickActionLinks actions={quickActions} variant="grid" />
+          )}
 
           <div className="operator-kpi-grid">
             <div className="operator-kpi-wallet">
@@ -337,14 +413,14 @@ export default function OperatorDashboard() {
             <div className="card">
               <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
-                  <h3 className="card-title">Recent accounts</h3>
+                  <h3 className="card-title">Recent customers</h3>
                   <p className="card-subtitle">Latest customer activity</p>
                 </div>
                 <Link to="/operator/accounts" className="btn btn-secondary btn-sm">View all</Link>
               </div>
               <div className="card-body operator-panel-list">
                 {(stats?.recentAccounts || []).length === 0 ? (
-                  <div className="empty-state"><p>No accounts yet</p></div>
+                  <div className="empty-state"><p>No customer history yet</p></div>
                 ) : (
                   stats.recentAccounts.map((account) => (
                     <div key={account.id} className="operator-panel-item">
@@ -403,7 +479,7 @@ export default function OperatorDashboard() {
 
           <div className="operator-dashboard-footer">
             <Link to="/operator/bulk"><Upload size={14} /> Bulk upload</Link>
-            <Link to="/operator/accounts"><List size={14} /> All accounts</Link>
+            <Link to="/operator/accounts"><List size={14} /> Customer history</Link>
             <Link to="/operator/reports">Account reports</Link>
           </div>
         </>

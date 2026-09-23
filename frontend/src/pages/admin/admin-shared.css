@@ -590,3 +590,10 @@
   margin: 0;
   cursor: pointer;
 }
+
+.operator-permissions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px 16px;
+  margin-top: 8px;
+}

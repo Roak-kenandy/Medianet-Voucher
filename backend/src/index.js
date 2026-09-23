@@ -1,4 +1,7 @@
 import express from 'express';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { ensureUploadDirs } from './config/uploads.js';
 import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -20,6 +23,9 @@ try {
 }
 
 const app = express();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+ensureUploadDirs();
 
 app.set('trust proxy', 1);
 
@@ -38,6 +44,13 @@ app.use(
 );
 app.use(express.json({ limit: '100kb' }));
 app.use(cookieParser());
+
+app.use(
+  '/uploads',
+  express.static(path.join(__dirname, '../uploads'), {
+    maxAge: isProduction ? '7d' : 0,
+  })
+);
 
 app.get('/api/health', (_req, res) => {
   res.json({ success: true, data: { status: 'ok', timestamp: new Date().toISOString() } });

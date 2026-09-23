@@ -11,6 +11,11 @@ import {
 import { sanitizeUser } from '../utils/crypto.js';
 import { AppError } from '../utils/errors.js';
 import { isStaffRole, hasPermission, STAFF_ROLES } from '../constants/permissions.js';
+import {
+  normalizePortalRole,
+  parseOperatorPermissions,
+  operatorHasPermission,
+} from '../constants/operatorPermissions.js';
 
 export function authenticate(req, _res, next) {
   const authHeader = req.headers.authorization;
@@ -47,9 +52,35 @@ export function ensureActiveAccount(req, _res, next) {
       if (!user || !user.is_active) {
         return next(new AppError('Account is inactive or not found', 401, 'UNAUTHORIZED'));
       }
+      if (req.user.role === 'operator') {
+        const portalRole = normalizePortalRole(user.portal_role);
+        req.user.operatorPortalRole = portalRole;
+        req.user.operatorPermissions = parseOperatorPermissions(
+          portalRole,
+          user.portal_permissions
+        );
+      }
       next();
     })
     .catch(next);
+}
+
+export function requireOperatorPermission(permission) {
+  return (req, _res, next) => {
+    if (req.user?.role !== 'operator') {
+      return next(new AppError('Access denied', 403, 'FORBIDDEN'));
+    }
+    if (
+      !operatorHasPermission(
+        req.user.operatorPortalRole,
+        req.user.operatorPermissions,
+        permission
+      )
+    ) {
+      return next(new AppError('Access denied', 403, 'FORBIDDEN'));
+    }
+    next();
+  };
 }
 
 export function requireRole(...roles) {

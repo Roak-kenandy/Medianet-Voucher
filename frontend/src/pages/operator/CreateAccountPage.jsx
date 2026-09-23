@@ -195,7 +195,7 @@ export default function CreateAccountPage() {
               </p>
               <div className="success-panel-actions">
                 <Link to="/operator/accounts" className="btn btn-primary btn-sm">
-                  <List size={16} /> View Accounts
+                  <List size={16} /> View customer history
                 </Link>
                 <Link to="/operator/transactions" className="btn btn-secondary btn-sm">
                   <Receipt size={16} /> View Transaction
@@ -295,7 +295,7 @@ export default function CreateAccountPage() {
 
           <div className="workflow-footer-links">
             <Link to="/operator/customers?mode=subscribe">Subscribe instead</Link>
-            <Link to="/operator/accounts"><List size={14} /> View all accounts</Link>
+            <Link to="/operator/accounts"><List size={14} /> View customer history</Link>
             <Link to="/operator/transactions"><Receipt size={14} /> Transaction reports</Link>
           </div>
         </div>

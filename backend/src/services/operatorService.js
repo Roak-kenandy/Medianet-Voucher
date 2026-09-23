@@ -304,61 +304,188 @@ export async function getOperatorStats(operatorId) {
   };
 }
 
-function buildAccountListFilters(operatorId, { search = '', startDate, endDate } = {}) {
-  const filters = ['va.operator_id = ?'];
-  const params = [operatorId];
-
-  if (search) {
-    filters.push('(va.full_name LIKE ? OR va.phone_number LIKE ? OR va.status LIKE ?)');
-    const term = `%${search}%`;
-    params.push(term, term, term);
+export function customerHistoryActivityLabel(activity) {
+  switch (activity) {
+    case 'customer_subscribe':
+      return 'Subscribe';
+    case 'bulk_create':
+      return 'New account (bulk)';
+    case 'customer_crm_topup':
+    case 'customer_topup':
+      return 'Top-up';
+    case 'create_account':
+    default:
+      return 'New account';
   }
-
-  if (startDate) {
-    filters.push('va.created_at >= ?');
-    params.push(`${startDate} 00:00:00`);
-  }
-
-  if (endDate) {
-    filters.push('va.created_at <= ?');
-    params.push(`${endDate} 23:59:59`);
-  }
-
-  return { where: `WHERE ${filters.join(' AND ')}`, params };
 }
 
-const ACCOUNTS_SELECT = `
-  SELECT va.id, va.full_name, va.phone_number, va.service_tag, va.status, va.external_ref, va.error_message,
-         va.created_at, va.package_id, va.amount_charged,
-         GROUP_CONCAT(DISTINCT p.name ORDER BY p.name SEPARATOR ', ') AS package_names
-  FROM voucher_accounts va
-  LEFT JOIN voucher_account_packages vap ON vap.voucher_account_id = va.id
-  LEFT JOIN packages p ON p.id = COALESCE(vap.package_id, va.package_id)
-`;
+function activityFilterSql(activityFilter) {
+  if (!activityFilter || activityFilter === 'all') {
+    return { clause: null, params: [] };
+  }
+  if (activityFilter === 'new_account') {
+    return {
+      clause: `history.activity IN ('create_account', 'bulk_create')`,
+      params: [],
+    };
+  }
+  if (activityFilter === 'subscribe') {
+    return { clause: `history.activity = 'customer_subscribe'`, params: [] };
+  }
+  if (activityFilter === 'topup') {
+    return {
+      clause: `history.activity IN ('customer_crm_topup', 'customer_topup')`,
+      params: [],
+    };
+  }
+  return { clause: null, params: [] };
+}
+
+function buildCustomerHistoryQuery(operatorId, { search = '', startDate, endDate, activityFilter = 'all' } = {}) {
+  const accountDateFilters = ['va.operator_id = ?'];
+  const topupDateFilters = ['wt.operator_id = ?'];
+  const accountParams = [operatorId];
+  const topupParams = [operatorId];
+
+  if (startDate) {
+    accountDateFilters.push('va.created_at >= ?');
+    topupDateFilters.push('COALESCE(wt.completed_at, wt.created_at) >= ?');
+    const bound = `${startDate} 00:00:00`;
+    accountParams.push(bound);
+    topupParams.push(bound);
+  }
+  if (endDate) {
+    accountDateFilters.push('va.created_at <= ?');
+    topupDateFilters.push('COALESCE(wt.completed_at, wt.created_at) <= ?');
+    const bound = `${endDate} 23:59:59`;
+    accountParams.push(bound);
+    topupParams.push(bound);
+  }
+
+  const params = [...accountParams, ...topupParams];
+
+  const accountWhere = accountDateFilters.join(' AND ');
+  const topupWhere = `${topupDateFilters.join(' AND ')}
+    AND wt.type = 'debit'
+    AND wt.status = 'completed'
+    AND JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.activity')) IN ('customer_crm_topup', 'customer_topup')`;
+
+  const unionSql = `
+    SELECT * FROM (
+      SELECT
+        CONCAT('va-', va.id) AS history_id,
+        va.created_at AS occurred_at,
+        va.full_name AS customer_name,
+        va.phone_number,
+        va.service_tag,
+        COALESCE(va.origin_activity, 'create_account') AS activity,
+        va.status,
+        GROUP_CONCAT(DISTINCT p.name ORDER BY p.name SEPARATOR ', ') AS package_names,
+        va.amount_charged,
+        va.external_ref,
+        va.error_message,
+        NULL AS wallet_reference
+      FROM voucher_accounts va
+      LEFT JOIN voucher_account_packages vap ON vap.voucher_account_id = va.id
+      LEFT JOIN packages p ON p.id = COALESCE(vap.package_id, va.package_id)
+      WHERE ${accountWhere}
+      GROUP BY va.id, va.created_at, va.full_name, va.phone_number, va.service_tag, va.origin_activity,
+               va.status, va.amount_charged, va.external_ref, va.error_message
+
+      UNION ALL
+
+      SELECT
+        CONCAT('wt-', wt.id) AS history_id,
+        COALESCE(wt.completed_at, wt.created_at) AS occurred_at,
+        JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.customerName')) AS customer_name,
+        JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.phoneNumber')) AS phone_number,
+        JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.serviceTag')) AS service_tag,
+        JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.activity')) AS activity,
+        'completed' AS status,
+        NULL AS package_names,
+        wt.net_amount AS amount_charged,
+        wt.reference AS external_ref,
+        NULL AS error_message,
+        wt.reference AS wallet_reference
+      FROM wallet_transactions wt
+      WHERE ${topupWhere}
+    ) history
+    WHERE 1=1`;
+
+  const outerParams = [...params];
+  const outerFilters = [];
+
+  const { clause: activityClause, params: activityParams } = activityFilterSql(activityFilter);
+  if (activityClause) {
+    outerFilters.push(activityClause);
+    outerParams.push(...activityParams);
+  }
+
+  if (search) {
+    const term = `%${search}%`;
+    outerFilters.push(`(
+      history.customer_name LIKE ?
+      OR history.phone_number LIKE ?
+      OR history.status LIKE ?
+      OR history.activity LIKE ?
+      OR history.package_names LIKE ?
+      OR history.external_ref LIKE ?
+    )`);
+    outerParams.push(term, term, term, term, term, term);
+  }
+
+  const outerWhere = outerFilters.length
+    ? `${unionSql} AND ${outerFilters.join(' AND ')}`
+    : unionSql;
+
+  return { outerWhere, outerParams };
+}
+
+function mapCustomerHistoryRow(row) {
+  const activity = row.activity || 'create_account';
+  return {
+    id: row.history_id,
+    full_name: row.customer_name,
+    phone_number: row.phone_number,
+    service_tag: row.service_tag,
+    activity,
+    activity_label: customerHistoryActivityLabel(activity),
+    status: row.status,
+    package_names: row.package_names || '',
+    amount_charged: row.amount_charged != null ? Number(row.amount_charged) : null,
+    external_ref: row.external_ref,
+    error_message: row.error_message,
+    wallet_reference: row.wallet_reference,
+    created_at: row.occurred_at,
+  };
+}
 
 export async function listAccounts(
   operatorId,
-  { page = 1, limit = 20, search = '', startDate, endDate } = {}
+  { page = 1, limit = 20, search = '', startDate, endDate, activity = 'all' } = {}
 ) {
   const { page: pageNum, limit: limitNum, clause } = paginationSql(page, limit);
-  const { where, params } = buildAccountListFilters(operatorId, { search, startDate, endDate });
+  const { outerWhere, outerParams } = buildCustomerHistoryQuery(operatorId, {
+    search,
+    startDate,
+    endDate,
+    activityFilter: activity,
+  });
 
-  const accounts = await query(
-    `${ACCOUNTS_SELECT}
-     ${where}
-     GROUP BY va.id, va.full_name, va.phone_number, va.service_tag, va.status, va.external_ref, va.error_message,
-              va.created_at, va.package_id, va.amount_charged
-     ORDER BY va.created_at DESC
+  const rows = await query(
+    `${outerWhere}
+     ORDER BY history.occurred_at DESC
      ${clause}`,
-    params
+    outerParams
   );
 
   const [countRow] = await query(
-    `SELECT COUNT(*) AS total FROM voucher_accounts va ${where}`,
-    params
+    `SELECT COUNT(*) AS total FROM (${outerWhere}) counted`,
+    outerParams
   );
 
   const total = Number(countRow.total) || 0;
+  const accounts = rows.map(mapCustomerHistoryRow);
 
   return {
     accounts,
@@ -381,44 +508,50 @@ function csvEscape(value) {
 
 export async function exportAccountsCsv(
   operatorId,
-  { search = '', startDate, endDate } = {}
+  { search = '', startDate, endDate, activity = 'all' } = {}
 ) {
-  const { where, params } = buildAccountListFilters(operatorId, { search, startDate, endDate });
+  const { outerWhere, outerParams } = buildCustomerHistoryQuery(operatorId, {
+    search,
+    startDate,
+    endDate,
+    activityFilter: activity,
+  });
 
   const [operator] = await query(
     `SELECT client_name, email FROM operators WHERE id = ? LIMIT 1`,
     [operatorId]
   );
 
-  const accounts = await query(
-    `${ACCOUNTS_SELECT}
-     ${where}
-     GROUP BY va.id, va.full_name, va.phone_number, va.service_tag, va.status, va.external_ref, va.error_message,
-              va.created_at, va.package_id, va.amount_charged
-     ORDER BY va.created_at DESC
+  const rows = await query(
+    `${outerWhere}
+     ORDER BY history.occurred_at DESC
      LIMIT 10000`,
-    params
+    outerParams
   );
 
+  const accounts = rows.map(mapCustomerHistoryRow);
+
   const lines = [
-    'Medianet Voucher — Accounts Report',
+    'Medianet Voucher — Customer History',
     `Generated,${new Date().toISOString()}`,
     `Operator,${operator?.client_name || ''}`,
     `Email,${operator?.email || ''}`,
     startDate ? `Start date,${startDate}` : 'Start date,All',
     endDate ? `End date,${endDate}` : 'End date,All',
+    activity && activity !== 'all' ? `Activity filter,${activity}` : 'Activity filter,All',
     search ? `Search filter,${search}` : 'Search filter,All',
     `Total records,${accounts.length}`,
     '',
     [
-      'Created At',
-      'Full Name',
+      'Date',
+      'Activity',
+      'Customer Name',
       'Phone Number',
-      'Service Tag',
+      'Service',
       'Package(s)',
       'Status',
-      'Amount Charged',
-      'External Reference',
+      'Amount Charged (MVR)',
+      'Reference',
       'Error Message',
     ].join(','),
   ];
@@ -427,13 +560,14 @@ export async function exportAccountsCsv(
     lines.push(
       [
         row.created_at ? new Date(row.created_at).toISOString() : '',
+        row.activity_label,
         row.full_name,
         row.phone_number,
-        row.service_tag,
+        row.service_tag || '',
         row.package_names || '',
         row.status,
-        row.amount_charged ?? 0,
-        row.external_ref || '',
+        row.amount_charged ?? '',
+        row.external_ref || row.wallet_reference || '',
         row.error_message || '',
       ]
         .map(csvEscape)
@@ -709,8 +843,8 @@ export async function subscribeCustomer(operatorId, data, reqMeta = {}) {
 
     const primaryPackageId = resolvedPackageIds[0];
     const [insertResult] = await connection.execute(
-      `INSERT INTO voucher_accounts (operator_id, package_id, full_name, phone_number, service_tag, status)
-       VALUES (?, ?, ?, ?, ?, 'pending')`,
+      `INSERT INTO voucher_accounts (operator_id, package_id, full_name, phone_number, service_tag, origin_activity, status)
+       VALUES (?, ?, ?, ?, ?, 'customer_subscribe', 'pending')`,
       [operatorId, primaryPackageId, data.fullName.trim(), data.phoneNumber.trim(), data.serviceTag]
     );
 
@@ -926,9 +1060,16 @@ async function createAndProvisionAccounts(
   for (const account of accounts) {
     const primaryPackageId = packageIds[0];
     const [insertResult] = await connection.execute(
-      `INSERT INTO voucher_accounts (operator_id, package_id, full_name, phone_number, service_tag, status)
-       VALUES (?, ?, ?, ?, ?, 'pending')`,
-      [operatorId, primaryPackageId, account.fullName.trim(), account.phoneNumber.trim(), serviceTag]
+      `INSERT INTO voucher_accounts (operator_id, package_id, full_name, phone_number, service_tag, origin_activity, status)
+       VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
+      [
+        operatorId,
+        primaryPackageId,
+        account.fullName.trim(),
+        account.phoneNumber.trim(),
+        serviceTag,
+        activity,
+      ]
     );
 
     const voucherAccountId = insertResult.insertId;

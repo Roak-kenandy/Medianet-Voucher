@@ -395,7 +395,7 @@ export default function BulkUploadPage() {
               </div>
               <div style={{ marginTop: 16 }}>
                 <Link to="/operator/accounts" className="btn btn-secondary btn-sm">
-                  <List size={16} /> View all accounts
+                  <List size={16} /> View customer history
                 </Link>
               </div>
             </div>

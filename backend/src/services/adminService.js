@@ -15,6 +15,17 @@ import {
 import {
   assertPackagesMatchServiceScope,
 } from '../constants/serviceTags.js';
+import {
+  normalizePortalRole,
+  parseOperatorPermissions,
+} from '../constants/operatorPermissions.js';
+import { getSalesDashboardStats } from './salesReportService.js';
+
+function serializePortalPermissions(portalRole, portalPermissions) {
+  const role = normalizePortalRole(portalRole);
+  if (role === 'supervisor') return null;
+  return JSON.stringify(parseOperatorPermissions('user', portalPermissions));
+}
 
 function formatPackageSummary(plans = []) {
   return plans.map((plan) => plan.name).join(', ');
@@ -59,8 +70,11 @@ export async function getAdminStats() {
     FROM operators
   `);
 
+  const sales = await getSalesDashboardStats({ days: 30 });
+
   return {
     ...stats,
+    sales,
     charts: {
       statusBreakdown: statusBreakdown.map((row) => ({
         status: row.status,
@@ -76,6 +90,9 @@ export async function getAdminStats() {
         { label: 'Active', count: Number(operatorStatus[0]?.active) || 0 },
         { label: 'Inactive', count: Number(operatorStatus[0]?.inactive) || 0 },
       ],
+      topupCollectedTrend: sales.charts.topupCollectedTrend,
+      walletSpendTrend: sales.charts.walletSpendTrend,
+      topOperatorsBySales: sales.charts.topOperatorsBySales,
     },
   };
 }
@@ -214,6 +231,7 @@ export async function listOperators({ page = 1, limit = 20, search = '' } = {}) 
     `SELECT DISTINCT
        o.id, o.client_name, o.package_id, o.package_type, o.service_scope, o.notes, o.email, o.wallet_balance,
        o.wallet_commission_type, o.wallet_commission_value, o.wallet_self_topup_enabled,
+       o.portal_role, o.portal_permissions,
        o.trial_account_limit, o.trial_accounts_used, o.accounts_created,
        o.is_active, o.created_at, o.updated_at,
        a.name AS created_by_name
@@ -282,8 +300,8 @@ export async function createOperator(adminId, data, reqMeta = {}) {
       `INSERT INTO operators
          (admin_id, client_name, package_type, service_scope, package_id, notes, email, password_hash,
           account_quota, wallet_balance, wallet_commission_type, wallet_commission_value,
-          wallet_self_topup_enabled)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)`,
+          wallet_self_topup_enabled, portal_role, portal_permissions)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?)`,
       [
         adminId,
         data.clientName.trim(),
@@ -296,6 +314,8 @@ export async function createOperator(adminId, data, reqMeta = {}) {
         data.walletCommissionType,
         data.walletCommissionValue,
         data.canSelfTopup === false ? 0 : 1,
+        normalizePortalRole(data.portalRole),
+        serializePortalPermissions(data.portalRole, data.portalPermissions),
       ]
     );
 
@@ -336,6 +356,11 @@ export async function createOperator(adminId, data, reqMeta = {}) {
       walletCommissionType: data.walletCommissionType,
       walletCommissionValue: data.walletCommissionValue,
       canSelfTopup: data.canSelfTopup !== false,
+      portalRole: normalizePortalRole(data.portalRole),
+      portalPermissions: parseOperatorPermissions(
+        normalizePortalRole(data.portalRole),
+        data.portalPermissions
+      ),
       accountsCreated: 0,
       isActive: true,
     };
@@ -438,6 +463,8 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
       data.walletCommissionType,
       data.walletCommissionValue,
       data.canSelfTopup === false ? 0 : 1,
+      normalizePortalRole(data.portalRole),
+      serializePortalPermissions(data.portalRole, data.portalPermissions),
       data.isActive ? 1 : 0,
       operatorId,
     ];
@@ -446,7 +473,7 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
       UPDATE operators
       SET client_name = ?, package_type = ?, service_scope = ?, package_id = ?, notes = ?, email = ?,
           wallet_commission_type = ?, wallet_commission_value = ?, wallet_self_topup_enabled = ?,
-          is_active = ?
+          portal_role = ?, portal_permissions = ?, is_active = ?
       WHERE id = ?
     `;
 
@@ -456,10 +483,10 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
         UPDATE operators
         SET client_name = ?, package_type = ?, service_scope = ?, package_id = ?, notes = ?, email = ?,
             wallet_commission_type = ?, wallet_commission_value = ?, wallet_self_topup_enabled = ?,
-            is_active = ?, password_hash = ?
+            portal_role = ?, portal_permissions = ?, is_active = ?, password_hash = ?
         WHERE id = ?
       `;
-      fields.splice(10, 0, passwordHash);
+      fields.splice(12, 0, passwordHash);
     }
 
     await connection.execute(sql, fields);
@@ -505,6 +532,11 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
       walletCommissionType: data.walletCommissionType,
       walletCommissionValue: data.walletCommissionValue,
       canSelfTopup: data.canSelfTopup !== false,
+      portalRole: normalizePortalRole(data.portalRole),
+      portalPermissions: parseOperatorPermissions(
+        normalizePortalRole(data.portalRole),
+        data.portalPermissions
+      ),
       accountsCreated: operator.accounts_created,
       isActive: data.isActive,
     };

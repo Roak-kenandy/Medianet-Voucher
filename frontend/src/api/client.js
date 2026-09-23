@@ -186,6 +186,73 @@ export const adminApi = {
     ).toString();
     return apiRequest(`/admin/reports?${qs}`);
   },
+  getMarketingAds: () => apiRequest('/admin/marketing-ads').then((data) => data.ads),
+  createMarketingAd: async (formData) => {
+    const headers = {};
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+    const res = await fetch(`${API_BASE}/admin/marketing-ads`, {
+      method: 'POST',
+      credentials: 'include',
+      headers,
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(data.message || 'Failed to create ad');
+    }
+    return data.data;
+  },
+  updateMarketingAd: async (id, formData) => {
+    const headers = {};
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+    const res = await fetch(`${API_BASE}/admin/marketing-ads/${id}`, {
+      method: 'PUT',
+      credentials: 'include',
+      headers,
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(data.message || 'Failed to update ad');
+    }
+    return data.data;
+  },
+  deleteMarketingAd: (id) =>
+    apiRequest(`/admin/marketing-ads/${id}`, { method: 'DELETE' }),
+  getKnowledgeDocuments: () =>
+    apiRequest('/admin/knowledge-documents').then((data) => data.documents),
+  createKnowledgeDocument: async (formData) => {
+    const headers = {};
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+    const res = await fetch(`${API_BASE}/admin/knowledge-documents`, {
+      method: 'POST',
+      credentials: 'include',
+      headers,
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(data.message || 'Failed to upload document');
+    }
+    return data.data;
+  },
+  updateKnowledgeDocument: async (id, formData) => {
+    const headers = {};
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+    const res = await fetch(`${API_BASE}/admin/knowledge-documents/${id}`, {
+      method: 'PUT',
+      credentials: 'include',
+      headers,
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(data.message || 'Failed to update document');
+    }
+    return data.data;
+  },
+  deleteKnowledgeDocument: (id) =>
+    apiRequest(`/admin/knowledge-documents/${id}`, { method: 'DELETE' }),
   exportReport: async (params) => {
     const qs = new URLSearchParams(
       Object.entries(params).filter(([, v]) => v !== undefined && v !== '')
@@ -197,12 +264,40 @@ export const adminApi = {
       headers,
     });
     if (!res.ok) throw new Error('Export failed');
-    return res.text();
+    return res.blob();
   },
 };
 
 export const operatorApi = {
   getStats: () => apiRequest('/operator/stats'),
+  getMarketingAds: () => apiRequest('/operator/marketing-ads').then((data) => data.ads),
+  getKnowledgeDocuments: () =>
+    apiRequest('/operator/knowledge-documents').then((data) => data.documents),
+  downloadKnowledgeDocument: async (id, filename) => {
+    const headers = {};
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+    const res = await fetch(`${API_BASE}/operator/knowledge-documents/${id}/download`, {
+      credentials: 'include',
+      headers,
+    });
+    if (!res.ok) {
+      let message = 'Download failed';
+      try {
+        const data = await res.json();
+        message = data.message || message;
+      } catch {
+        // ignore
+      }
+      throw new Error(message);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename || 'document';
+    a.click();
+    URL.revokeObjectURL(url);
+  },
   getWallet: () => apiRequest('/operator/wallet'),
   getWalletTransactions: (params = {}) => apiRequest(`/operator/wallet/transactions${buildQuery(params)}`),
   previewWalletTopup: (amount) =>
@@ -294,6 +389,6 @@ export const operatorApi = {
       headers,
     });
     if (!res.ok) throw new Error('Export failed');
-    return res.text();
+    return res.blob();
   },
 };
