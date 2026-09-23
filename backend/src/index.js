@@ -45,12 +45,14 @@ app.use(
 app.use(express.json({ limit: '100kb' }));
 app.use(cookieParser());
 
-app.use(
-  '/uploads',
-  express.static(path.join(__dirname, '../uploads'), {
-    maxAge: isProduction ? '7d' : 0,
-  })
-);
+const uploadsStaticDir = path.join(__dirname, '../uploads');
+const uploadsStatic = express.static(uploadsStaticDir, {
+  maxAge: isProduction ? '7d' : 0,
+});
+// /api/uploads — works when nginx only proxies /api to Node (typical production setup)
+app.use('/api/uploads', uploadsStatic);
+// /uploads — local dev (optional Vite proxy) and nginx configs with a dedicated uploads location
+app.use('/uploads', uploadsStatic);
 
 app.get('/api/health', (_req, res) => {
   res.json({ success: true, data: { status: 'ok', timestamp: new Date().toISOString() } });

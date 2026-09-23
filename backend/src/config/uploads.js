@@ -12,7 +12,17 @@ export function ensureUploadDirs() {
   fs.mkdirSync(KNOWLEDGE_DOCUMENTS_DIR, { recursive: true });
 }
 
+/**
+ * Public URL path for uploaded files. Default `/api/uploads` so production nginx
+ * can proxy a single `/api` location to Node (same as JSON APIs). Dev Vite proxies `/api` too.
+ * Set PUBLIC_UPLOAD_BASE_PATH=/uploads if nginx exposes `/uploads` separately.
+ */
+export const PUBLIC_UPLOAD_BASE = (process.env.PUBLIC_UPLOAD_BASE_PATH || '/api/uploads').replace(
+  /\/$/,
+  ''
+);
+
 export function marketingAdPublicUrl(filename) {
   if (!filename) return null;
-  return `/uploads/marketing-ads/${filename}`;
+  return `${PUBLIC_UPLOAD_BASE}/marketing-ads/${filename}`;
 }
