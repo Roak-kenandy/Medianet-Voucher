@@ -5,6 +5,16 @@ import './operator-marketing-ads.css';
 
 const AUTO_ADVANCE_MS = 8000;
 
+function isSafeExternalLink(url) {
+  if (!url) return false;
+  try {
+    const protocol = new URL(url, window.location.origin).protocol;
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 export default function OperatorMarketingAds({ ads: adsProp, variant = 'spotlight' }) {
   const [adsLocal, setAdsLocal] = useState([]);
   const [loading, setLoading] = useState(!adsProp);
@@ -66,7 +76,7 @@ export default function OperatorMarketingAds({ ads: adsProp, variant = 'spotligh
                   className={`operator-promo-slide${i === index ? ' is-active' : ''}`}
                   aria-hidden={i !== index}
                 >
-                  {item.linkUrl ? (
+                  {isSafeExternalLink(item.linkUrl) ? (
                     <a
                       href={item.linkUrl}
                       target="_blank"
@@ -105,7 +115,7 @@ export default function OperatorMarketingAds({ ads: adsProp, variant = 'spotligh
         {ad.description && (
           <p className="operator-promo-description">{ad.description}</p>
         )}
-        {ad.linkUrl && (
+        {isSafeExternalLink(ad.linkUrl) && (
           <a
             href={ad.linkUrl}
             target="_blank"

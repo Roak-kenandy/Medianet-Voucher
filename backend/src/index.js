@@ -45,14 +45,14 @@ app.use(
 app.use(express.json({ limit: '100kb' }));
 app.use(cookieParser());
 
-const uploadsStaticDir = path.join(__dirname, '../uploads');
-const uploadsStatic = express.static(uploadsStaticDir, {
+const marketingAdsStaticDir = path.join(__dirname, '../uploads/marketing-ads');
+const marketingAdsStatic = express.static(marketingAdsStaticDir, {
   maxAge: isProduction ? '7d' : 0,
+  fallthrough: false,
 });
-// /api/uploads — works when nginx only proxies /api to Node (typical production setup)
-app.use('/api/uploads', uploadsStatic);
-// /uploads — local dev (optional Vite proxy) and nginx configs with a dedicated uploads location
-app.use('/uploads', uploadsStatic);
+// Only marketing ad images are public; knowledge documents are served via authenticated API routes.
+app.use('/api/uploads/marketing-ads', marketingAdsStatic);
+app.use('/uploads/marketing-ads', marketingAdsStatic);
 
 app.get('/api/health', (_req, res) => {
   res.json({ success: true, data: { status: 'ok', timestamp: new Date().toISOString() } });

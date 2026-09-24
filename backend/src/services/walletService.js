@@ -4,6 +4,7 @@ import { query, getConnection } from '../db/pool.js';
 import { AppError } from '../utils/errors.js';
 import { logAudit } from './auditService.js';
 import { paginationSql } from '../utils/pagination.js';
+import { csvEscape } from '../utils/csv.js';
 import { formatTrialForResponse } from '../utils/trial.js';
 import {
   assertBmlPaymentMatchesTopup,
@@ -721,6 +722,27 @@ export async function failTopup(transactionId, reason = null, reqMeta = {}) {
   }
 }
 
+async function assertBmlPaymentNotAlreadyUsed(bmlTransactionId, excludeTransactionId) {
+  if (!bmlTransactionId) return;
+  const [row] = await query(
+    `SELECT id, reference
+     FROM wallet_transactions
+     WHERE type = 'topup'
+       AND status = 'completed'
+       AND payment_ref = ?
+       AND id != ?
+     LIMIT 1`,
+    [bmlTransactionId, excludeTransactionId]
+  );
+  if (row) {
+    throw new AppError(
+      'This Bank of Maldives payment has already been applied to another top-up',
+      400,
+      'BML_PAYMENT_ALREADY_USED'
+    );
+  }
+}
+
 export async function syncTopupFromBml({
   bmlTransactionId,
   localId = null,
@@ -730,18 +752,23 @@ export async function syncTopupFromBml({
   const bmlTxn = await getPaymentTransaction(bmlTransactionId);
   const state = String(bmlTxn.state || '').toUpperCase();
 
+  const resolvedLocalId = localId || bmlTxn.localId;
+  if (!resolvedLocalId) {
+    return {
+      status: 'error',
+      reference: null,
+      message: 'wallet_transaction_not_found',
+      bmlState: state,
+    };
+  }
+
   const rows = await query(
     `SELECT id, operator_id AS operatorId, reference, status, amount,
-            net_amount AS netAmount, balance_after AS balanceAfter
+            net_amount AS netAmount, balance_after AS balanceAfter, currency_code
      FROM wallet_transactions
-     WHERE type = 'topup'
-       AND (
-         reference = ?
-         OR payment_ref = ?
-         OR JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.bmlTransactionId')) = ?
-       )
+     WHERE type = 'topup' AND reference = ?
      LIMIT 1`,
-    [localId || bmlTxn.localId, bmlTransactionId, bmlTransactionId]
+    [resolvedLocalId]
   );
 
   const tx = rows[0];
@@ -769,6 +796,7 @@ export async function syncTopupFromBml({
   }
 
   if (isPaymentConfirmed(state)) {
+    await assertBmlPaymentNotAlreadyUsed(bmlTransactionId, tx.id);
     assertBmlPaymentMatchesTopup(tx, bmlTxn);
     const result = await completeTopup(tx.id, bmlTransactionId, reqMeta, actor, {
       skipBmlVerification: true,
@@ -833,19 +861,7 @@ export async function completeTopup(
 
     if (tx.status === 'completed') {
       const credited = roundMoney(tx.net_amount);
-      const { balanceBefore, balanceAfter } = normalizeTopupWalletBalances(
-        tx.balance_before,
-        tx.balance_after,
-        credited
-      );
-
-      if (Math.abs(roundMoney(tx.balance_before) - balanceBefore) > 0.009) {
-        await connection.execute(
-          `UPDATE wallet_transactions SET balance_before = ? WHERE id = ?`,
-          [balanceBefore, transactionId]
-        );
-      }
-
+      const balanceAfter = roundMoney(tx.balance_after);
       await connection.commit();
       return {
         transactionId: tx.id,
@@ -858,6 +874,17 @@ export async function completeTopup(
 
     if (tx.status !== 'pending') {
       throw new AppError(`Cannot complete top-up with status ${tx.status}`, 400, 'INVALID_TRANSACTION');
+    }
+
+    if (
+      options.expectedOperatorId != null &&
+      Number(tx.operator_id) !== Number(options.expectedOperatorId)
+    ) {
+      throw new AppError(
+        'Wallet transaction does not belong to this operator',
+        403,
+        'FORBIDDEN'
+      );
     }
 
     const metadata = readTransactionMetadata(tx.metadata);
@@ -883,7 +910,8 @@ export async function completeTopup(
     );
 
     const balanceBefore = roundMoney(operatorRows[0].wallet_balance);
-    const balanceAfter = roundMoney(balanceBefore + tx.net_amount);
+    const credit = roundMoney(tx.net_amount);
+    const balanceAfter = roundMoney(balanceBefore + credit);
 
     await connection.execute(`UPDATE operators SET wallet_balance = ? WHERE id = ?`, [
       balanceAfter,
@@ -1140,13 +1168,6 @@ export async function exportAdminOperatorActivations({ search = '', startDate, e
   };
 }
 
-function csvEscape(value) {
-  const text = value == null ? '' : String(value);
-  if (/[",\n]/.test(text)) {
-    return `"${text.replace(/"/g, '""')}"`;
-  }
-  return text;
-}
 
 export function operatorActivationsToCsv(report) {
   const lines = [
@@ -1335,16 +1356,7 @@ export async function getWalletTopupBill(operatorId, reference) {
     throw new AppError('Bill is available only for completed payments', 400, 'BILL_NOT_READY');
   }
 
-  const bill = buildWalletTopupBill(tx, { client_name: tx.client_name, email: tx.email });
-
-  if (Math.abs(roundMoney(tx.balance_before) - bill.balanceBefore) > 0.009) {
-    await query(`UPDATE wallet_transactions SET balance_before = ? WHERE id = ?`, [
-      bill.balanceBefore,
-      tx.id,
-    ]);
-  }
-
-  return bill;
+  return buildWalletTopupBill(tx, { client_name: tx.client_name, email: tx.email });
 }
 
 function formatActivityLabel(metadata = {}) {

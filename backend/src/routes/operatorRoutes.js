@@ -5,7 +5,12 @@ import {
   requireRole,
   requireOperatorPermission,
 } from '../middleware/auth.js';
-import { createAccountLimiter, walletTopupLimiter, walletStatusLimiter } from '../middleware/rateLimit.js';
+import {
+  createAccountLimiter,
+  walletTopupLimiter,
+  walletStatusLimiter,
+  customerSearchLimiter,
+} from '../middleware/rateLimit.js';
 import { asyncHandler, success } from '../utils/errors.js';
 import { getClientMeta } from '../services/auditService.js';
 import {
@@ -20,8 +25,9 @@ import {
 } from '../services/operatorService.js';
 import {
   generateWalletTransactionReport,
-  walletTransactionReportToCsv,
+  streamWalletTransactionReportCsv,
 } from '../services/walletTransactionReportService.js';
+import { runWithReportSlot } from '../utils/reportConcurrency.js';
 import { listLiveMarketingAdsForOperators } from '../services/marketingAdService.js';
 import {
   listActiveKnowledgeDocumentsForOperators,
@@ -55,7 +61,6 @@ import {
   generateOperatorReport,
   streamOperatorReportCsv,
 } from '../services/operatorReportService.js';
-import { runWithReportSlot } from '../utils/reportConcurrency.js';
 
 const router = Router();
 
@@ -94,15 +99,10 @@ router.get(
   '/wallet/transactions/export',
   requireOperatorPermission('transactions'),
   asyncHandler(async (req, res) => {
-    const filters = walletTransactionQuerySchema.parse(req.query);
-    const report = await generateWalletTransactionReport(req.user.id, filters);
-    const csv = walletTransactionReportToCsv(report);
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader(
-      'Content-Disposition',
-      'attachment; filename="wallet-transaction-report.csv"'
-    );
-    res.send(csv);
+    await runWithReportSlot(async () => {
+      const filters = walletTransactionQuerySchema.parse(req.query);
+      await streamWalletTransactionReportCsv(res, req.user.id, filters);
+    });
   })
 );
 
@@ -179,6 +179,7 @@ router.get(
 router.get(
   '/customers/search',
   requireOperatorPermission('customers'),
+  customerSearchLimiter,
   asyncHandler(async (req, res) => {
     const { phone, serviceTag } = customerSearchQuerySchema.parse(req.query);
     const result = await searchCustomers(req.user.id, phone, serviceTag);
@@ -228,6 +229,7 @@ router.get(
 
 router.get(
   '/knowledge-documents',
+  requireOperatorPermission('dashboard'),
   asyncHandler(async (_req, res) => {
     const documents = await listActiveKnowledgeDocumentsForOperators();
     success(res, { documents });
@@ -236,6 +238,7 @@ router.get(
 
 router.get(
   '/knowledge-documents/:id/download',
+  requireOperatorPermission('dashboard'),
   asyncHandler(async (req, res) => {
     const docId = parseInt(req.params.id, 10);
     const { row, filePath } = await getKnowledgeDocumentFile(docId, { activeOnly: true });

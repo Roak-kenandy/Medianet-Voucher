@@ -3,6 +3,7 @@ import { query } from '../db/pool.js';
 import { calculateGstFromTotal } from './walletService.js';
 import { REPORT_SCAN_BATCH_SIZE } from '../constants/reportLimits.js';
 import { paginationSql } from '../utils/pagination.js';
+import { csvEscape } from '../utils/csv.js';
 
 function roundMoney(value) {
   return Math.round(Number(value) * 100) / 100;
@@ -341,14 +342,6 @@ export async function generateDealerTopupReport(filters) {
     search: filters.search || '',
     includeSummary: filters.includeSummary !== false,
   });
-}
-
-function csvEscape(value) {
-  const text = value == null ? '' : String(value);
-  if (/[",\n]/.test(text)) {
-    return `"${text.replace(/"/g, '""')}"`;
-  }
-  return text;
 }
 
 const CSV_HEADERS = [

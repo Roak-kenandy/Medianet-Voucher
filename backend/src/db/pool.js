@@ -12,6 +12,8 @@ const pool = mysql.createPool({
   queueLimit: 0,
   timezone: '+00:00',
   enableKeepAlive: true,
+  /** Return DECIMAL columns as numbers so wallet arithmetic never string-concatenates. */
+  decimalNumbers: true,
 });
 
 export async function query(sql, params = []) {

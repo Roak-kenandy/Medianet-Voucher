@@ -163,6 +163,12 @@ export async function login({ email, password }, reqMeta = {}) {
   const { user: rawUser, role } = resolved;
   const user = role === 'operator' ? await findUserById('operator', rawUser.id) : rawUser;
 
+  if (user.locked_until && new Date(user.locked_until) <= new Date()) {
+    await resetFailedLogin(role, user.id);
+    user.failed_login_attempts = 0;
+    user.locked_until = null;
+  }
+
   if (isAccountLocked(user)) {
     throw new AppError(
       'Account temporarily locked due to too many failed attempts. Try again later.',
@@ -256,7 +262,13 @@ export async function refreshSession(refreshToken) {
     stored.user_type === 'operator' ? 'operator' : resolveStaffRole(user);
 
   // Rotate refresh token
-  await query(`UPDATE refresh_tokens SET revoked_at = NOW() WHERE id = ?`, [stored.id]);
+  const revokeResult = await query(
+    `UPDATE refresh_tokens SET revoked_at = NOW() WHERE id = ? AND revoked_at IS NULL`,
+    [stored.id]
+  );
+  if (!revokeResult.affectedRows) {
+    throw new AppError('Session expired. Please log in again.', 401, 'SESSION_REVOKED');
+  }
 
   const newRefreshToken = generateRefreshToken();
   await storeRefreshToken(stored.user_type, stored.user_id, newRefreshToken);
@@ -270,7 +282,15 @@ export async function refreshSession(refreshToken) {
   };
 }
 
-export async function logout(refreshToken, actor = {}) {
+export async function revokeAllRefreshTokens(userType, userId) {
+  await query(
+    `UPDATE refresh_tokens SET revoked_at = NOW()
+     WHERE user_type = ? AND user_id = ? AND revoked_at IS NULL`,
+    [userType, userId]
+  );
+}
+
+export async function logout(refreshToken, actor = {}, reqMeta = {}) {
   if (refreshToken) {
     const tokenHash = hashToken(refreshToken);
     await query(`UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = ?`, [tokenHash]);
@@ -281,6 +301,8 @@ export async function logout(refreshToken, actor = {}) {
       actorType: actor.role,
       actorId: actor.id,
       action: 'LOGOUT',
+      ipAddress: reqMeta.ipAddress,
+      userAgent: reqMeta.userAgent,
     });
   }
 }

@@ -154,7 +154,15 @@ export async function reconcileTopupPayment({
   }
 
   const metadata = parseMetadata(tx.metadata);
-  const resolvedBmlId = bmlTransactionId || metadata.bmlTransactionId || tx.paymentRef;
+  const storedBmlId = metadata.bmlTransactionId || tx.paymentRef || null;
+  if (bmlTransactionId && storedBmlId && bmlTransactionId !== storedBmlId) {
+    throw new AppError(
+      'Bank of Maldives transaction does not match this top-up reference',
+      400,
+      'BML_REFERENCE_MISMATCH'
+    );
+  }
+  const resolvedBmlId = storedBmlId || bmlTransactionId;
 
   if (!resolvedBmlId) {
     return {

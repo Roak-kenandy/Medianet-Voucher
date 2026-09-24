@@ -1,5 +1,11 @@
 import { query } from '../db/pool.js';
 import { resolveWalletTransactionBalances } from './walletService.js';
+import { csvEscape } from '../utils/csv.js';
+import {
+  REPORT_SCAN_BATCH_SIZE,
+  REPORT_MAX_WALLET_TX_EXPORT_ROWS,
+} from '../constants/reportLimits.js';
+import { AppError } from '../utils/errors.js';
 
 function parseMetadata(raw) {
   if (!raw) return {};
@@ -114,14 +120,6 @@ export async function generateWalletTransactionReport(operatorId, { startDate, e
   };
 }
 
-function csvEscape(value) {
-  const text = value == null ? '' : String(value);
-  if (/[",\n]/.test(text)) {
-    return `"${text.replace(/"/g, '""')}"`;
-  }
-  return text;
-}
-
 export function walletTransactionReportToCsv(report) {
   const lines = [
     'Medianet Voucher — Wallet Transaction Report',
@@ -176,4 +174,106 @@ export function walletTransactionReportToCsv(report) {
   }
 
   return `\ufeff${lines.join('\n')}`;
+}
+
+export async function streamWalletTransactionReportCsv(res, operatorId, filters = {}) {
+  const params = [operatorId];
+  const filterSql = buildDateFilters(filters, params);
+  if (filters.type) {
+    filterSql.push('wt.type = ?');
+    params.push(filters.type);
+  }
+  const where = `WHERE ${filterSql.join(' AND ')}`;
+
+  const [countRow] = await query(
+    `SELECT COUNT(*) AS total FROM wallet_transactions wt ${where}`,
+    params
+  );
+  const total = Number(countRow?.total) || 0;
+  if (total > REPORT_MAX_WALLET_TX_EXPORT_ROWS) {
+    throw new AppError(
+      `Export exceeds ${REPORT_MAX_WALLET_TX_EXPORT_ROWS} rows. Narrow the date range.`,
+      400,
+      'EXPORT_TOO_LARGE'
+    );
+  }
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="wallet-transaction-report.csv"');
+  res.write('\ufeff');
+  res.write(
+    [
+      'Date',
+      'Activity',
+      'Type',
+      'Status',
+      'Customer Name',
+      'Phone',
+      'Packages',
+      'Amount',
+      'Net Amount',
+      'Balance Before',
+      'Balance After',
+      'Reference',
+      'Description',
+    ]
+      .map(csvEscape)
+      .join(',') + '\n'
+  );
+
+  let lastId = null;
+  let exported = 0;
+
+  while (exported < total) {
+    const batchParams = [...params];
+    let batchWhere = where;
+    if (lastId != null) {
+      batchWhere += ' AND wt.id < ?';
+      batchParams.push(lastId);
+    }
+
+    const rows = await query(
+      `SELECT wt.id, wt.type, wt.status, wt.amount, wt.commission_amount, wt.net_amount,
+              wt.balance_before, wt.balance_after, wt.currency_code, wt.reference,
+              wt.payment_ref, wt.description, wt.metadata, wt.voucher_account_id,
+              wt.created_at, wt.completed_at
+       FROM wallet_transactions wt
+       ${batchWhere}
+       ORDER BY wt.id DESC
+       LIMIT ?`,
+      [...batchParams, REPORT_SCAN_BATCH_SIZE]
+    );
+
+    if (!rows.length) {
+      break;
+    }
+
+    for (const row of rows) {
+      const mapped = mapTransactionRow(row);
+      res.write(
+        [
+          new Date(mapped.date).toISOString(),
+          mapped.activity,
+          mapped.type,
+          mapped.status,
+          mapped.customerName || '',
+          mapped.phoneNumber || '',
+          (mapped.packageNames || []).join('; '),
+          mapped.amount,
+          mapped.netAmount,
+          mapped.balanceBefore,
+          mapped.balanceAfter,
+          mapped.reference,
+          mapped.description || '',
+        ]
+          .map(csvEscape)
+          .join(',') + '\n'
+      );
+      exported += 1;
+    }
+
+    lastId = rows[rows.length - 1].id;
+  }
+
+  res.end();
 }

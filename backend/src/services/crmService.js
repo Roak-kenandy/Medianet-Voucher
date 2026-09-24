@@ -3,6 +3,7 @@ import { config } from '../config/index.js';
 import { AppError } from '../utils/errors.js';
 import { getPlanByPackageId } from './packageService.js';
 import { getServiceTagConfig, assertServiceTag } from '../constants/serviceTags.js';
+import { logAudit } from './auditService.js';
 
 function normalizePhone(phoneNumber) {
   const digits = String(phoneNumber || '').replace(/\D/g, '');
@@ -219,7 +220,7 @@ class CRMService {
         include_total: 'true',
       });
 
-      const response = await fetch(`${this.baseUrl}/products?${params}`, {
+      const response = await this.crmFetch(`/products?${params}`, {
         method: 'GET',
         headers: this.headers,
       });
@@ -262,7 +263,7 @@ class CRMService {
   }
 
   async fetchProductPrices(productId, segmentName = null, salesModelName = null) {
-    const response = await fetch(`${this.baseUrl}/products/${productId}/prices`, {
+    const response = await this.crmFetch(`/products/${productId}/prices`, {
       method: 'GET',
       headers: this.headers,
     });
@@ -294,6 +295,18 @@ class CRMService {
       'Content-Type': 'application/json',
       api_key: this.apiKey,
     };
+  }
+
+  crmFetch(relativePath, options = {}) {
+    const base = String(this.baseUrl || '').replace(/\/$/, '');
+    const pathPart = relativePath.startsWith('/') ? relativePath : `/${relativePath}`;
+    const url = `${base}${pathPart}`;
+    const { headers: extraHeaders, ...rest } = options;
+    return fetch(url, {
+      ...rest,
+      headers: { ...this.headers, ...extraHeaders },
+      signal: rest.signal ?? AbortSignal.timeout(config.crm.requestTimeoutMs),
+    });
   }
 
   assertConfigured() {
@@ -368,7 +381,7 @@ class CRMService {
       include_total: 'true',
     }).toString();
 
-    const response = await fetch(`${this.baseUrl}/contacts?${queryParams}`, {
+    const response = await this.crmFetch(`/contacts?${queryParams}`, {
       method: 'GET',
       headers: this.headers,
     });
@@ -377,7 +390,7 @@ class CRMService {
   }
 
   async fetchContactTags(contactId) {
-    const response = await fetch(`${this.baseUrl}/contacts/${contactId}/tags`, {
+    const response = await this.crmFetch(`/contacts/${contactId}/tags`, {
       method: 'GET',
       headers: this.headers,
     });
@@ -386,7 +399,7 @@ class CRMService {
   }
 
   async fetchContactAccounts(contactId) {
-    const response = await fetch(`${this.baseUrl}/contacts/${contactId}/accounts`, {
+    const response = await this.crmFetch(`/contacts/${contactId}/accounts`, {
       method: 'GET',
       headers: this.headers,
     });
@@ -395,17 +408,16 @@ class CRMService {
   }
 
   async fetchContactSubscriptions(contactId) {
-    const url = `${this.baseUrl}/contacts/${contactId}/subscriptions?size=100&page=1&include_terms=true&include_billing_info=true&include_future_info=true`;
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: this.headers,
-    });
+    const response = await this.crmFetch(
+      `/contacts/${contactId}/subscriptions?size=100&page=1&include_terms=true&include_billing_info=true&include_future_info=true`,
+      { method: 'GET' }
+    );
 
     return this.handleResponse(response, `Fetch subscriptions for contact ${contactId}`);
   }
 
   async addContactTag(contactId, tags) {
-    const response = await fetch(`${this.baseUrl}/contacts/${contactId}/tags`, {
+    const response = await this.crmFetch(`/contacts/${contactId}/tags`, {
       method: 'PUT',
       headers: this.headers,
       body: JSON.stringify({ tags }),
@@ -439,7 +451,7 @@ class CRMService {
       },
     };
 
-    const response = await fetch(`${this.baseUrl}/contacts`, {
+    const response = await this.crmFetch(`/contacts`, {
       method: 'POST',
       headers: this.headers,
       body: JSON.stringify(payload),
@@ -468,7 +480,7 @@ class CRMService {
       page: String(page),
     });
 
-    const response = await fetch(`${this.baseUrl}/devices?${queryParams}`, {
+    const response = await this.crmFetch(`/devices?${queryParams}`, {
       headers: this.headers,
     });
 
@@ -494,7 +506,7 @@ class CRMService {
       product_id: tagConfig.crmDeviceProductId,
     };
 
-    const response = await fetch(`${this.baseUrl}/devices`, {
+    const response = await this.crmFetch(`/devices`, {
       method: 'POST',
       headers: this.headers,
       body: JSON.stringify(payload),
@@ -512,7 +524,7 @@ class CRMService {
       payment_terms_id: this.paymentTermsId,
     };
 
-    const response = await fetch(`${this.baseUrl}/contacts/${contactId}/accounts`, {
+    const response = await this.crmFetch(`/contacts/${contactId}/accounts`, {
       method: 'POST',
       headers: this.headers,
       body: JSON.stringify(payload),
@@ -521,11 +533,13 @@ class CRMService {
     return this.handleResponse(response, 'Account creation');
   }
 
-  async createPayment(contactId, accountId, amount, maxAttempts = 3) {
+  async createPayment(contactId, accountId, amount, options = {}) {
+    const maxAttempts = options.maxAttempts ?? 3;
+    const paymentRef =
+      options.idempotencyKey ?? `MTVOTT${Date.now()}${uuidv4().slice(0, 8)}`;
     let lastFailureMessage = 'Payment API failed';
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      const paymentRef = `MTVOTT${Date.now()}${uuidv4().slice(0, 8)}`;
       const payload = {
         contact_id: contactId,
         account_id: accountId,
@@ -540,7 +554,7 @@ class CRMService {
       };
 
       try {
-        const response = await fetch(`${this.baseUrl}/payments`, {
+        const response = await this.crmFetch(`/payments`, {
           method: 'POST',
           headers: this.headers,
           body: JSON.stringify(payload),
@@ -591,7 +605,7 @@ class CRMService {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
-        const response = await fetch(`${this.baseUrl}/contacts/${contactId}/services`, {
+        const response = await this.crmFetch(`/contacts/${contactId}/services`, {
           method: 'POST',
           headers: this.headers,
           body: JSON.stringify(payload),
@@ -633,7 +647,7 @@ class CRMService {
 
   async getSubscriptionDetails(contactId) {
     try {
-      const response = await fetch(`${this.baseUrl}/contacts/${contactId}/subscriptions`, {
+      const response = await this.crmFetch(`/contacts/${contactId}/subscriptions`, {
         method: 'GET',
         headers: this.headers,
       });
@@ -706,15 +720,12 @@ class CRMService {
   }
 
   async fetchContactServices(contactId, subscriptionId = null) {
-    let url = `${this.baseUrl}/contacts/${contactId}/services?size=100&page=1&include_future_info=true`;
+    let path = `/contacts/${contactId}/services?size=100&page=1&include_future_info=true`;
     if (subscriptionId) {
-      url += `&subscription_id=${subscriptionId}`;
+      path += `&subscription_id=${subscriptionId}`;
     }
 
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: this.headers,
-    });
+    const response = await this.crmFetch(path, { method: 'GET' });
 
     return this.handleResponse(response, `Fetch services for contact ${contactId}`);
   }
@@ -725,7 +736,7 @@ class CRMService {
       action: 'ENABLE',
     }));
 
-    const response = await fetch(`${this.baseUrl}/services/${serviceId}/devices`, {
+    const response = await this.crmFetch(`/services/${serviceId}/devices`, {
       method: 'POST',
       headers: this.headers,
       body: JSON.stringify(payload),
@@ -765,7 +776,7 @@ class CRMService {
     contactId,
     { plans = [], subscriptionCreateData = null } = {}
   ) {
-    const response = await fetch(`${this.baseUrl}/subscriptions/${subscriptionId}/devices`, {
+    const response = await this.crmFetch(`/subscriptions/${subscriptionId}/devices`, {
       method: 'POST',
       headers: this.headers,
       body: JSON.stringify(deviceIds[0]),
@@ -788,12 +799,9 @@ class CRMService {
     let source = 'allowed_devices';
 
     try {
-      const response = await fetch(
-        `${this.baseUrl}/subscriptions/${subscriptionId}/allowed_devices`,
-        {
-          method: 'GET',
-          headers: this.headers,
-        }
+      const response = await this.crmFetch(
+        `/subscriptions/${subscriptionId}/allowed_devices`,
+        { method: 'GET' }
       );
 
       const data = await this.handleResponse(response, 'Get allowed devices');
@@ -808,12 +816,9 @@ class CRMService {
     if (!hasValidDeviceId) {
       source = 'subscription_devices';
 
-      const fallbackResponse = await fetch(
-        `${this.baseUrl}/subscriptions/${subscriptionId}/devices`,
-        {
-          method: 'GET',
-          headers: this.headers,
-        }
+      const fallbackResponse = await this.crmFetch(
+        `/subscriptions/${subscriptionId}/devices`,
+        { method: 'GET' }
       );
 
       const fallbackData = await this.handleResponse(
@@ -888,16 +893,37 @@ class CRMService {
       0
     );
 
-    const paymentResult = await this.createPayment(contactId, accountId, totalAmount);
+    const planKey = plans.map((plan) => plan.price_term_id).join('-');
+    const paymentIdempotencyKey = `MTV-SUB-${contactId}-${accountId}-${planKey}-${totalAmount}`;
+
+    const paymentResult = await this.createPayment(contactId, accountId, totalAmount, {
+      idempotencyKey: paymentIdempotencyKey,
+    });
     if (!paymentResult.success) {
       throw new Error(`Payment failed: ${paymentResult.message}`);
     }
+
+    const postedPaymentId = paymentResult.data?.id || null;
 
     // CRM rejects price_terms_id immediately after payment until the account balance settles.
     await delay(1500);
 
     const subscription = await this.createSubscription(contactId, accountId, plans);
     if (!subscription?.success) {
+      await logAudit({
+        actorType: 'system',
+        actorId: null,
+        action: 'CRM_ORPHAN_PAYMENT',
+        resourceType: 'crm_contact',
+        resourceId: null,
+        metadata: {
+          contactId,
+          accountId,
+          paymentId: postedPaymentId,
+          totalAmount,
+          error: subscription?.error || 'Unknown error',
+        },
+      });
       throw new Error(
         `Subscription creation failed: ${subscription?.error || 'Unknown error'}`
       );
@@ -1084,7 +1110,10 @@ class CRMService {
     }
 
     const accountId = await this.ensureContactAccount(contactId);
-    const paymentResult = await this.createPayment(contactId, accountId, normalizedAmount);
+    const paymentIdempotencyKey = `MTV-TOPUP-${contactId}-${accountId}-${normalizedAmount}`;
+    const paymentResult = await this.createPayment(contactId, accountId, normalizedAmount, {
+      idempotencyKey: paymentIdempotencyKey,
+    });
     if (!paymentResult.success) {
       throw new Error(`Payment failed: ${paymentResult.message}`);
     }

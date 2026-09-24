@@ -1,14 +1,7 @@
 import { query } from '../db/pool.js';
 import { REPORT_SCAN_BATCH_SIZE } from '../constants/reportLimits.js';
 import { paginationSql } from '../utils/pagination.js';
-
-function csvEscape(value) {
-  const text = value == null ? '' : String(value);
-  if (/[",\n]/.test(text)) {
-    return `"${text.replace(/"/g, '""')}"`;
-  }
-  return text;
-}
+import { csvEscape } from '../utils/csv.js';
 
 /**
  * Stream CSV rows in batches using LIMIT/OFFSET (safe for moderate export sizes).

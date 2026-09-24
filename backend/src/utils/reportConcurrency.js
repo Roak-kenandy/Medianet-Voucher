@@ -1,4 +1,5 @@
-import { REPORT_MAX_CONCURRENT } from '../constants/reportLimits.js';
+import { REPORT_MAX_CONCURRENT, REPORT_MAX_QUEUE_SIZE } from '../constants/reportLimits.js';
+import { AppError } from './errors.js';
 
 let active = 0;
 const waitQueue = [];
@@ -30,6 +31,14 @@ export function runWithReportSlot(task) {
 
     if (active < REPORT_MAX_CONCURRENT) {
       run();
+    } else if (waitQueue.length >= REPORT_MAX_QUEUE_SIZE) {
+      reject(
+        new AppError(
+          'Report service is busy. Please try again in a few minutes.',
+          503,
+          'REPORT_QUEUE_FULL'
+        )
+      );
     } else {
       waitQueue.push(run);
     }

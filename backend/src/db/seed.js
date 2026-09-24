@@ -1,7 +1,14 @@
 import bcrypt from 'bcrypt';
-import { config } from '../config/index.js';
+import { config, isProduction } from '../config/index.js';
 import { query } from './pool.js';
 import pool from './pool.js';
+
+if (isProduction && config.seed.adminPassword === 'ChangeMe@Secure123') {
+  console.error(
+    'Refusing to seed with default SEED_ADMIN_PASSWORD in production. Set a strong SEED_ADMIN_PASSWORD first.'
+  );
+  process.exit(1);
+}
 
 async function seed() {
   const existing = await query('SELECT id FROM admins WHERE email = ? LIMIT 1', [

@@ -8,7 +8,17 @@ const passwordSchema = z
   .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
   .regex(/[a-z]/, 'Password must contain at least one lowercase letter')
   .regex(/[0-9]/, 'Password must contain at least one number')
-  .regex(/[^A-Za-z0-9]/, 'Password must contain at least one special character');
+  .regex(/[^A-Za-z0-9]/, 'Password must contain at least one special character')
+  .refine(
+    (value) => Buffer.byteLength(value, 'utf8') <= 72,
+    'Password must not exceed 72 bytes (bcrypt limit)'
+  );
+
+export const toggleActiveBodySchema = z.object({
+  isActive: z
+    .union([z.boolean(), z.enum(['true', 'false', '1', '0'])])
+    .transform((value) => value === true || value === 'true' || value === '1'),
+});
 
 const phoneSchema = z
   .string()
@@ -29,7 +39,14 @@ const packageIdsSchema = z
 
 export const loginSchema = z.object({
   email: emailSchema,
-  password: z.string().min(1, 'Password is required').max(128),
+  password: z
+    .string()
+    .min(1, 'Password is required')
+    .max(128)
+    .refine(
+      (value) => Buffer.byteLength(value, 'utf8') <= 72,
+      'Password must not exceed 72 bytes'
+    ),
 });
 
 export const createAdminSchema = z.object({
@@ -129,8 +146,16 @@ export const walletTopupBillQuerySchema = z.object({
   reference: z.string().trim().min(1, 'Reference is required'),
 });
 
+const WALLET_ADJUST_MAX = 1_000_000;
+
 export const walletAdjustSchema = z.object({
-  amount: z.coerce.number().refine((value) => value !== 0, 'Adjustment amount cannot be zero'),
+  amount: z.coerce
+    .number()
+    .refine((value) => value !== 0, 'Adjustment amount cannot be zero')
+    .refine(
+      (value) => Math.abs(value) <= WALLET_ADJUST_MAX,
+      `Adjustment amount cannot exceed ${WALLET_ADJUST_MAX} MVR`
+    ),
   description: z.string().trim().max(500).optional().default(''),
 });
 
@@ -304,7 +329,19 @@ export const marketingAdFormSchema = z.object({
     .transform((value) => (value === '' ? undefined : value))
     .refine((value) => value === undefined || z.string().url().safeParse(value).success, {
       message: 'Link must be a valid URL',
-    }),
+    })
+    .refine(
+      (value) => {
+        if (value === undefined) return true;
+        try {
+          const protocol = new URL(value).protocol;
+          return protocol === 'http:' || protocol === 'https:';
+        } catch {
+          return false;
+        }
+      },
+      { message: 'Link must use http or https' }
+    ),
   sortOrder: z.coerce.number().int().min(0).max(999).optional().default(0),
   isActive: z
     .union([z.boolean(), z.string()])

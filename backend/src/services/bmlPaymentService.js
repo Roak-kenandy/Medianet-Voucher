@@ -58,14 +58,16 @@ export function verifyWebhookHeaders(headers, apiKey = config.bml.apiKey) {
   const timestampMs = Number(timestamp);
   if (!Number.isFinite(timestampMs)) return false;
   if (Math.abs(Date.now() - timestampMs) > WEBHOOK_TIMESTAMP_TOLERANCE_MS) return false;
-  if (!consumeWebhookNonce(nonce)) return false;
 
   const expected = crypto
     .createHash('sha256')
     .update(`${nonce}${timestamp}${apiKey}`, 'utf8')
     .digest('hex');
 
-  return timingSafeEqual(expected, signature);
+  if (!timingSafeEqual(expected, signature)) return false;
+  if (!consumeWebhookNonce(nonce)) return false;
+
+  return true;
 }
 
 /**
@@ -319,6 +321,16 @@ export function assertBmlPaymentMatchesTopup(tx, bmlTxn) {
   const bmlCurrency = String(bmlTxn.currency || config.wallet.currencyCode).toUpperCase();
   if (bmlCurrency !== expectedCurrency) {
     throw new AppError('Payment currency does not match', 400, 'BML_CURRENCY_MISMATCH');
+  }
+
+  const expectedReference = tx.reference;
+  const bmlLocalId = bmlTxn.localId ? String(bmlTxn.localId) : null;
+  if (bmlLocalId && expectedReference && bmlLocalId !== expectedReference) {
+    throw new AppError(
+      'Payment reference does not match this top-up',
+      400,
+      'BML_REFERENCE_MISMATCH'
+    );
   }
 }
 

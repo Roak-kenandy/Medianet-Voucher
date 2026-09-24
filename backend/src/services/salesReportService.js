@@ -5,6 +5,7 @@ import {
   computeDealerTopupSummary,
   forEachDealerTopupBatch,
 } from './dealerTopupReportService.js';
+import { csvEscape } from '../utils/csv.js';
 
 function roundMoney(value) {
   return Math.round(Number(value) * 100) / 100;
@@ -239,14 +240,6 @@ export async function getSalesDashboardStats({ days = 30 } = {}) {
       topOperatorsBySales,
     },
   };
-}
-
-function csvEscape(value) {
-  const text = value == null ? '' : String(value);
-  if (/[",\n]/.test(text)) {
-    return `"${text.replace(/"/g, '""')}"`;
-  }
-  return text;
 }
 
 export function salesReportToCsv(report) {

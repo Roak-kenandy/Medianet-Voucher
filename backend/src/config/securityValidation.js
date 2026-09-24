@@ -1,6 +1,19 @@
 import { config, isProduction } from './index.js';
 
 const MIN_JWT_SECRET_LENGTH = 32;
+const MIN_PRODUCTION_JWT_SECRET_LENGTH = 64;
+
+const KNOWN_WEAK_JWT_SECRETS = new Set([
+  'change-this-to-a-long-random-string-min-32-chars',
+  'change-this-to-another-long-random-string-min-32-chars',
+]);
+
+function isWeakJwtSecret(value) {
+  if (!value) return true;
+  if (KNOWN_WEAK_JWT_SECRETS.has(value)) return true;
+  if (/change-this/i.test(value)) return true;
+  return false;
+}
 
 /**
  * Fail fast on unsafe production configuration before the server accepts traffic.
@@ -10,11 +23,20 @@ export function validateSecurityConfig() {
   const errors = [];
   const warnings = [];
 
-  if (config.jwt.accessSecret.length < MIN_JWT_SECRET_LENGTH) {
-    errors.push(`JWT_ACCESS_SECRET must be at least ${MIN_JWT_SECRET_LENGTH} characters`);
+  const minLen = isProduction ? MIN_PRODUCTION_JWT_SECRET_LENGTH : MIN_JWT_SECRET_LENGTH;
+
+  if (config.jwt.accessSecret.length < minLen) {
+    errors.push(`JWT_ACCESS_SECRET must be at least ${minLen} characters`);
   }
-  if (config.jwt.refreshSecret.length < MIN_JWT_SECRET_LENGTH) {
-    errors.push(`JWT_REFRESH_SECRET must be at least ${MIN_JWT_SECRET_LENGTH} characters`);
+  if (config.jwt.refreshSecret.length < minLen) {
+    errors.push(`JWT_REFRESH_SECRET must be at least ${minLen} characters`);
+  }
+
+  if (isWeakJwtSecret(config.jwt.accessSecret)) {
+    errors.push('JWT_ACCESS_SECRET must not use the .env.example placeholder or a known weak value');
+  }
+  if (isWeakJwtSecret(config.jwt.refreshSecret)) {
+    errors.push('JWT_REFRESH_SECRET must not use the .env.example placeholder or a known weak value');
   }
 
   if (isProduction) {
@@ -39,6 +61,18 @@ export function validateSecurityConfig() {
     if (!config.corsOrigin.startsWith('https://')) {
       errors.push(
         `CORS_ORIGIN must use HTTPS in production (current: ${config.corsOrigin}). Example: https://your-frontend-domain.com`
+      );
+    }
+
+    if (config.seed.adminPassword === 'ChangeMe@Secure123') {
+      errors.push(
+        'SEED_ADMIN_PASSWORD must not use the default placeholder in production (rotate even if you do not run npm run seed)'
+      );
+    }
+
+    if (config.crm.apiKey && /example|placeholder|changeme/i.test(config.crm.apiKey)) {
+      warnings.push(
+        'CRM_API_KEY looks like a placeholder — rotate the key in CRM and update production .env (git history may still contain old keys)'
       );
     }
   }

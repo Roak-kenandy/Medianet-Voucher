@@ -16,6 +16,17 @@ import {
   parseOperatorPermissions,
   operatorHasPermission,
 } from '../constants/operatorPermissions.js';
+import { getClientMeta } from '../services/auditService.js';
+
+function applyAccessTokenToRequest(req, token) {
+  const payload = verifyAccessToken(token);
+  req.user = {
+    id: payload.sub,
+    role: payload.role,
+    email: payload.email,
+    clientName: payload.clientName,
+  };
+}
 
 export function authenticate(req, _res, next) {
   const authHeader = req.headers.authorization;
@@ -27,17 +38,25 @@ export function authenticate(req, _res, next) {
   const token = authHeader.slice(7);
 
   try {
-    const payload = verifyAccessToken(token);
-    req.user = {
-      id: payload.sub,
-      role: payload.role,
-      email: payload.email,
-      clientName: payload.clientName,
-    };
+    applyAccessTokenToRequest(req, token);
     next();
   } catch (err) {
     next(err);
   }
+}
+
+/** Sets req.user when a valid access token is present; never fails the request. */
+export function optionalAuthenticate(req, _res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) {
+    return next();
+  }
+  try {
+    applyAccessTokenToRequest(req, authHeader.slice(7));
+  } catch {
+    // Ignore invalid tokens on logout.
+  }
+  next();
 }
 
 export function ensureActiveAccount(req, _res, next) {
@@ -59,6 +78,12 @@ export function ensureActiveAccount(req, _res, next) {
           portalRole,
           user.portal_permissions
         );
+      } else if (isStaffRole(req.user.role)) {
+        const dbRole = user.role || 'admin';
+        if (!isStaffRole(dbRole)) {
+          return next(new AppError('Access denied', 403, 'FORBIDDEN'));
+        }
+        req.user.role = dbRole;
       }
       next();
     })
@@ -157,7 +182,7 @@ export const authController = {
   async logout(req, res, next) {
     try {
       const refreshToken = req.cookies[REFRESH_COOKIE];
-      await logout(refreshToken, req.user || {});
+      await logout(refreshToken, req.user || {}, getClientMeta(req));
       clearRefreshCookie(res);
       return res.json({ success: true, data: { message: 'Logged out successfully' } });
     } catch (err) {

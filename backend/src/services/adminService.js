@@ -492,6 +492,14 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
     await connection.execute(sql, fields);
     await syncOperatorPackages(operatorId, data.packageIds, connection);
 
+    if (data.password?.trim()) {
+      await connection.execute(
+        `UPDATE refresh_tokens SET revoked_at = NOW()
+         WHERE user_type = 'operator' AND user_id = ? AND revoked_at IS NULL`,
+        [operatorId]
+      );
+    }
+
     await connection.commit();
 
     await logAudit({

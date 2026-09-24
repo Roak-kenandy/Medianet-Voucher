@@ -56,6 +56,7 @@ export const config = {
     paymentTermsId: process.env.PAYMENT_TERMS_ID || '',
     paymentTypeId: process.env.PAYMENT_TYPE_ID || '199f072f-977d-4056-8262-d7e467bbccbb7',
     salesModelName: process.env.CRM_SALES_MODEL_NAME || 'Retail',
+    requestTimeoutMs: parseInt(process.env.CRM_REQUEST_TIMEOUT_MS || '60000', 10),
   },
   wallet: {
     currencyCode: process.env.WALLET_CURRENCY_CODE || process.env.CURRENCY_CODE || 'MVR',

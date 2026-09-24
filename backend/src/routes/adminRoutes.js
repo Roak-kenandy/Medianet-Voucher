@@ -58,6 +58,7 @@ import {
   listQuerySchema,
   operatorActivationsQuerySchema,
   operatorActivationsExportSchema,
+  toggleActiveBodySchema,
 } from '../validators/schemas.js';
 
 const router = Router();
@@ -116,7 +117,7 @@ router.patch(
   requirePermission('managePackageStatus'),
   asyncHandler(async (req, res) => {
     const packageId = parseInt(req.params.id, 10);
-    const isActive = Boolean(req.body.isActive);
+    const { isActive } = toggleActiveBodySchema.parse(req.body);
     const result = await updatePackageStatus(req.user.id, packageId, isActive, getClientMeta(req));
     success(res, result);
   })
@@ -154,7 +155,7 @@ router.patch(
   requirePermission('manageAdminStatus'),
   asyncHandler(async (req, res) => {
     const targetId = parseInt(req.params.id, 10);
-    const isActive = Boolean(req.body.isActive);
+    const { isActive } = toggleActiveBodySchema.parse(req.body);
     const result = await updateAdminStatus(req.user.id, targetId, isActive, getClientMeta(req));
     success(res, result);
   })
@@ -184,7 +185,7 @@ router.patch(
   requirePermission('manageOperators'),
   asyncHandler(async (req, res) => {
     const operatorId = parseInt(req.params.id, 10);
-    const isActive = Boolean(req.body.isActive);
+    const { isActive } = toggleActiveBodySchema.parse(req.body);
     const result = await updateOperatorStatus(req.user.id, operatorId, isActive, getClientMeta(req));
     success(res, result);
   })
@@ -268,11 +269,14 @@ router.post(
   '/operators/:id/wallet/topups/:transactionId/complete',
   requirePermission('completeTopup'),
   asyncHandler(async (req, res) => {
+    const operatorId = parseInt(req.params.id, 10);
     const transactionId = parseInt(req.params.transactionId, 10);
     const paymentRef = req.body.paymentRef ? String(req.body.paymentRef) : null;
     const result = await completeTopup(transactionId, paymentRef, getClientMeta(req), {
       type: 'admin',
       id: req.user.id,
+    }, {
+      expectedOperatorId: operatorId,
     });
     success(res, result);
   })
@@ -375,6 +379,7 @@ router.delete(
 
 router.get(
   '/reports',
+  requirePermission('viewReports'),
   asyncHandler(async (req, res) => {
     await runWithReportSlot(async () => {
       const filters = reportQuerySchema.parse(req.query);
@@ -386,6 +391,7 @@ router.get(
 
 router.get(
   '/reports/export',
+  requirePermission('viewReports'),
   asyncHandler(async (req, res) => {
     await runWithReportSlot(async () => {
       const filters = reportQuerySchema.parse(req.query);

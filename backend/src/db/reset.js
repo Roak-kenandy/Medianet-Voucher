@@ -1,6 +1,11 @@
 import bcrypt from 'bcrypt';
-import { config } from '../config/index.js';
+import { config, isProduction } from '../config/index.js';
 import pool from './pool.js';
+
+if (isProduction) {
+  console.error('Refusing to run database reset in production (NODE_ENV=production).');
+  process.exit(1);
+}
 
 const SEED_EMAIL = config.seed.adminEmail.toLowerCase().trim();
 

@@ -1,5 +1,16 @@
 import { query } from '../db/pool.js';
 
+/** audit_logs.actor_type ENUM only allows admin | operator | system */
+export function normalizeAuditActorType(role) {
+  if (role === 'operator' || role === 'admin' || role === 'system') {
+    return role;
+  }
+  if (role === 'sales' || role === 'finance') {
+    return 'admin';
+  }
+  return 'admin';
+}
+
 export async function logAudit({
   actorType,
   actorId = null,
@@ -10,13 +21,15 @@ export async function logAudit({
   userAgent = null,
   metadata = null,
 }) {
+  const normalizedActorType = normalizeAuditActorType(actorType);
+
   try {
     await query(
       `INSERT INTO audit_logs
         (actor_type, actor_id, action, resource_type, resource_id, ip_address, user_agent, metadata)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        actorType,
+        normalizedActorType,
         actorId,
         action,
         resourceType,

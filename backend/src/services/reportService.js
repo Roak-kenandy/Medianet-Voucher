@@ -8,6 +8,7 @@ import { generateSalesReport, salesReportToCsv, streamSalesReportCsv } from './s
 import { REPORT_DEFAULT_PAGE_SIZE } from '../constants/reportLimits.js';
 import { paginationSql } from '../utils/pagination.js';
 import { streamCsvFromOffsetBatches } from './reportPagination.js';
+import { csvEscape, csvRow } from '../utils/csv.js';
 
 const PAGINATED_REPORT_TYPES = new Set(['dealer_topup', 'customer_summary']);
 
@@ -366,15 +367,8 @@ export function reportToCsv(report) {
 
   const headers = Object.keys(report.rows[0]);
   const lines = [
-    headers.join(','),
-    ...report.rows.map((row) =>
-      headers
-        .map((h) => {
-          const val = row[h] ?? '';
-          return `"${String(val).replace(/"/g, '""')}"`;
-        })
-        .join(',')
-    ),
+    csvRow(headers),
+    ...report.rows.map((row) => csvRow(headers.map((h) => row[h] ?? ''))),
   ];
   return lines.join('\n');
 }

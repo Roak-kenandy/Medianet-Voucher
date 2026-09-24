@@ -13,6 +13,7 @@ import {
   getTrialQuotaInfo,
   countPaidAccountCreations,
 } from '../utils/trial.js';
+import { csvEscape } from '../utils/csv.js';
 
 async function getOperatorServiceScope(operatorId, connection = null) {
   const runner = connection
@@ -498,13 +499,6 @@ export async function listAccounts(
   };
 }
 
-function csvEscape(value) {
-  const text = value == null ? '' : String(value);
-  if (/[",\n]/.test(text)) {
-    return `"${text.replace(/"/g, '""')}"`;
-  }
-  return text;
-}
 
 export async function exportAccountsCsv(
   operatorId,
@@ -692,8 +686,34 @@ export async function searchCustomers(operatorId, phoneNumber, serviceTag = 'OTT
 }
 
 export async function crmTopupCustomer(operatorId, data, reqMeta = {}) {
-  const connection = await getConnection();
   const amount = Math.round(Number(data.amount) * 100) / 100;
+
+  const [operatorPreview] = await query(
+    `SELECT id, wallet_balance, is_active, service_scope FROM operators WHERE id = ? LIMIT 1`,
+    [operatorId]
+  );
+  if (!operatorPreview) {
+    throw new AppError('Operator not found', 404, 'NOT_FOUND');
+  }
+  if (!operatorPreview.is_active) {
+    throw new AppError('Operator account is inactive', 403, 'FORBIDDEN');
+  }
+  assertOperatorServiceTag(operatorPreview.service_scope || 'BOTH', data.serviceTag);
+
+  const walletBalance = Math.round(Number(operatorPreview.wallet_balance) * 100) / 100;
+  if (walletBalance < amount) {
+    throw new AppError(
+      `Insufficient wallet balance. Required ${amount} MVR, available ${walletBalance} MVR.`,
+      403,
+      'INSUFFICIENT_WALLET_BALANCE'
+    );
+  }
+
+  await assertCrmContactMatchesPhoneLookup(data.crmContactId, data.phoneNumber, data.serviceTag);
+
+  const crmResult = await crmService.postCustomerPayment(data.crmContactId, amount);
+
+  const connection = await getConnection();
 
   try {
     await connection.beginTransaction();
@@ -705,25 +725,18 @@ export async function crmTopupCustomer(operatorId, data, reqMeta = {}) {
     );
 
     const operator = operatorRows[0];
-    if (!operator) {
-      throw new AppError('Operator not found', 404, 'NOT_FOUND');
-    }
-    if (!operator.is_active) {
-      throw new AppError('Operator account is inactive', 403, 'FORBIDDEN');
+    if (!operator || !operator.is_active) {
+      throw new AppError('Operator account is unavailable', 403, 'FORBIDDEN');
     }
 
-    assertOperatorServiceTag(operator.service_scope || 'BOTH', data.serviceTag);
-
-    const walletBalance = Math.round(Number(operator.wallet_balance) * 100) / 100;
-    if (walletBalance < amount) {
+    const lockedBalance = Math.round(Number(operator.wallet_balance) * 100) / 100;
+    if (lockedBalance < amount) {
       throw new AppError(
-        `Insufficient wallet balance. Required ${amount} MVR, available ${walletBalance} MVR.`,
+        `Insufficient wallet balance. Required ${amount} MVR, available ${lockedBalance} MVR.`,
         403,
         'INSUFFICIENT_WALLET_BALANCE'
       );
     }
-
-    const crmResult = await crmService.postCustomerPayment(data.crmContactId, amount);
 
     await debitWallet(connection, {
       operatorId,
@@ -758,7 +771,7 @@ export async function crmTopupCustomer(operatorId, data, reqMeta = {}) {
       actorId: operatorId,
       action: 'CUSTOMER_CRM_TOPUP',
       resourceType: 'crm_contact',
-      resourceId: data.crmContactId,
+      resourceId: null,
       ipAddress: reqMeta.ipAddress,
       userAgent: reqMeta.userAgent,
       metadata: {
@@ -789,7 +802,23 @@ export async function crmTopupCustomer(operatorId, data, reqMeta = {}) {
   }
 }
 
+async function assertCrmContactMatchesPhoneLookup(crmContactId, phoneNumber, serviceTag) {
+  const lookup = await crmService.searchCustomersByPhone(phoneNumber, serviceTag);
+  const contactMatches = (lookup.customers || []).some(
+    (customer) => String(customer.id) === String(crmContactId)
+  );
+  if (!contactMatches) {
+    throw new AppError(
+      'Customer reference does not match a phone lookup for this service',
+      400,
+      'VALIDATION_ERROR'
+    );
+  }
+}
+
 export async function subscribeCustomer(operatorId, data, reqMeta = {}) {
+  await assertCrmContactMatchesPhoneLookup(data.crmContactId, data.phoneNumber, data.serviceTag);
+
   const connection = await getConnection();
 
   try {
@@ -970,27 +999,29 @@ function amountsMatch(expected, provided) {
   return Math.round(Number(expected) * 100) === Math.round(Number(provided) * 100);
 }
 
+const WALLET_TX_DESCRIPTION_MAX = 500;
+
 function buildChargeDescription(activity, customerName, phoneNumber, packageNames = []) {
   const packagesLabel = packageNames.length ? packageNames.join(', ') : 'package';
   const customerLabel = `${customerName} (${phoneNumber})`;
 
+  let description;
   if (activity === 'customer_crm_topup') {
-    return `Customer wallet top-up for ${customerLabel}`;
+    description = `Customer wallet top-up for ${customerLabel}`;
+  } else if (activity === 'customer_subscribe') {
+    description = `Customer subscribe — ${packagesLabel} for ${customerLabel}`;
+  } else if (activity === 'customer_topup') {
+    description = `Customer top-up — ${packagesLabel} for ${customerLabel}`;
+  } else if (activity === 'bulk_create') {
+    description = `Bulk create — ${packagesLabel} for ${customerLabel}`;
+  } else {
+    description = `Create account — ${packagesLabel} for ${customerLabel}`;
   }
 
-  if (activity === 'customer_subscribe') {
-    return `Customer subscribe — ${packagesLabel} for ${customerLabel}`;
+  if (description.length > WALLET_TX_DESCRIPTION_MAX) {
+    return `${description.slice(0, WALLET_TX_DESCRIPTION_MAX - 1)}…`;
   }
-
-  if (activity === 'customer_topup') {
-    return `Customer top-up — ${packagesLabel} for ${customerLabel}`;
-  }
-
-  if (activity === 'bulk_create') {
-    return `Bulk create — ${packagesLabel} for ${customerLabel}`;
-  }
-
-  return `Create account — ${packagesLabel} for ${customerLabel}`;
+  return description;
 }
 
 async function applyAccountCreationCharge(
