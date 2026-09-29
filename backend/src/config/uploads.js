@@ -5,11 +5,48 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const UPLOADS_ROOT = path.join(__dirname, '../../uploads');
 export const MARKETING_ADS_DIR = path.join(UPLOADS_ROOT, 'marketing-ads');
-export const KNOWLEDGE_DOCUMENTS_DIR = path.join(UPLOADS_ROOT, 'knowledge-documents');
+
+/**
+ * Private files live outside the public uploads tree so a static-file or nginx
+ * misconfiguration can never expose them. They are served only via authenticated routes.
+ */
+export const PRIVATE_STORAGE_ROOT = path.resolve(
+  process.env.PRIVATE_STORAGE_DIR || path.join(__dirname, '../../private')
+);
+export const KNOWLEDGE_DOCUMENTS_DIR = path.join(PRIVATE_STORAGE_ROOT, 'knowledge-documents');
+const LEGACY_KNOWLEDGE_DOCUMENTS_DIR = path.join(UPLOADS_ROOT, 'knowledge-documents');
+
+function migrateLegacyKnowledgeDocuments() {
+  if (!fs.existsSync(LEGACY_KNOWLEDGE_DOCUMENTS_DIR)) return;
+  for (const name of fs.readdirSync(LEGACY_KNOWLEDGE_DOCUMENTS_DIR)) {
+    const from = path.join(LEGACY_KNOWLEDGE_DOCUMENTS_DIR, name);
+    const to = path.join(KNOWLEDGE_DOCUMENTS_DIR, name);
+    try {
+      if (!fs.statSync(from).isFile() || fs.existsSync(to)) continue;
+      try {
+        fs.renameSync(from, to);
+      } catch (err) {
+        if (err.code !== 'EXDEV') throw err;
+        fs.copyFileSync(from, to);
+        fs.unlinkSync(from);
+      }
+    } catch (err) {
+      console.error(`[Uploads] Could not move knowledge document ${name}:`, err.message);
+    }
+  }
+  try {
+    if (!fs.readdirSync(LEGACY_KNOWLEDGE_DOCUMENTS_DIR).length) {
+      fs.rmdirSync(LEGACY_KNOWLEDGE_DOCUMENTS_DIR);
+    }
+  } catch {
+    // Leave the legacy directory if it cannot be removed.
+  }
+}
 
 export function ensureUploadDirs() {
   fs.mkdirSync(MARKETING_ADS_DIR, { recursive: true });
-  fs.mkdirSync(KNOWLEDGE_DOCUMENTS_DIR, { recursive: true });
+  fs.mkdirSync(KNOWLEDGE_DOCUMENTS_DIR, { recursive: true, mode: 0o750 });
+  migrateLegacyKnowledgeDocuments();
 }
 
 /**

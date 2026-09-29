@@ -105,7 +105,7 @@ All configuration lives in `backend/.env`. Copy from `backend/.env.example` only
 | Area | Examples (see `.env.example`) |
 |------|-------------------------------|
 | Database | `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` |
-| Auth | `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` |
+| Auth | `JWT_ACCESS_SECRET` |
 | CRM | `CRM_API_KEY`, `CRM_BASE_URL`, product/tag UUIDs |
 | Wallet | `WALLET_GST_RATE`, `WALLET_MIN_TOPUP` |
 | BML | `BML_ENABLED`, `BML_AUTH_TOKEN`, `BML_REDIRECT_URL`, `BML_WEBHOOK_URL` |

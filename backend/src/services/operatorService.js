@@ -1,19 +1,26 @@
 import { config } from '../config/index.js';
 import { query, getConnection } from '../db/pool.js';
-import { AppError } from '../utils/errors.js';
+import { AppError, classifyCrmFailure } from '../utils/errors.js';
 import { logAudit } from './auditService.js';
 import { crmService } from './crmService.js';
 import { buildDailyTrend } from '../utils/chartData.js';
 import { paginationSql } from '../utils/pagination.js';
+import { withCrmSlot } from '../utils/crmConcurrency.js';
+import { operatorSpendDebitSql } from '../utils/walletSql.js';
 import { getOperatorPackageIds, getOperatorPackages, sumPackagePrices, assertPackagesAssignable } from './packageService.js';
-import { debitWallet } from './walletService.js';
+import {
+  debitWallet,
+  generateReference,
+  mergeTransactionMetadata,
+  refundWalletDebit,
+} from './walletService.js';
 import { assertServiceTag, getAllowedServiceTags } from '../constants/serviceTags.js';
 import {
   formatTrialForResponse,
   getTrialQuotaInfo,
   countPaidAccountCreations,
 } from '../utils/trial.js';
-import { csvEscape } from '../utils/csv.js';
+import { csvEscape, csvRow } from '../utils/csv.js';
 
 async function getOperatorServiceScope(operatorId, connection = null) {
   const runner = connection
@@ -129,9 +136,9 @@ export async function getOperatorStats(operatorId) {
   const [walletSummaryRow] = await query(
     `SELECT
        COALESCE(SUM(CASE WHEN type = 'topup' AND status = 'completed' THEN net_amount ELSE 0 END), 0) AS totalTopups,
-       COALESCE(SUM(CASE WHEN type = 'debit' AND status = 'completed' THEN net_amount ELSE 0 END), 0) AS totalSpent,
+       COALESCE(SUM(CASE WHEN ${operatorSpendDebitSql('')} THEN net_amount ELSE 0 END), 0) AS totalSpent,
        COALESCE(SUM(CASE WHEN type = 'topup' AND status = 'completed' THEN 1 ELSE 0 END), 0) AS topupCount,
-       COALESCE(SUM(CASE WHEN type = 'debit' AND status = 'completed' THEN 1 ELSE 0 END), 0) AS debitCount
+       COALESCE(SUM(CASE WHEN ${operatorSpendDebitSql('')} THEN 1 ELSE 0 END), 0) AS debitCount
      FROM wallet_transactions
      WHERE operator_id = ? AND created_at >= DATE_SUB(CURDATE(), INTERVAL 29 DAY)`,
     [operatorId]
@@ -140,7 +147,7 @@ export async function getOperatorStats(operatorId) {
   const debitRows = await query(
     `SELECT net_amount, metadata
      FROM wallet_transactions
-     WHERE operator_id = ? AND type = 'debit' AND status = 'completed'
+     WHERE operator_id = ? AND ${operatorSpendDebitSql('')}
        AND created_at >= DATE_SUB(CURDATE(), INTERVAL 29 DAY)`,
     [operatorId]
   );
@@ -402,11 +409,21 @@ function buildCustomerHistoryQuery(operatorId, { search = '', startDate, endDate
         JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.phoneNumber')) AS phone_number,
         JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.serviceTag')) AS service_tag,
         JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.activity')) AS activity,
-        'completed' AS status,
+        CASE COALESCE(JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.crmState')), 'completed')
+          WHEN 'refunded' THEN 'failed'
+          WHEN 'needs_reconciliation' THEN 'processing'
+          WHEN 'pending' THEN 'processing'
+          ELSE 'completed'
+        END AS status,
         NULL AS package_names,
-        wt.net_amount AS amount_charged,
+        CASE WHEN JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.crmState')) = 'refunded' THEN 0
+             ELSE wt.net_amount END AS amount_charged,
         wt.reference AS external_ref,
-        NULL AS error_message,
+        CASE JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.crmState'))
+          WHEN 'refunded' THEN 'CRM top-up failed — wallet refunded'
+          WHEN 'needs_reconciliation' THEN 'Awaiting Medianet confirmation'
+          ELSE NULL
+        END AS error_message,
         wt.reference AS wallet_reference
       FROM wallet_transactions wt
       WHERE ${topupWhere}
@@ -527,14 +544,14 @@ export async function exportAccountsCsv(
 
   const lines = [
     'Medianet Voucher — Customer History',
-    `Generated,${new Date().toISOString()}`,
-    `Operator,${operator?.client_name || ''}`,
-    `Email,${operator?.email || ''}`,
-    startDate ? `Start date,${startDate}` : 'Start date,All',
-    endDate ? `End date,${endDate}` : 'End date,All',
-    activity && activity !== 'all' ? `Activity filter,${activity}` : 'Activity filter,All',
-    search ? `Search filter,${search}` : 'Search filter,All',
-    `Total records,${accounts.length}`,
+    csvRow(['Generated', new Date().toISOString()]),
+    csvRow(['Operator', operator?.client_name || '']),
+    csvRow(['Email', operator?.email || '']),
+    csvRow(['Start date', startDate || 'All']),
+    csvRow(['End date', endDate || 'All']),
+    csvRow(['Activity filter', activity && activity !== 'all' ? activity : 'All']),
+    csvRow(['Search filter', search || 'All']),
+    csvRow(['Total records', accounts.length]),
     '',
     [
       'Date',
@@ -572,74 +589,296 @@ export async function exportAccountsCsv(
   return `\ufeff${lines.join('\n')}`;
 }
 
-async function provisionExistingContactInCrm(
-  connection,
-  voucherAccountId,
-  phoneNumber,
-  fullName,
-  packageIds,
-  crmContactId
-) {
-  await connection.execute(
-    `UPDATE voucher_accounts SET status = 'processing' WHERE id = ?`,
-    [voucherAccountId]
+/*
+ * Money-safe CRM provisioning ("reserve first"):
+ *   1. Short locked transaction: create the voucher row and take payment up front
+ *      (trial slot, wallet debit, or free) with a unique reference. Commit.
+ *   2. Call CRM outside any transaction, sending that reference as the payment backoffice_code.
+ *   3. Settle: success → mark created; nothing posted in CRM → release the charge;
+ *      CRM payment posted or outcome unknown → keep the charge and flag for reconciliation.
+ * A crash between steps leaves the row `processing` with the charge kept (never free service).
+ */
+
+const RECONCILIATION_MESSAGE =
+  'Payment was sent to CRM but activation did not complete. Your wallet charge is on hold — Medianet support will complete or refund it.';
+
+async function lockActiveOperator(connection, operatorId) {
+  const [rows] = await connection.execute(
+    `SELECT id, wallet_balance, accounts_created, is_active, client_name, service_scope,
+            trial_account_limit, trial_accounts_used
+     FROM operators WHERE id = ? FOR UPDATE`,
+    [operatorId]
   );
+  const operator = rows[0];
+  if (!operator) {
+    throw new AppError('Operator not found', 404, 'NOT_FOUND');
+  }
+  if (!operator.is_active) {
+    throw new AppError('Operator account is inactive', 403, 'FORBIDDEN');
+  }
+  return operator;
+}
 
+/** Phase 1 — must run inside a transaction that already holds the operator row lock. */
+async function reserveVoucherAccounts(
+  connection,
+  { operatorId, operator, accounts, packageIds, pricing, serviceTag, activity, metadataExtra = {} }
+) {
+  const unitCost = roundMoney(pricing.total);
+  const packageNames = pricing.packages.map((pkg) => pkg.name);
+  const walletBalance = roundMoney(operator.wallet_balance);
+  const trialQuota = getTrialQuotaInfo(operator.trial_account_limit, operator.trial_accounts_used);
+  const paidCount = unitCost > 0 ? countPaidAccountCreations(accounts.length, trialQuota.trialAccountsRemaining) : 0;
+  const requiredBalance = roundMoney(unitCost * paidCount);
+
+  if (walletBalance < requiredBalance) {
+    throw new AppError(
+      `Insufficient wallet balance. Required ${requiredBalance} ${pricing.currencyCode}, available ${walletBalance} ${pricing.currencyCode}.`,
+      403,
+      'INSUFFICIENT_WALLET_BALANCE'
+    );
+  }
+
+  let trialRemaining = trialQuota.trialAccountsRemaining;
+  const reservations = [];
+
+  for (const account of accounts) {
+    const fullName = account.fullName.trim();
+    const phoneNumber = account.phoneNumber.trim();
+
+    const [insertResult] = await connection.execute(
+      `INSERT INTO voucher_accounts (operator_id, package_id, full_name, phone_number, service_tag, origin_activity, status)
+       VALUES (?, ?, ?, ?, ?, ?, 'processing')`,
+      [operatorId, packageIds[0], fullName, phoneNumber, serviceTag, activity]
+    );
+    const voucherAccountId = insertResult.insertId;
+
+    for (const packageId of packageIds) {
+      await connection.execute(
+        `INSERT INTO voucher_account_packages (voucher_account_id, package_id) VALUES (?, ?)`,
+        [voucherAccountId, packageId]
+      );
+    }
+
+    let chargeType;
+    let amountCharged = 0;
+    let paymentReference;
+
+    if (trialRemaining > 0) {
+      trialRemaining -= 1;
+      chargeType = 'trial';
+      paymentReference = generateReference('TRL');
+      await connection.execute(
+        `UPDATE operators
+         SET trial_accounts_used = trial_accounts_used + 1,
+             accounts_created = accounts_created + 1
+         WHERE id = ?`,
+        [operatorId]
+      );
+    } else if (unitCost > 0) {
+      chargeType = 'wallet';
+      amountCharged = unitCost;
+      const debit = await debitWallet(connection, {
+        operatorId,
+        amount: unitCost,
+        voucherAccountId,
+        description: buildChargeDescription(activity, fullName, phoneNumber, packageNames),
+        createdByType: 'operator',
+        createdById: operatorId,
+        metadata: {
+          ...metadataExtra,
+          activity,
+          packageIds,
+          packageNames,
+          phoneNumber,
+          customerName: fullName,
+          serviceTag,
+          crmState: 'pending',
+        },
+      });
+      paymentReference = debit.reference;
+      await connection.execute(
+        `UPDATE operators SET accounts_created = accounts_created + 1 WHERE id = ?`,
+        [operatorId]
+      );
+    } else {
+      chargeType = 'free';
+      paymentReference = generateReference('FRE');
+      await connection.execute(
+        `UPDATE operators SET accounts_created = accounts_created + 1 WHERE id = ?`,
+        [operatorId]
+      );
+    }
+
+    await connection.execute(
+      `UPDATE voucher_accounts SET amount_charged = ? WHERE id = ?`,
+      [amountCharged, voucherAccountId]
+    );
+
+    reservations.push({
+      voucherAccountId,
+      fullName,
+      phoneNumber,
+      chargeType,
+      amountCharged,
+      paymentReference,
+    });
+  }
+
+  return reservations;
+}
+
+async function markReservationCreated(reservation, crmResult, fallbackRef = null) {
+  const externalRef = crmResult?.subscriptionId || crmResult?.contactId || fallbackRef || null;
+  await query(
+    `UPDATE voucher_accounts
+     SET status = 'created', external_ref = ?, error_message = NULL
+     WHERE id = ? AND status = 'processing'`,
+    [externalRef, reservation.voucherAccountId]
+  );
+  if (reservation.chargeType === 'wallet') {
+    await mergeTransactionMetadata(null, reservation.paymentReference, {
+      crmState: 'completed',
+      crmPaymentId: crmResult?.paymentId || null,
+      crmSubscriptionId: crmResult?.subscriptionId || null,
+    });
+  }
+  return externalRef;
+}
+
+/** Nothing was posted in CRM: return the wallet debit / trial slot and mark the row failed. */
+async function releaseReservation(operatorId, reservation, errorMessage) {
+  const connection = await getConnection();
   try {
-    const result = await crmService.activatePackagesForContact(crmContactId, packageIds);
-    const externalRef = result.subscriptionId || result.contactId || crmContactId;
+    await connection.beginTransaction();
+    await connection.execute(`SELECT id FROM operators WHERE id = ? FOR UPDATE`, [operatorId]);
 
+    const [rows] = await connection.execute(
+      `SELECT status FROM voucher_accounts WHERE id = ? FOR UPDATE`,
+      [reservation.voucherAccountId]
+    );
+    if (rows[0]?.status !== 'processing') {
+      await connection.commit();
+      return;
+    }
+
+    if (reservation.chargeType === 'wallet') {
+      await refundWalletDebit(connection, {
+        operatorId,
+        debitReference: reservation.paymentReference,
+        amount: reservation.amountCharged,
+        voucherAccountId: reservation.voucherAccountId,
+        description: `Refund — activation failed for ${reservation.fullName} (${reservation.phoneNumber})`,
+        reason: errorMessage,
+      });
+    }
+
+    await connection.execute(
+      `UPDATE operators
+       SET accounts_created = GREATEST(accounts_created - 1, 0),
+           trial_accounts_used = GREATEST(trial_accounts_used - ?, 0)
+       WHERE id = ?`,
+      [reservation.chargeType === 'trial' ? 1 : 0, operatorId]
+    );
     await connection.execute(
       `UPDATE voucher_accounts
-       SET status = 'created', external_ref = ?, error_message = NULL
+       SET status = 'failed', amount_charged = 0, error_message = ?
        WHERE id = ?`,
-      [externalRef, voucherAccountId]
+      [String(errorMessage).slice(0, 1000), reservation.voucherAccountId]
     );
 
-    return { success: true, externalRef, crm: result };
+    await connection.commit();
   } catch (err) {
-    const message = err.message || 'Activation failed';
-    const code = err.code || 'CRM_PROVISION_FAILED';
-
-    await connection.execute(
-      `UPDATE voucher_accounts SET status = 'failed', error_message = ? WHERE id = ?`,
-      [message, voucherAccountId]
-    );
-
-    return { success: false, error: message, code };
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
   }
 }
 
-async function provisionAccountInCrm(connection, voucherAccountId, phoneNumber, fullName, packageIds) {
-  await connection.execute(
-    `UPDATE voucher_accounts SET status = 'processing' WHERE id = ?`,
-    [voucherAccountId]
+/** CRM payment posted (or may have): keep the charge and flag for staff reconciliation. */
+async function flagReservationForReconciliation(operatorId, reservation, err, outcome, reqMeta, context) {
+  const detail = err?.details || {};
+  await query(
+    `UPDATE voucher_accounts SET status = 'failed', error_message = ? WHERE id = ? AND status = 'processing'`,
+    [`${RECONCILIATION_MESSAGE} (${String(err?.message || '').slice(0, 400)})`, reservation.voucherAccountId]
   );
-
-  try {
-    const result = await crmService.provisionOttAccount(phoneNumber, fullName, packageIds);
-    const externalRef =
-      result.subscriptionId || result.contactId || null;
-
-    await connection.execute(
-      `UPDATE voucher_accounts
-       SET status = 'created', external_ref = ?, error_message = NULL
-       WHERE id = ?`,
-      [externalRef, voucherAccountId]
-    );
-
-    return { success: true, externalRef, crm: result };
-  } catch (err) {
-    const message = err.message || 'Account setup failed';
-    const code = err.code || 'CRM_PROVISION_FAILED';
-
-    await connection.execute(
-      `UPDATE voucher_accounts SET status = 'failed', error_message = ? WHERE id = ?`,
-      [message, voucherAccountId]
-    );
-
-    return { success: false, error: message, code };
+  if (reservation.chargeType === 'wallet') {
+    await mergeTransactionMetadata(null, reservation.paymentReference, {
+      crmState: 'needs_reconciliation',
+      crmOutcome: outcome,
+      crmPaymentId: detail.paymentId || null,
+      crmContactId: detail.contactId || context.crmContactId || null,
+      crmSubscriptionId: detail.subscriptionId || null,
+    });
   }
+  await logAudit({
+    actorType: 'operator',
+    actorId: operatorId,
+    action: 'CRM_RECONCILIATION_REQUIRED',
+    resourceType: 'voucher_account',
+    resourceId: reservation.voucherAccountId,
+    ipAddress: reqMeta.ipAddress,
+    userAgent: reqMeta.userAgent,
+    metadata: {
+      outcome,
+      activity: context.activity,
+      paymentReference: reservation.paymentReference,
+      chargeType: reservation.chargeType,
+      amountCharged: reservation.amountCharged,
+      crmPaymentId: detail.paymentId || null,
+      crmContactId: detail.contactId || context.crmContactId || null,
+      error: String(err?.message || '').slice(0, 500),
+    },
+  });
+}
+
+/** Phase 2 + 3 for one reservation. Never throws; returns the per-account outcome. */
+async function provisionReservation(operatorId, reservation, runCrm, reqMeta, context) {
+  try {
+    const crmResult = await runCrm(reservation.paymentReference);
+    let externalRef = null;
+    try {
+      externalRef = await markReservationCreated(reservation, crmResult, context.crmContactId);
+    } catch (dbErr) {
+      console.error('[Provision] CRM succeeded but local update failed:', reservation.voucherAccountId, dbErr.message);
+    }
+    return { status: 'created', externalRef, amountCharged: reservation.amountCharged };
+  } catch (err) {
+    const outcome = classifyCrmFailure(err);
+    const message = err?.message || 'Activation failed';
+    try {
+      if (outcome === 'not_charged') {
+        await releaseReservation(operatorId, reservation, message);
+        return {
+          status: 'failed',
+          amountCharged: 0,
+          errorMessage: message,
+          errorCode: err?.code || 'CRM_PROVISION_FAILED',
+          errorStatus: err instanceof AppError && err.statusCode < 500 ? err.statusCode : 502,
+        };
+      }
+      await flagReservationForReconciliation(operatorId, reservation, err, outcome, reqMeta, context);
+    } catch (settleErr) {
+      console.error('[Provision] Settlement failed; left for reconciliation:', reservation.voucherAccountId, settleErr.message);
+    }
+    return {
+      status: 'failed',
+      amountCharged: reservation.amountCharged,
+      errorMessage: RECONCILIATION_MESSAGE,
+      errorCode: 'CRM_RECONCILIATION_REQUIRED',
+      errorStatus: 502,
+    };
+  }
+}
+
+async function readWalletBalance(operatorId) {
+  const [row] = await query(`SELECT wallet_balance FROM operators WHERE id = ? LIMIT 1`, [operatorId]);
+  return roundMoney(row?.wallet_balance);
+}
+
+function roundMoney(value) {
+  return Math.round(Number(value) * 100) / 100;
 }
 
 async function resolveActivatePackageIds(operatorId, packageIds, serviceTag, connection) {
@@ -686,10 +925,16 @@ export async function searchCustomers(operatorId, phoneNumber, serviceTag = 'OTT
 }
 
 export async function crmTopupCustomer(operatorId, data, reqMeta = {}) {
-  const amount = Math.round(Number(data.amount) * 100) / 100;
+  return withCrmSlot(operatorId, () => crmTopupCustomerInner(operatorId, data, reqMeta));
+}
+
+async function crmTopupCustomerInner(operatorId, data, reqMeta) {
+  const amount = roundMoney(data.amount);
+  const fullName = data.fullName.trim();
+  const phoneNumber = data.phoneNumber.trim();
 
   const [operatorPreview] = await query(
-    `SELECT id, wallet_balance, is_active, service_scope FROM operators WHERE id = ? LIMIT 1`,
+    `SELECT id, is_active, service_scope FROM operators WHERE id = ? LIMIT 1`,
     [operatorId]
   );
   if (!operatorPreview) {
@@ -700,103 +945,133 @@ export async function crmTopupCustomer(operatorId, data, reqMeta = {}) {
   }
   assertOperatorServiceTag(operatorPreview.service_scope || 'BOTH', data.serviceTag);
 
-  const walletBalance = Math.round(Number(operatorPreview.wallet_balance) * 100) / 100;
-  if (walletBalance < amount) {
-    throw new AppError(
-      `Insufficient wallet balance. Required ${amount} MVR, available ${walletBalance} MVR.`,
-      403,
-      'INSUFFICIENT_WALLET_BALANCE'
-    );
-  }
+  await assertCrmContactMatchesPhoneLookup(data.crmContactId, phoneNumber, data.serviceTag);
 
-  await assertCrmContactMatchesPhoneLookup(data.crmContactId, data.phoneNumber, data.serviceTag);
-
-  const crmResult = await crmService.postCustomerPayment(data.crmContactId, amount);
-
+  // Phase 1: take the money under the operator lock before anything is posted to CRM.
+  let debit;
   const connection = await getConnection();
-
   try {
     await connection.beginTransaction();
+    const operator = await lockActiveOperator(connection, operatorId);
+    assertOperatorServiceTag(operator.service_scope || 'BOTH', data.serviceTag);
 
-    const [operatorRows] = await connection.execute(
-      `SELECT id, wallet_balance, is_active, service_scope
-       FROM operators WHERE id = ? FOR UPDATE`,
-      [operatorId]
-    );
-
-    const operator = operatorRows[0];
-    if (!operator || !operator.is_active) {
-      throw new AppError('Operator account is unavailable', 403, 'FORBIDDEN');
-    }
-
-    const lockedBalance = Math.round(Number(operator.wallet_balance) * 100) / 100;
-    if (lockedBalance < amount) {
-      throw new AppError(
-        `Insufficient wallet balance. Required ${amount} MVR, available ${lockedBalance} MVR.`,
-        403,
-        'INSUFFICIENT_WALLET_BALANCE'
-      );
-    }
-
-    await debitWallet(connection, {
+    debit = await debitWallet(connection, {
       operatorId,
       amount,
-      description: buildChargeDescription(
-        'customer_crm_topup',
-        data.fullName.trim(),
-        data.phoneNumber.trim()
-      ),
+      description: buildChargeDescription('customer_crm_topup', fullName, phoneNumber),
       createdByType: 'operator',
       createdById: operatorId,
       metadata: {
         activity: 'customer_crm_topup',
-        phoneNumber: data.phoneNumber.trim(),
-        customerName: data.fullName.trim(),
+        phoneNumber,
+        customerName: fullName,
         serviceTag: data.serviceTag,
         crmContactId: data.crmContactId,
-        crmPaymentId: crmResult.paymentId,
         topupAmount: amount,
+        crmState: 'pending',
       },
     });
-
     await connection.commit();
-
-    const [balanceRow] = await query(
-      `SELECT wallet_balance FROM operators WHERE id = ? LIMIT 1`,
-      [operatorId]
-    );
-
-    await logAudit({
-      actorType: 'operator',
-      actorId: operatorId,
-      action: 'CUSTOMER_CRM_TOPUP',
-      resourceType: 'crm_contact',
-      resourceId: null,
-      ipAddress: reqMeta.ipAddress,
-      userAgent: reqMeta.userAgent,
-      metadata: {
-        crmContactId: data.crmContactId,
-        amount,
-        serviceTag: data.serviceTag,
-        phoneNumber: data.phoneNumber.trim(),
-        crmPaymentId: crmResult.paymentId,
-      },
-    });
-
-    return {
-      fullName: data.fullName.trim(),
-      phoneNumber: data.phoneNumber.trim(),
-      serviceTag: data.serviceTag,
-      amountCharged: amount,
-      crmPaymentId: crmResult.paymentId,
-      walletBalance: Math.round(Number(balanceRow.wallet_balance) * 100) / 100,
-      currencyCode: 'MVR',
-      balanceBefore: walletBalance,
-      balanceAfter: Math.round(Number(balanceRow.wallet_balance) * 100) / 100,
-    };
   } catch (err) {
     await connection.rollback();
     throw err;
+  } finally {
+    connection.release();
+  }
+
+  // Phase 2: one CRM payment per wallet debit, tagged with the debit reference.
+  let crmResult;
+  try {
+    crmResult = await crmService.postCustomerPayment(data.crmContactId, amount, {
+      paymentReference: debit.reference,
+    });
+  } catch (err) {
+    const outcome = classifyCrmFailure(err);
+    if (outcome === 'not_charged') {
+      await refundTopupDebit(operatorId, debit, fullName, phoneNumber, err.message);
+      if (err instanceof AppError && err.statusCode < 500) throw err;
+      throw new AppError(err.message || 'CRM top-up failed. Your wallet was not charged.', 502, err.code || 'CRM_ERROR');
+    }
+
+    await mergeTransactionMetadata(null, debit.reference, {
+      crmState: 'needs_reconciliation',
+      crmOutcome: outcome,
+    }).catch((mergeErr) => console.error('[CRM topup] metadata update failed:', mergeErr.message));
+    await logAudit({
+      actorType: 'operator',
+      actorId: operatorId,
+      action: 'CRM_RECONCILIATION_REQUIRED',
+      resourceType: 'wallet_transaction',
+      resourceId: debit.transactionId,
+      ipAddress: reqMeta.ipAddress,
+      userAgent: reqMeta.userAgent,
+      metadata: {
+        outcome,
+        activity: 'customer_crm_topup',
+        paymentReference: debit.reference,
+        crmContactId: data.crmContactId,
+        amount,
+        error: String(err?.message || '').slice(0, 500),
+      },
+    });
+    throw new AppError(RECONCILIATION_MESSAGE, 502, 'CRM_RECONCILIATION_REQUIRED');
+  }
+
+  // Phase 3: finalize.
+  await mergeTransactionMetadata(null, debit.reference, {
+    crmState: 'completed',
+    crmPaymentId: crmResult.paymentId,
+  }).catch((mergeErr) => console.error('[CRM topup] metadata update failed:', mergeErr.message));
+
+  await logAudit({
+    actorType: 'operator',
+    actorId: operatorId,
+    action: 'CUSTOMER_CRM_TOPUP',
+    resourceType: 'wallet_transaction',
+    resourceId: debit.transactionId,
+    ipAddress: reqMeta.ipAddress,
+    userAgent: reqMeta.userAgent,
+    metadata: {
+      crmContactId: data.crmContactId,
+      amount,
+      serviceTag: data.serviceTag,
+      phoneNumber,
+      crmPaymentId: crmResult.paymentId,
+      paymentReference: debit.reference,
+    },
+  });
+
+  const walletBalance = await readWalletBalance(operatorId);
+  return {
+    fullName,
+    phoneNumber,
+    serviceTag: data.serviceTag,
+    amountCharged: amount,
+    crmPaymentId: crmResult.paymentId,
+    reference: debit.reference,
+    walletBalance,
+    currencyCode: 'MVR',
+    balanceBefore: debit.balanceBefore,
+    balanceAfter: debit.balanceAfter,
+  };
+}
+
+async function refundTopupDebit(operatorId, debit, fullName, phoneNumber, reason) {
+  const connection = await getConnection();
+  try {
+    await connection.beginTransaction();
+    await refundWalletDebit(connection, {
+      operatorId,
+      debitReference: debit.reference,
+      amount: debit.debit,
+      description: `Refund — CRM top-up failed for ${fullName} (${phoneNumber})`,
+      reason,
+    });
+    await connection.commit();
+  } catch (err) {
+    await connection.rollback();
+    console.error('[CRM topup] Refund failed; left for reconciliation:', debit.reference, err.message);
+    await mergeTransactionMetadata(null, debit.reference, { crmState: 'needs_reconciliation', crmOutcome: 'refund_failed' }).catch(() => {});
   } finally {
     connection.release();
   }
@@ -817,168 +1092,105 @@ async function assertCrmContactMatchesPhoneLookup(crmContactId, phoneNumber, ser
 }
 
 export async function subscribeCustomer(operatorId, data, reqMeta = {}) {
+  return withCrmSlot(operatorId, () => subscribeCustomerInner(operatorId, data, reqMeta));
+}
+
+async function subscribeCustomerInner(operatorId, data, reqMeta) {
   await assertCrmContactMatchesPhoneLookup(data.crmContactId, data.phoneNumber, data.serviceTag);
 
+  let reservation;
+  let resolvedPackageIds;
+  let pricing;
+  let balanceBefore;
   const connection = await getConnection();
-
   try {
     await connection.beginTransaction();
-
-    const [operatorRows] = await connection.execute(
-      `SELECT id, wallet_balance, accounts_created, is_active, client_name, service_scope,
-              trial_account_limit, trial_accounts_used
-       FROM operators WHERE id = ? FOR UPDATE`,
-      [operatorId]
-    );
-
-    const operator = operatorRows[0];
-    if (!operator) {
-      throw new AppError('Operator not found', 404, 'NOT_FOUND');
-    }
-    if (!operator.is_active) {
-      throw new AppError('Operator account is inactive', 403, 'FORBIDDEN');
-    }
-
+    const operator = await lockActiveOperator(connection, operatorId);
     assertOperatorServiceTag(operator.service_scope || 'BOTH', data.serviceTag);
 
-    const resolvedPackageIds = await resolveActivatePackageIds(
+    resolvedPackageIds = await resolveActivatePackageIds(
       operatorId,
       data.packageIds,
       data.serviceTag,
       connection
     );
+    pricing = await sumPackagePrices(resolvedPackageIds, { connection });
 
-    const pricing = await sumPackagePrices(resolvedPackageIds, { connection });
-    const unitCost = pricing.total;
-    const walletBalance = Math.round(Number(operator.wallet_balance) * 100) / 100;
-    const trialQuota = getTrialQuotaInfo(operator.trial_account_limit, operator.trial_accounts_used);
-    const usesTrialSlot = trialQuota.trialAccountsRemaining > 0;
-
-    if (!amountsMatch(unitCost, data.amount)) {
+    if (!amountsMatch(pricing.total, data.amount)) {
       throw new AppError(
-        `Amount must exactly match the selected package total (${unitCost} ${pricing.currencyCode}).`,
+        `Amount must exactly match the selected package total (${pricing.total} ${pricing.currencyCode}).`,
         400,
         'AMOUNT_MISMATCH'
       );
     }
 
-    if (!usesTrialSlot && walletBalance < unitCost) {
-      throw new AppError(
-        `Insufficient wallet balance. Required ${unitCost} ${pricing.currencyCode}, available ${walletBalance} ${pricing.currencyCode}.`,
-        403,
-        'INSUFFICIENT_WALLET_BALANCE'
-      );
-    }
-
-    const primaryPackageId = resolvedPackageIds[0];
-    const [insertResult] = await connection.execute(
-      `INSERT INTO voucher_accounts (operator_id, package_id, full_name, phone_number, service_tag, origin_activity, status)
-       VALUES (?, ?, ?, ?, ?, 'customer_subscribe', 'pending')`,
-      [operatorId, primaryPackageId, data.fullName.trim(), data.phoneNumber.trim(), data.serviceTag]
-    );
-
-    const voucherAccountId = insertResult.insertId;
-
-    for (const packageId of resolvedPackageIds) {
-      await connection.execute(
-        `INSERT INTO voucher_account_packages (voucher_account_id, package_id) VALUES (?, ?)`,
-        [voucherAccountId, packageId]
-      );
-    }
-
-    const provision = await provisionExistingContactInCrm(
-      connection,
-      voucherAccountId,
-      data.phoneNumber.trim(),
-      data.fullName.trim(),
-      resolvedPackageIds,
-      data.crmContactId
-    );
-
-    let amountCharged = 0;
-    if (provision.success) {
-      const packageNames = pricing.packages.map((pkg) => pkg.name);
-      const charge = await applyAccountCreationCharge(connection, {
-        operatorId,
-        unitCost,
-        voucherAccountId,
-        description: buildChargeDescription(
-          'customer_subscribe',
-          data.fullName.trim(),
-          data.phoneNumber.trim(),
-          packageNames
-        ),
-        createdByType: 'operator',
-        createdById: operatorId,
-        metadata: {
-          activity: 'customer_subscribe',
-          packageIds: resolvedPackageIds,
-          packageNames,
-          phoneNumber: data.phoneNumber.trim(),
-          customerName: data.fullName.trim(),
-          serviceTag: data.serviceTag,
-          crmContactId: data.crmContactId,
-        },
-        trialState: {
-          limit: Number(operator.trial_account_limit) || 0,
-          used: Number(operator.trial_accounts_used) || 0,
-        },
-      });
-      amountCharged = charge.amountCharged;
-    }
-
-    await connection.commit();
-
-    if (!provision.success) {
-      throw new AppError(provision.error || 'Activation failed', 502, provision.code || 'CRM_PROVISION_FAILED');
-    }
-
-    const [balanceRow] = await query(
-      `SELECT wallet_balance FROM operators WHERE id = ? LIMIT 1`,
-      [operatorId]
-    );
-
-    await logAudit({
-      actorType: 'operator',
-      actorId: operatorId,
-      action: 'CUSTOMER_SUBSCRIBE',
-      resourceType: 'voucher_account',
-      resourceId: voucherAccountId,
-      ipAddress: reqMeta.ipAddress,
-      userAgent: reqMeta.userAgent,
-      metadata: {
-        crmContactId: data.crmContactId,
-        packageIds: resolvedPackageIds,
-        unitCost,
-        serviceTag: data.serviceTag,
-        phoneNumber: data.phoneNumber.trim(),
-      },
-    });
-
-    const packageNames = pricing.packages.map((pkg) => pkg.name);
-
-    return {
-      id: voucherAccountId,
-      fullName: data.fullName.trim(),
-      phoneNumber: data.phoneNumber.trim(),
-      serviceTag: data.serviceTag,
+    balanceBefore = roundMoney(operator.wallet_balance);
+    [reservation] = await reserveVoucherAccounts(connection, {
+      operatorId,
+      operator,
+      accounts: [{ fullName: data.fullName, phoneNumber: data.phoneNumber }],
       packageIds: resolvedPackageIds,
-      packageNames,
-      amountCharged,
-      status: 'created',
-      externalRef: provision.externalRef || null,
-      walletBalance: Math.round(Number(balanceRow.wallet_balance) * 100) / 100,
-      unitCost,
-      currencyCode: pricing.currencyCode,
-      balanceBefore: walletBalance,
-      balanceAfter: Math.round(Number(balanceRow.wallet_balance) * 100) / 100,
-    };
+      pricing,
+      serviceTag: data.serviceTag,
+      activity: 'customer_subscribe',
+      metadataExtra: { crmContactId: data.crmContactId },
+    });
+    await connection.commit();
   } catch (err) {
     await connection.rollback();
     throw err;
   } finally {
     connection.release();
   }
+
+  const outcome = await provisionReservation(
+    operatorId,
+    reservation,
+    (paymentReference) =>
+      crmService.activatePackagesForContact(data.crmContactId, resolvedPackageIds, { paymentReference }),
+    reqMeta,
+    { activity: 'customer_subscribe', crmContactId: data.crmContactId }
+  );
+
+  if (outcome.status !== 'created') {
+    throw new AppError(outcome.errorMessage, outcome.errorStatus, outcome.errorCode);
+  }
+
+  await logAudit({
+    actorType: 'operator',
+    actorId: operatorId,
+    action: 'CUSTOMER_SUBSCRIBE',
+    resourceType: 'voucher_account',
+    resourceId: reservation.voucherAccountId,
+    ipAddress: reqMeta.ipAddress,
+    userAgent: reqMeta.userAgent,
+    metadata: {
+      crmContactId: data.crmContactId,
+      packageIds: resolvedPackageIds,
+      unitCost: pricing.total,
+      serviceTag: data.serviceTag,
+      phoneNumber: reservation.phoneNumber,
+      paymentReference: reservation.paymentReference,
+    },
+  });
+
+  const walletBalance = await readWalletBalance(operatorId);
+  return {
+    id: reservation.voucherAccountId,
+    fullName: reservation.fullName,
+    phoneNumber: reservation.phoneNumber,
+    serviceTag: data.serviceTag,
+    packageIds: resolvedPackageIds,
+    packageNames: pricing.packages.map((pkg) => pkg.name),
+    amountCharged: outcome.amountCharged,
+    status: 'created',
+    externalRef: outcome.externalRef || null,
+    walletBalance,
+    unitCost: pricing.total,
+    currencyCode: pricing.currencyCode,
+    balanceBefore,
+    balanceAfter: walletBalance,
+  };
 }
 
 async function assertPackagesMatchServiceTag(packageIds, serviceTag, connection) {
@@ -1024,146 +1236,82 @@ function buildChargeDescription(activity, customerName, phoneNumber, packageName
   return description;
 }
 
-async function applyAccountCreationCharge(
-  connection,
-  {
-    operatorId,
-    unitCost,
-    voucherAccountId,
-    description,
-    metadata,
-    createdByType,
-    createdById,
-    trialState,
-  }
-) {
-  const hasTrialSlot = trialState.limit > 0 && trialState.used < trialState.limit;
-
-  if (hasTrialSlot) {
-    trialState.used += 1;
-    await connection.execute(
-      `UPDATE operators
-       SET trial_accounts_used = trial_accounts_used + 1,
-           accounts_created = accounts_created + 1
-       WHERE id = ?`,
-      [operatorId]
-    );
-    await connection.execute(
-      `UPDATE voucher_accounts SET amount_charged = 0 WHERE id = ?`,
-      [voucherAccountId]
-    );
-    return { amountCharged: 0, trialFree: true };
-  }
-
-  await debitWallet(connection, {
-    operatorId,
-    amount: unitCost,
-    voucherAccountId,
-    description,
-    createdByType,
-    createdById,
-    metadata,
-  });
-
-  await connection.execute(
-    `UPDATE voucher_accounts SET amount_charged = ? WHERE id = ?`,
-    [unitCost, voucherAccountId]
-  );
-  await connection.execute(
-    `UPDATE operators SET accounts_created = accounts_created + 1 WHERE id = ?`,
-    [operatorId]
-  );
-
-  return { amountCharged: unitCost, trialFree: false };
-}
-
-async function createAndProvisionAccounts(
-  connection,
-  operatorId,
-  accounts,
-  packageIds,
-  unitCost,
-  serviceTag,
-  { activity = 'create_account', packageNames = [], trialState = { limit: 0, used: 0 } } = {}
-) {
-  const results = [];
-
-  for (const account of accounts) {
-    const primaryPackageId = packageIds[0];
-    const [insertResult] = await connection.execute(
-      `INSERT INTO voucher_accounts (operator_id, package_id, full_name, phone_number, service_tag, origin_activity, status)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
-      [
-        operatorId,
-        primaryPackageId,
-        account.fullName.trim(),
-        account.phoneNumber.trim(),
-        serviceTag,
-        activity,
-      ]
-    );
-
-    const voucherAccountId = insertResult.insertId;
-
-    for (const packageId of packageIds) {
-      await connection.execute(
-        `INSERT INTO voucher_account_packages (voucher_account_id, package_id) VALUES (?, ?)`,
-        [voucherAccountId, packageId]
-      );
-    }
-
-    const provision = await provisionAccountInCrm(
-      connection,
-      voucherAccountId,
-      account.phoneNumber.trim(),
-      account.fullName.trim(),
-      packageIds
-    );
-
-    let amountCharged = 0;
-    let trialFree = false;
-    if (provision.success) {
-      const charge = await applyAccountCreationCharge(connection, {
-        operatorId,
-        unitCost,
-        voucherAccountId,
-        description: buildChargeDescription(
-          activity,
-          account.fullName.trim(),
-          account.phoneNumber.trim(),
-          packageNames
-        ),
-        createdByType: 'operator',
-        createdById: operatorId,
-        metadata: {
-          activity,
-          packageIds,
-          packageNames,
-          phoneNumber: account.phoneNumber.trim(),
-          customerName: account.fullName.trim(),
-          serviceTag,
-        },
-        trialState,
-      });
-      amountCharged = charge.amountCharged;
-      trialFree = charge.trialFree;
-    }
-
-    results.push({
-      id: voucherAccountId,
-      fullName: account.fullName.trim(),
-      phoneNumber: account.phoneNumber.trim(),
+/** Reserve all accounts in one locked transaction, then provision each in CRM sequentially. */
+async function createAndProvisionAccounts(operatorId, accounts, packageIds, pricing, serviceTag, activity, reqMeta) {
+  let reservations;
+  const connection = await getConnection();
+  try {
+    await connection.beginTransaction();
+    const operator = await lockActiveOperator(connection, operatorId);
+    assertOperatorServiceTag(operator.service_scope || 'BOTH', serviceTag);
+    reservations = await reserveVoucherAccounts(connection, {
+      operatorId,
+      operator,
+      accounts,
       packageIds,
-      amountCharged,
-      trialFree,
-      status: provision.success ? 'created' : 'failed',
-      externalRef: provision.externalRef || null,
-      errorMessage: provision.error || null,
-      errorCode: provision.code || null,
+      pricing,
+      serviceTag,
+      activity,
+    });
+    await connection.commit();
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
+
+  const results = [];
+  for (const reservation of reservations) {
+    const outcome = await provisionReservation(
+      operatorId,
+      reservation,
+      (paymentReference) =>
+        crmService.provisionOttAccount(reservation.phoneNumber, reservation.fullName, packageIds, {
+          paymentReference,
+        }),
+      reqMeta,
+      { activity }
+    );
+    results.push({
+      id: reservation.voucherAccountId,
+      fullName: reservation.fullName,
+      phoneNumber: reservation.phoneNumber,
+      packageIds,
+      amountCharged: outcome.amountCharged,
+      trialFree: reservation.chargeType === 'trial' && outcome.status === 'created',
+      status: outcome.status,
+      externalRef: outcome.externalRef || null,
+      errorMessage: outcome.errorMessage || null,
+      errorCode: outcome.errorCode || null,
+      errorStatus: outcome.errorStatus || null,
     });
   }
-
   return results;
+}
+
+/** Package + scope validation that does not need the operator lock. */
+async function resolveCreationPricing(operatorId, requestedPackageIds, serviceTag) {
+  const [operator] = await query(
+    `SELECT id, is_active, service_scope FROM operators WHERE id = ? LIMIT 1`,
+    [operatorId]
+  );
+  if (!operator) {
+    throw new AppError('Operator not found', 404, 'NOT_FOUND');
+  }
+  if (!operator.is_active) {
+    throw new AppError('Operator account is inactive', 403, 'FORBIDDEN');
+  }
+
+  const packageIds = await resolveAccountPackageIds(operatorId, requestedPackageIds, null);
+  let resolvedTag = serviceTag;
+  if (!resolvedTag) {
+    const plans = await assertPackagesAssignable(packageIds);
+    resolvedTag = plans[0]?.serviceTag || 'OTT';
+  }
+  assertOperatorServiceTag(operator.service_scope || 'BOTH', resolvedTag);
+  const pricing = await assertPackagesMatchServiceTag(packageIds, resolvedTag, null);
+  return { packageIds, pricing, serviceTag: resolvedTag };
 }
 
 /** @deprecated use subscribeCustomer */
@@ -1176,117 +1324,72 @@ export async function topupCustomer(operatorId, data, reqMeta = {}) {
 }
 
 export async function createSingleAccount(operatorId, account, reqMeta = {}) {
-  const serviceTag = assertServiceTag(account.serviceTag);
-  const connection = await getConnection();
+  return withCrmSlot(operatorId, () => createSingleAccountInner(operatorId, account, reqMeta));
+}
 
-  try {
-    await connection.beginTransaction();
+async function createSingleAccountInner(operatorId, account, reqMeta) {
+  const requestedTag = assertServiceTag(account.serviceTag);
+  const { packageIds, pricing, serviceTag } = await resolveCreationPricing(
+    operatorId,
+    account.packageIds,
+    requestedTag
+  );
+  const packageNames = pricing.packages.map((pkg) => pkg.name);
+  const balanceBefore = await readWalletBalance(operatorId);
 
-    const [operatorRows] = await connection.execute(
-      `SELECT id, wallet_balance, accounts_created, is_active, service_scope,
-              trial_account_limit, trial_accounts_used
-       FROM operators WHERE id = ? FOR UPDATE`,
-      [operatorId]
+  const [result] = await createAndProvisionAccounts(
+    operatorId,
+    [{ fullName: account.fullName, phoneNumber: account.phoneNumber }],
+    packageIds,
+    pricing,
+    serviceTag,
+    'create_account',
+    reqMeta
+  );
+
+  if (result.status !== 'created') {
+    throw new AppError(
+      result.errorMessage || 'Account creation failed',
+      result.errorStatus || 502,
+      result.errorCode || 'CRM_PROVISION_FAILED'
     );
+  }
 
-    const operator = operatorRows[0];
-    if (!operator) {
-      throw new AppError('Operator not found', 404, 'NOT_FOUND');
-    }
-    if (!operator.is_active) {
-      throw new AppError('Operator account is inactive', 403, 'FORBIDDEN');
-    }
-
-    assertOperatorServiceTag(operator.service_scope || 'BOTH', serviceTag);
-
-    const resolvedPackageIds = await resolveAccountPackageIds(
-      operatorId,
-      account.packageIds,
-      connection
-    );
-    const pricing = await assertPackagesMatchServiceTag(resolvedPackageIds, serviceTag, connection);
-    const packageNames = pricing.packages.map((pkg) => pkg.name);
-    const unitCost = pricing.total;
-    const walletBalance = Math.round(Number(operator.wallet_balance) * 100) / 100;
-    const trialQuota = getTrialQuotaInfo(operator.trial_account_limit, operator.trial_accounts_used);
-    const paidCount = countPaidAccountCreations(1, trialQuota.trialAccountsRemaining);
-    const requiredBalance = Math.round(unitCost * paidCount * 100) / 100;
-
-    if (walletBalance < requiredBalance) {
-      throw new AppError(
-        `Insufficient wallet balance. Required ${requiredBalance} ${pricing.currencyCode}, available ${walletBalance} ${pricing.currencyCode}.`,
-        403,
-        'INSUFFICIENT_WALLET_BALANCE'
-      );
-    }
-
-    const trialState = {
-      limit: trialQuota.trialAccountLimit,
-      used: trialQuota.trialAccountsUsed,
-    };
-
-    const created = await createAndProvisionAccounts(
-      connection,
-      operatorId,
-      [{ fullName: account.fullName, phoneNumber: account.phoneNumber }],
-      resolvedPackageIds,
-      unitCost,
+  await logAudit({
+    actorType: 'operator',
+    actorId: operatorId,
+    action: 'ACCOUNT_CREATED',
+    resourceType: 'voucher_account',
+    resourceId: result.id,
+    ipAddress: reqMeta.ipAddress,
+    userAgent: reqMeta.userAgent,
+    metadata: {
+      fullName: result.fullName,
+      phoneNumber: result.phoneNumber,
       serviceTag,
-      { activity: 'create_account', packageNames, trialState }
-    );
-
-    await connection.commit();
-
-    const result = created[0];
-    if (result.status !== 'created') {
-      throw new AppError(result.errorMessage || 'Account creation failed', 502, result.errorCode || 'CRM_PROVISION_FAILED');
-    }
-
-    const [balanceRow] = await query(
-      `SELECT wallet_balance FROM operators WHERE id = ? LIMIT 1`,
-      [operatorId]
-    );
-
-    await logAudit({
-      actorType: 'operator',
-      actorId: operatorId,
-      action: 'ACCOUNT_CREATED',
-      resourceType: 'voucher_account',
-      resourceId: result.id,
-      ipAddress: reqMeta.ipAddress,
-      userAgent: reqMeta.userAgent,
-      metadata: {
-        fullName: account.fullName.trim(),
-        phoneNumber: account.phoneNumber.trim(),
-        serviceTag,
-        packageIds: resolvedPackageIds,
-        packageNames,
-        amountCharged: result.amountCharged,
-      },
-    });
-
-    return {
-      id: result.id,
-      fullName: account.fullName.trim(),
-      phoneNumber: account.phoneNumber.trim(),
-      serviceTag,
-      packageIds: resolvedPackageIds,
+      packageIds,
       packageNames,
       amountCharged: result.amountCharged,
-      status: result.status,
-      externalRef: result.externalRef || null,
-      walletBalance: Math.round(Number(balanceRow.wallet_balance) * 100) / 100,
-      unitCost,
-      currencyCode: pricing.currencyCode,
-      balanceBefore: walletBalance,
-      balanceAfter: Math.round(Number(balanceRow.wallet_balance) * 100) / 100,
-    };
-  } catch (err) {
-    await connection.rollback();
-    throw err;
-  } finally {
-    connection.release();
-  }
+    },
+  });
+
+  const walletBalance = await readWalletBalance(operatorId);
+  return {
+    id: result.id,
+    fullName: result.fullName,
+    phoneNumber: result.phoneNumber,
+    serviceTag,
+    packageIds,
+    packageNames,
+    amountCharged: result.amountCharged,
+    status: result.status,
+    externalRef: result.externalRef || null,
+    walletBalance,
+    unitCost: pricing.total,
+    currencyCode: pricing.currencyCode,
+    balanceBefore,
+    balanceAfter: walletBalance,
+  };
 }
 
 export async function createBulkAccounts(operatorId, accounts, reqMeta = {}, packageIds) {
@@ -1302,114 +1405,63 @@ export async function createBulkAccounts(operatorId, accounts, reqMeta = {}, pac
     );
   }
 
-  const connection = await getConnection();
+  return withCrmSlot(operatorId, () =>
+    createBulkAccountsInner(operatorId, accounts, reqMeta, packageIds)
+  );
+}
 
-  try {
-    await connection.beginTransaction();
+async function createBulkAccountsInner(operatorId, accounts, reqMeta, packageIds) {
+  const resolved = await resolveCreationPricing(
+    operatorId,
+    packageIds ?? accounts[0]?.packageIds,
+    null
+  );
 
-    const [operatorRows] = await connection.execute(
-      `SELECT id, wallet_balance, accounts_created, is_active, client_name, package_id, package_type,
-              trial_account_limit, trial_accounts_used
-       FROM operators WHERE id = ? FOR UPDATE`,
-      [operatorId]
+  const created = await createAndProvisionAccounts(
+    operatorId,
+    accounts,
+    resolved.packageIds,
+    resolved.pricing,
+    resolved.serviceTag,
+    'bulk_create',
+    reqMeta
+  );
+  const successCount = created.filter((item) => item.status === 'created').length;
+  const totalCharged = roundMoney(created.reduce((sum, item) => sum + (item.amountCharged || 0), 0));
+  const needsReconciliation = created.filter((item) => item.errorCode === 'CRM_RECONCILIATION_REQUIRED');
+
+  if (successCount === 0 && needsReconciliation.length === 0) {
+    const firstFailed = created.find((item) => item.status === 'failed');
+    throw new AppError(
+      firstFailed?.errorMessage || 'Account creation failed',
+      firstFailed?.errorStatus || 502,
+      firstFailed?.errorCode || 'CRM_PROVISION_FAILED'
     );
-
-    const operator = operatorRows[0];
-    if (!operator) {
-      throw new AppError('Operator not found', 404, 'NOT_FOUND');
-    }
-
-    if (!operator.is_active) {
-      throw new AppError('Operator account is inactive', 403, 'FORBIDDEN');
-    }
-
-    const resolvedPackageIds = await resolveAccountPackageIds(
-      operatorId,
-      packageIds ?? accounts[0]?.packageIds,
-      connection
-    );
-
-    const plans = await assertPackagesAssignable(resolvedPackageIds);
-    const serviceTag = plans[0]?.serviceTag || 'OTT';
-    const pricing = await assertPackagesMatchServiceTag(resolvedPackageIds, serviceTag, connection);
-    const packageNames = pricing.packages.map((pkg) => pkg.name);
-    const unitCost = pricing.total;
-    const walletBalance = Math.round(Number(operator.wallet_balance) * 100) / 100;
-    const trialQuota = getTrialQuotaInfo(operator.trial_account_limit, operator.trial_accounts_used);
-    const paidCount = countPaidAccountCreations(accounts.length, trialQuota.trialAccountsRemaining);
-    const totalCost = Math.round(unitCost * paidCount * 100) / 100;
-
-    if (walletBalance < totalCost) {
-      throw new AppError(
-        `Insufficient wallet balance. Required ${totalCost} ${pricing.currencyCode}, available ${walletBalance} ${pricing.currencyCode}.`,
-        403,
-        'INSUFFICIENT_WALLET_BALANCE'
-      );
-    }
-
-    const trialState = {
-      limit: trialQuota.trialAccountLimit,
-      used: trialQuota.trialAccountsUsed,
-    };
-
-    const created = await createAndProvisionAccounts(
-      connection,
-      operatorId,
-      accounts,
-      resolvedPackageIds,
-      unitCost,
-      serviceTag,
-      { activity: 'bulk_create', packageNames, trialState }
-    );
-    const successCount = created.filter((item) => item.status === 'created').length;
-    const totalCharged = created.reduce((sum, item) => sum + (item.amountCharged || 0), 0);
-
-    await connection.commit();
-
-    if (successCount === 0) {
-      const firstError = created[0]?.errorMessage || 'Account creation failed';
-      const firstCode = created.find((item) => item.status === 'failed')?.errorCode;
-
-      if (firstCode === 'SUBSCRIPTION_EXISTS') {
-        throw new AppError(firstError, 409, 'SUBSCRIPTION_EXISTS');
-      }
-
-      throw new AppError(firstError, 502, 'CRM_PROVISION_FAILED');
-    }
-
-    const [balanceRow] = await query(
-      `SELECT wallet_balance FROM operators WHERE id = ? LIMIT 1`,
-      [operatorId]
-    );
-
-    await logAudit({
-      actorType: 'operator',
-      actorId: operatorId,
-      action: accounts.length === 1 ? 'ACCOUNT_CREATED' : 'ACCOUNTS_BULK_CREATED',
-      resourceType: 'voucher_account',
-      ipAddress: reqMeta.ipAddress,
-      userAgent: reqMeta.userAgent,
-      metadata: {
-        count: accounts.length,
-        successCount,
-        failedCount: created.length - successCount,
-        packageIds: resolvedPackageIds,
-        unitCost,
-        totalCharged,
-      },
-    });
-
-    return {
-      created,
-      walletBalance: Math.round(Number(balanceRow.wallet_balance) * 100) / 100,
-      unitCost,
-      totalCharged,
-      currencyCode: pricing.currencyCode,
-    };
-  } catch (err) {
-    await connection.rollback();
-    throw err;
-  } finally {
-    connection.release();
   }
+
+  await logAudit({
+    actorType: 'operator',
+    actorId: operatorId,
+    action: accounts.length === 1 ? 'ACCOUNT_CREATED' : 'ACCOUNTS_BULK_CREATED',
+    resourceType: 'voucher_account',
+    ipAddress: reqMeta.ipAddress,
+    userAgent: reqMeta.userAgent,
+    metadata: {
+      count: accounts.length,
+      successCount,
+      failedCount: created.length - successCount,
+      reconciliationCount: needsReconciliation.length,
+      packageIds: resolved.packageIds,
+      unitCost: resolved.pricing.total,
+      totalCharged,
+    },
+  });
+
+  return {
+    created,
+    walletBalance: await readWalletBalance(operatorId),
+    unitCost: resolved.pricing.total,
+    totalCharged,
+    currencyCode: resolved.pricing.currencyCode,
+  };
 }

@@ -4,7 +4,7 @@ import { query, getConnection } from '../db/pool.js';
 import { AppError } from '../utils/errors.js';
 import { logAudit } from './auditService.js';
 import { paginationSql } from '../utils/pagination.js';
-import { csvEscape } from '../utils/csv.js';
+import { csvEscape, csvRow } from '../utils/csv.js';
 import { formatTrialForResponse } from '../utils/trial.js';
 import {
   assertBmlPaymentMatchesTopup,
@@ -20,9 +20,19 @@ function roundMoney(value) {
   return Math.round(Number(value) * 100) / 100;
 }
 
-function generateReference(prefix = 'WT') {
+export function generateReference(prefix = 'WT') {
   const suffix = crypto.randomBytes(4).toString('hex').toUpperCase();
   return `${prefix}-${Date.now().toString(36).toUpperCase()}-${suffix}`;
+}
+
+const WALLET_DESCRIPTION_MAX = 500;
+
+function clampDescription(description) {
+  if (description == null) return null;
+  const text = String(description);
+  return text.length > WALLET_DESCRIPTION_MAX
+    ? `${text.slice(0, WALLET_DESCRIPTION_MAX - 1)}…`
+    : text;
 }
 
 export function calculateGstFromTotal(grossAmount, gstRate = config.wallet.gstRate) {
@@ -246,7 +256,7 @@ async function insertTransaction(connection, row) {
       row.reference,
       row.paymentRef || null,
       row.voucherAccountId || null,
-      row.description || null,
+      clampDescription(row.description),
       row.metadata ? JSON.stringify(row.metadata) : null,
       row.createdByType || null,
       row.createdById || null,
@@ -267,8 +277,9 @@ export async function creditWallet(
     commissionAmount = 0,
     description,
     paymentRef = null,
-    reference = generateReference(type === 'topup' ? 'TOP' : 'ADJ'),
+    reference = generateReference(type === 'topup' ? 'TOP' : type === 'refund' ? 'RFD' : 'ADJ'),
     status = 'completed',
+    voucherAccountId = null,
     createdByType = 'system',
     createdById = null,
     metadata = null,
@@ -304,6 +315,7 @@ export async function creditWallet(
     balanceAfter,
     reference,
     paymentRef,
+    voucherAccountId,
     description,
     createdByType,
     createdById,
@@ -323,6 +335,7 @@ export async function debitWallet(
     createdByType = 'operator',
     createdById = null,
     metadata = null,
+    reference = generateReference('DBT'),
   }
 ) {
   const debit = roundMoney(amount);
@@ -365,7 +378,7 @@ export async function debitWallet(
     netAmount: debit,
     balanceBefore,
     balanceAfter,
-    reference: generateReference('DBT'),
+    reference,
     voucherAccountId,
     description,
     createdByType,
@@ -373,7 +386,136 @@ export async function debitWallet(
     metadata,
   });
 
-  return { transactionId, balanceBefore, balanceAfter, debit };
+  return { transactionId, reference, balanceBefore, balanceAfter, debit };
+}
+
+/**
+ * Returns a reserved debit to the wallet after the CRM definitely did not record a payment.
+ * Idempotent per original debit: a second call finds the existing refund and does nothing.
+ */
+export async function refundWalletDebit(
+  connection,
+  { operatorId, debitReference, amount, voucherAccountId = null, description, reason, metadata = {} }
+) {
+  const refundAmount = roundMoney(amount);
+  if (refundAmount <= 0) return null;
+
+  const [existing] = await connection.execute(
+    `SELECT id FROM wallet_transactions
+     WHERE type = 'refund' AND operator_id = ?
+       AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.refundOf')) = ?
+     LIMIT 1 FOR UPDATE`,
+    [operatorId, debitReference]
+  );
+  if (existing.length) return null;
+
+  const refund = await creditWallet(connection, {
+    operatorId,
+    type: 'refund',
+    netAmount: refundAmount,
+    grossAmount: refundAmount,
+    description: description || `Refund — ${debitReference}`,
+    voucherAccountId,
+    createdByType: 'system',
+    metadata: { ...metadata, refundOf: debitReference, reason: reason || null },
+  });
+
+  await mergeTransactionMetadata(connection, debitReference, {
+    crmState: 'refunded',
+    refundReference: refund.reference,
+  });
+
+  return refund;
+}
+
+/** Shallow-merges keys into a wallet transaction's JSON metadata. */
+export async function mergeTransactionMetadata(connection, reference, patch) {
+  const runner = connection
+    ? (sql, params) => connection.execute(sql, params)
+    : (sql, params) => query(sql, params);
+  await runner(
+    `UPDATE wallet_transactions
+     SET metadata = JSON_MERGE_PATCH(COALESCE(metadata, JSON_OBJECT()), CAST(? AS JSON))
+     WHERE reference = ?`,
+    [JSON.stringify(patch), reference]
+  );
+}
+
+/**
+ * Wallet charges whose CRM outcome is unresolved: flagged `needs_reconciliation`, or still
+ * `pending` long after the request should have finished (process crash mid-activation).
+ * Staff resolve each by confirming in CRM, then completing or refunding via wallet adjust.
+ */
+export async function listCrmReconciliationItems({ page = 1, limit = 20, search = '' } = {}) {
+  const { page: pageNum, limit: limitNum, clause } = paginationSql(page, limit);
+  const params = [];
+  const filters = [
+    `wt.type = 'debit'`,
+    `(
+      JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.crmState')) = 'needs_reconciliation'
+      OR (
+        JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.crmState')) = 'pending'
+        AND wt.created_at < NOW() - INTERVAL 15 MINUTE
+      )
+    )`,
+  ];
+  if (search) {
+    const term = `%${search}%`;
+    filters.push('(wt.reference LIKE ? OR o.client_name LIKE ? OR wt.description LIKE ?)');
+    params.push(term, term, term);
+  }
+  const where = `WHERE ${filters.join(' AND ')}`;
+
+  const rows = await query(
+    `SELECT wt.id, wt.operator_id AS operatorId, o.client_name AS operatorName, wt.reference,
+            wt.net_amount AS amount, wt.description, wt.metadata, wt.voucher_account_id AS voucherAccountId,
+            va.status AS voucherStatus, wt.created_at AS createdAt
+     FROM wallet_transactions wt
+     INNER JOIN operators o ON o.id = wt.operator_id
+     LEFT JOIN voucher_accounts va ON va.id = wt.voucher_account_id
+     ${where}
+     ORDER BY wt.created_at ASC
+     ${clause}`,
+    params
+  );
+  const [countRow] = await query(
+    `SELECT COUNT(*) AS total
+     FROM wallet_transactions wt
+     INNER JOIN operators o ON o.id = wt.operator_id
+     ${where}`,
+    params
+  );
+
+  const total = Number(countRow?.total) || 0;
+  return {
+    items: rows.map((row) => {
+      const metadata = readTransactionMetadata(row.metadata);
+      return {
+        id: row.id,
+        operatorId: row.operatorId,
+        operatorName: row.operatorName,
+        reference: row.reference,
+        amount: roundMoney(row.amount),
+        description: row.description,
+        activity: metadata.activity || null,
+        crmState: metadata.crmState || null,
+        crmOutcome: metadata.crmOutcome || null,
+        crmContactId: metadata.crmContactId || null,
+        crmPaymentId: metadata.crmPaymentId || null,
+        customerName: metadata.customerName || null,
+        phoneNumber: metadata.phoneNumber || null,
+        voucherAccountId: row.voucherAccountId,
+        voucherStatus: row.voucherStatus,
+        createdAt: row.createdAt,
+      };
+    }),
+    pagination: {
+      page: pageNum,
+      limit: limitNum,
+      total,
+      totalPages: Math.ceil(total / limitNum) || 1,
+    },
+  };
 }
 
 function readTransactionMetadata(raw) {
@@ -764,7 +906,8 @@ export async function syncTopupFromBml({
 
   const rows = await query(
     `SELECT id, operator_id AS operatorId, reference, status, amount,
-            net_amount AS netAmount, balance_after AS balanceAfter, currency_code
+            net_amount AS netAmount, balance_after AS balanceAfter, currency_code,
+            metadata, payment_ref
      FROM wallet_transactions
      WHERE type = 'topup' AND reference = ?
      LIMIT 1`,
@@ -859,6 +1002,17 @@ export async function completeTopup(
       throw new AppError('Transaction is not a top-up', 400, 'INVALID_TRANSACTION');
     }
 
+    if (
+      options.expectedOperatorId != null &&
+      Number(tx.operator_id) !== Number(options.expectedOperatorId)
+    ) {
+      throw new AppError(
+        'Wallet transaction does not belong to this operator',
+        403,
+        'FORBIDDEN'
+      );
+    }
+
     if (tx.status === 'completed') {
       const credited = roundMoney(tx.net_amount);
       const balanceAfter = roundMoney(tx.balance_after);
@@ -876,19 +1030,36 @@ export async function completeTopup(
       throw new AppError(`Cannot complete top-up with status ${tx.status}`, 400, 'INVALID_TRANSACTION');
     }
 
+    const metadata = readTransactionMetadata(tx.metadata);
+    const resolvedPaymentRef = paymentRef || metadata.bmlTransactionId || tx.payment_ref;
+
     if (
-      options.expectedOperatorId != null &&
-      Number(tx.operator_id) !== Number(options.expectedOperatorId)
+      paymentRef &&
+      metadata.bmlTransactionId &&
+      String(paymentRef) !== String(metadata.bmlTransactionId)
     ) {
       throw new AppError(
-        'Wallet transaction does not belong to this operator',
-        403,
-        'FORBIDDEN'
+        'Payment reference does not match the payment started for this top-up',
+        400,
+        'BML_REFERENCE_MISMATCH'
       );
     }
 
-    const metadata = readTransactionMetadata(tx.metadata);
-    const resolvedPaymentRef = paymentRef || metadata.bmlTransactionId || tx.payment_ref;
+    if (resolvedPaymentRef) {
+      const [usedRows] = await connection.execute(
+        `SELECT id FROM wallet_transactions
+         WHERE payment_ref = ? AND id <> ?
+         LIMIT 1 FOR UPDATE`,
+        [resolvedPaymentRef, transactionId]
+      );
+      if (usedRows.length) {
+        throw new AppError(
+          'This Bank of Maldives payment has already been applied to another top-up',
+          400,
+          'BML_PAYMENT_ALREADY_USED'
+        );
+      }
+    }
 
     if (isBmlEnabled() && !options.skipBmlVerification) {
       if (!resolvedPaymentRef) {
@@ -948,6 +1119,13 @@ export async function completeTopup(
     };
   } catch (err) {
     await connection.rollback();
+    if (err?.code === 'ER_DUP_ENTRY') {
+      throw new AppError(
+        'This Bank of Maldives payment has already been applied to another top-up',
+        400,
+        'BML_PAYMENT_ALREADY_USED'
+      );
+    }
     throw err;
   } finally {
     connection.release();
@@ -1172,11 +1350,11 @@ export async function exportAdminOperatorActivations({ search = '', startDate, e
 export function operatorActivationsToCsv(report) {
   const lines = [
     'Medianet Voucher — Operator Wallet Activation Report',
-    `Generated,${report.generatedAt}`,
-    report.search ? `Search filter,${report.search}` : 'Search filter,All',
-    report.startDate ? `Start date,${report.startDate}` : 'Start date,All',
-    report.endDate ? `End date,${report.endDate}` : 'End date,All',
-    `Total records,${report.activations.length}`,
+    csvRow(['Generated', report.generatedAt]),
+    csvRow(['Search filter', report.search || 'All']),
+    csvRow(['Start date', report.startDate || 'All']),
+    csvRow(['End date', report.endDate || 'All']),
+    csvRow(['Total records', report.activations.length]),
     '',
     [
       'Date',
@@ -1246,6 +1424,7 @@ export async function adminAdjustWallet(adminId, operatorId, amount, description
         description: description || 'Manual wallet adjustment',
         createdByType: 'admin',
         createdById: adminId,
+        metadata: { activity: 'admin_adjustment' },
       });
     }
 

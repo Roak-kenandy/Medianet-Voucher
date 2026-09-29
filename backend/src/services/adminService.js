@@ -429,7 +429,8 @@ export async function updateOperatorQuota(adminId, operatorId, accountQuota, req
 
 export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
   const [operator] = await query(
-    `SELECT id, client_name, package_type, package_id, email, accounts_created, is_active
+    `SELECT id, client_name, package_type, package_id, email, accounts_created, is_active,
+            portal_role, portal_permissions
      FROM operators WHERE id = ? LIMIT 1`,
     [operatorId]
   );
@@ -448,6 +449,16 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
     throw new AppError('An account with this email already exists', 409, 'EMAIL_EXISTS');
   }
 
+  const portalRoleProvided = data.portalRole !== undefined;
+  const portalRole = portalRoleProvided ? data.portalRole : operator.portal_role;
+  const portalPermissionsValue =
+    portalRoleProvided || data.portalPermissions !== undefined
+      ? serializePortalPermissions(portalRole, data.portalPermissions)
+      : operator.portal_permissions ?? null;
+  const emailChanged = normalizedEmail !== operator.email;
+  const passwordChanged = Boolean(data.password?.trim());
+  const credentialsChanged = emailChanged || passwordChanged;
+
   const connection = await getConnection();
 
   try {
@@ -463,8 +474,10 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
       data.walletCommissionType,
       data.walletCommissionValue,
       data.canSelfTopup === false ? 0 : 1,
-      normalizePortalRole(data.portalRole),
-      serializePortalPermissions(data.portalRole, data.portalPermissions),
+      normalizePortalRole(portalRole),
+      typeof portalPermissionsValue === 'object' && portalPermissionsValue !== null
+        ? JSON.stringify(portalPermissionsValue)
+        : portalPermissionsValue,
       data.isActive ? 1 : 0,
       operatorId,
     ];
@@ -492,10 +505,15 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
     await connection.execute(sql, fields);
     await syncOperatorPackages(operatorId, data.packageIds, connection);
 
-    if (data.password?.trim()) {
+    if (credentialsChanged) {
+      // Kill refresh sessions and invalidate outstanding access tokens immediately.
       await connection.execute(
-        `UPDATE refresh_tokens SET revoked_at = NOW()
+        `UPDATE refresh_tokens SET revoked_at = NOW(), revoked_reason = ?
          WHERE user_type = 'operator' AND user_id = ? AND revoked_at IS NULL`,
+        [passwordChanged ? 'password_reset' : 'email_change', operatorId]
+      );
+      await connection.execute(
+        `UPDATE operators SET credentials_version = credentials_version + 1 WHERE id = ?`,
         [operatorId]
       );
     }
@@ -519,7 +537,8 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
         canSelfTopup: data.canSelfTopup !== false,
         serviceScope: data.serviceScope || 'BOTH',
         isActive: data.isActive,
-        passwordChanged: Boolean(data.password?.trim()),
+        passwordChanged,
+        emailChanged,
       },
     });
 

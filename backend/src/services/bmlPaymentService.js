@@ -46,7 +46,7 @@ const WEBHOOK_TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000;
  * V2 webhook verification: SHA-256 hex of "{nonce}{timestamp}{api_key}".
  * Rejects stale timestamps and replays (nonce store).
  */
-export function verifyWebhookHeaders(headers, apiKey = config.bml.apiKey) {
+export async function verifyWebhookHeaders(headers, apiKey = config.bml.apiKey) {
   if (!apiKey) return false;
 
   const nonce = headers['x-signature-nonce'] || headers['X-Signature-Nonce'] || '';
@@ -65,7 +65,7 @@ export function verifyWebhookHeaders(headers, apiKey = config.bml.apiKey) {
     .digest('hex');
 
   if (!timingSafeEqual(expected, signature)) return false;
-  if (!consumeWebhookNonce(nonce)) return false;
+  if (!(await consumeWebhookNonce(String(nonce)))) return false;
 
   return true;
 }
@@ -323,15 +323,34 @@ export function assertBmlPaymentMatchesTopup(tx, bmlTxn) {
     throw new AppError('Payment currency does not match', 400, 'BML_CURRENCY_MISMATCH');
   }
 
-  const expectedReference = tx.reference;
+  // Every confirmed payment must be bound to this exact top-up: by BML localId when the bank
+  // echoes it, otherwise by the BML transaction id we stored when the payment was created.
+  const expectedReference = tx.reference ? String(tx.reference) : null;
   const bmlLocalId = bmlTxn.localId ? String(bmlTxn.localId) : null;
-  if (bmlLocalId && expectedReference && bmlLocalId !== expectedReference) {
-    throw new AppError(
-      'Payment reference does not match this top-up',
-      400,
-      'BML_REFERENCE_MISMATCH'
-    );
+  if (bmlLocalId) {
+    if (!expectedReference || bmlLocalId !== expectedReference) {
+      throw new AppError('Payment reference does not match this top-up', 400, 'BML_REFERENCE_MISMATCH');
+    }
+    return;
   }
+
+  const storedBmlId = readStoredBmlTransactionId(tx);
+  if (!storedBmlId || storedBmlId !== String(bmlTxn.id)) {
+    throw new AppError('Payment reference does not match this top-up', 400, 'BML_REFERENCE_MISMATCH');
+  }
+}
+
+function readStoredBmlTransactionId(tx) {
+  let metadata = tx.metadata;
+  if (typeof metadata === 'string') {
+    try {
+      metadata = JSON.parse(metadata);
+    } catch {
+      metadata = null;
+    }
+  }
+  const stored = metadata?.bmlTransactionId || tx.payment_ref || tx.paymentRef || null;
+  return stored ? String(stored) : null;
 }
 
 export function requireWebhookVerificationConfigured() {

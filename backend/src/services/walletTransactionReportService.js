@@ -4,8 +4,12 @@ import { csvEscape } from '../utils/csv.js';
 import {
   REPORT_SCAN_BATCH_SIZE,
   REPORT_MAX_WALLET_TX_EXPORT_ROWS,
+  REPORT_DEFAULT_PAGE_SIZE,
+  REPORT_MAX_PAGE_SIZE,
 } from '../constants/reportLimits.js';
 import { AppError } from '../utils/errors.js';
+import { operatorSpendDebitSql } from '../utils/walletSql.js';
+import { runStreamingExport, writeChunk } from '../utils/streamWrite.js';
 
 function parseMetadata(raw) {
   if (!raw) return {};
@@ -23,6 +27,8 @@ function formatActivityLabel(metadata = {}) {
   if (metadata.activity === 'customer_subscribe') return 'Customer Subscribe';
   if (metadata.activity === 'customer_topup') return 'Customer Top-up';
   if (metadata.activity === 'bulk_create') return 'Bulk Create';
+  if (metadata.activity === 'admin_adjustment') return 'Adjustment';
+  if (metadata.refundOf) return 'Refund';
   return '';
 }
 
@@ -69,7 +75,15 @@ function buildDateFilters({ startDate, endDate }, params) {
   return filters;
 }
 
-export async function generateWalletTransactionReport(operatorId, { startDate, endDate, type } = {}) {
+function roundMoney(value) {
+  return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+/** Summary via SQL aggregates + one page of rows, so large histories never load into memory. */
+export async function generateWalletTransactionReport(
+  operatorId,
+  { startDate, endDate, type, page = 1, limit = REPORT_DEFAULT_PAGE_SIZE } = {}
+) {
   const params = [operatorId];
   const filters = buildDateFilters({ startDate, endDate }, params);
 
@@ -79,6 +93,27 @@ export async function generateWalletTransactionReport(operatorId, { startDate, e
   }
 
   const where = `WHERE ${filters.join(' AND ')}`;
+  const spend = operatorSpendDebitSql('wt');
+  const activity = `JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.activity'))`;
+
+  const [agg] = await query(
+    `SELECT
+       COUNT(*) AS totalTransactions,
+       COALESCE(SUM(wt.type = 'topup' AND wt.status = 'completed'), 0) AS totalTopups,
+       COALESCE(SUM(${spend}), 0) AS totalDebits,
+       COALESCE(SUM(CASE WHEN wt.type = 'topup' AND wt.status = 'completed' THEN wt.net_amount ELSE 0 END), 0) AS totalCredited,
+       COALESCE(SUM(CASE WHEN ${spend} THEN wt.net_amount ELSE 0 END), 0) AS totalDebited,
+       COALESCE(SUM(CASE WHEN ${spend} AND ${activity} = 'create_account' THEN wt.net_amount ELSE 0 END), 0) AS createAccountCharges,
+       COALESCE(SUM(CASE WHEN ${spend} AND ${activity} IN ('customer_crm_topup', 'customer_topup') THEN wt.net_amount ELSE 0 END), 0) AS customerTopupCharges,
+       COALESCE(SUM(CASE WHEN wt.type = 'refund' AND wt.status = 'completed' THEN wt.net_amount ELSE 0 END), 0) AS totalRefunded
+     FROM wallet_transactions wt
+     ${where}`,
+    params
+  );
+
+  const pageSize = Math.min(REPORT_MAX_PAGE_SIZE, Math.max(1, Number(limit) || REPORT_DEFAULT_PAGE_SIZE));
+  const pageNum = Math.max(1, Number(page) || 1);
+  const offset = (pageNum - 1) * pageSize;
 
   const rows = await query(
     `SELECT wt.id, wt.type, wt.status, wt.amount, wt.commission_amount, wt.net_amount,
@@ -87,93 +122,36 @@ export async function generateWalletTransactionReport(operatorId, { startDate, e
             wt.created_at, wt.completed_at
      FROM wallet_transactions wt
      ${where}
-     ORDER BY wt.created_at DESC`,
+     ORDER BY wt.created_at DESC, wt.id DESC
+     LIMIT ${pageSize} OFFSET ${offset}`,
     params
   );
 
-  const mapped = rows.map(mapTransactionRow);
-
+  const total = Number(agg?.totalTransactions) || 0;
   const summary = {
-    totalTransactions: mapped.length,
-    totalTopups: mapped.filter((row) => row.type === 'topup' && row.status === 'completed').length,
-    totalDebits: mapped.filter((row) => row.type === 'debit' && row.status === 'completed').length,
-    totalCredited: mapped
-      .filter((row) => row.type === 'topup' && row.status === 'completed')
-      .reduce((sum, row) => sum + row.netAmount, 0),
-    totalDebited: mapped
-      .filter((row) => row.type === 'debit' && row.status === 'completed')
-      .reduce((sum, row) => sum + row.netAmount, 0),
-    createAccountCharges: mapped
-      .filter((row) => row.activity === 'Create Account' && row.status === 'completed')
-      .reduce((sum, row) => sum + row.netAmount, 0),
-    customerTopupCharges: mapped
-      .filter((row) => row.activity === 'Customer Top-up' && row.status === 'completed')
-      .reduce((sum, row) => sum + row.netAmount, 0),
-    currencyCode: mapped[0]?.currencyCode || 'MVR',
+    totalTransactions: total,
+    totalTopups: Number(agg?.totalTopups) || 0,
+    totalDebits: Number(agg?.totalDebits) || 0,
+    totalCredited: roundMoney(agg?.totalCredited),
+    totalDebited: roundMoney(agg?.totalDebited),
+    createAccountCharges: roundMoney(agg?.createAccountCharges),
+    customerTopupCharges: roundMoney(agg?.customerTopupCharges),
+    totalRefunded: roundMoney(agg?.totalRefunded),
+    currencyCode: rows[0]?.currency_code || 'MVR',
   };
 
   return {
     generatedAt: new Date().toISOString(),
     filters: { startDate: startDate || null, endDate: endDate || null, type: type || null },
     summary,
-    rows: mapped,
+    rows: rows.map(mapTransactionRow),
+    pagination: {
+      page: pageNum,
+      limit: pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    },
   };
-}
-
-export function walletTransactionReportToCsv(report) {
-  const lines = [
-    'Medianet Voucher — Wallet Transaction Report',
-    `Generated,${report.generatedAt}`,
-    '',
-    'Summary',
-    `Total Transactions,${report.summary.totalTransactions}`,
-    `Wallet Top-ups,${report.summary.totalTopups}`,
-    `Customer Charges,${report.summary.totalDebits}`,
-    `Total Credited,${report.summary.totalCredited}`,
-    `Total Debited,${report.summary.totalDebited}`,
-    `Create Account Charges,${report.summary.createAccountCharges}`,
-    `Customer Top-up Charges,${report.summary.customerTopupCharges}`,
-    '',
-    [
-      'Date',
-      'Activity',
-      'Type',
-      'Status',
-      'Customer Name',
-      'Phone',
-      'Packages',
-      'Amount',
-      'Net Amount',
-      'Balance Before',
-      'Balance After',
-      'Reference',
-      'Description',
-    ].join(','),
-  ];
-
-  for (const row of report.rows) {
-    lines.push(
-      [
-        new Date(row.date).toISOString(),
-        row.activity,
-        row.type,
-        row.status,
-        row.customerName || '',
-        row.phoneNumber || '',
-        (row.packageNames || []).join('; '),
-        row.amount,
-        row.netAmount,
-        row.balanceBefore,
-        row.balanceAfter,
-        row.reference,
-        row.description || '',
-      ]
-        .map(csvEscape)
-        .join(',')
-    );
-  }
-
-  return `\ufeff${lines.join('\n')}`;
 }
 
 export async function streamWalletTransactionReportCsv(res, operatorId, filters = {}) {
@@ -200,80 +178,87 @@ export async function streamWalletTransactionReportCsv(res, operatorId, filters 
 
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="wallet-transaction-report.csv"');
-  res.write('\ufeff');
-  res.write(
-    [
-      'Date',
-      'Activity',
-      'Type',
-      'Status',
-      'Customer Name',
-      'Phone',
-      'Packages',
-      'Amount',
-      'Net Amount',
-      'Balance Before',
-      'Balance After',
-      'Reference',
-      'Description',
-    ]
-      .map(csvEscape)
-      .join(',') + '\n'
-  );
 
-  let lastId = null;
-  let exported = 0;
-
-  while (exported < total) {
-    const batchParams = [...params];
-    let batchWhere = where;
-    if (lastId != null) {
-      batchWhere += ' AND wt.id < ?';
-      batchParams.push(lastId);
-    }
-
-    const rows = await query(
-      `SELECT wt.id, wt.type, wt.status, wt.amount, wt.commission_amount, wt.net_amount,
-              wt.balance_before, wt.balance_after, wt.currency_code, wt.reference,
-              wt.payment_ref, wt.description, wt.metadata, wt.voucher_account_id,
-              wt.created_at, wt.completed_at
-       FROM wallet_transactions wt
-       ${batchWhere}
-       ORDER BY wt.id DESC
-       LIMIT ?`,
-      [...batchParams, REPORT_SCAN_BATCH_SIZE]
-    );
-
-    if (!rows.length) {
-      break;
-    }
-
-    for (const row of rows) {
-      const mapped = mapTransactionRow(row);
-      res.write(
+  await runStreamingExport(res, async () => {
+    await writeChunk(
+      res,
+      '\ufeff' +
         [
-          new Date(mapped.date).toISOString(),
-          mapped.activity,
-          mapped.type,
-          mapped.status,
-          mapped.customerName || '',
-          mapped.phoneNumber || '',
-          (mapped.packageNames || []).join('; '),
-          mapped.amount,
-          mapped.netAmount,
-          mapped.balanceBefore,
-          mapped.balanceAfter,
-          mapped.reference,
-          mapped.description || '',
+          'Date',
+          'Activity',
+          'Type',
+          'Status',
+          'Customer Name',
+          'Phone',
+          'Packages',
+          'Amount',
+          'Net Amount',
+          'Balance Before',
+          'Balance After',
+          'Reference',
+          'Description',
         ]
           .map(csvEscape)
-          .join(',') + '\n'
+          .join(',') +
+        '\n'
+    );
+
+    let lastId = null;
+    let exported = 0;
+
+    while (exported < total) {
+      const batchParams = [...params];
+      let batchWhere = where;
+      if (lastId != null) {
+        batchWhere += ' AND wt.id < ?';
+        batchParams.push(lastId);
+      }
+
+      const rows = await query(
+        `SELECT wt.id, wt.type, wt.status, wt.amount, wt.commission_amount, wt.net_amount,
+                wt.balance_before, wt.balance_after, wt.currency_code, wt.reference,
+                wt.payment_ref, wt.description, wt.metadata, wt.voucher_account_id,
+                wt.created_at, wt.completed_at
+         FROM wallet_transactions wt
+         ${batchWhere}
+         ORDER BY wt.id DESC
+         LIMIT ${REPORT_SCAN_BATCH_SIZE}`,
+        batchParams
       );
-      exported += 1;
+
+      if (!rows.length) {
+        break;
+      }
+
+      const chunk = rows
+        .map((row) => {
+          const mapped = mapTransactionRow(row);
+          return (
+            [
+              new Date(mapped.date).toISOString(),
+              mapped.activity,
+              mapped.type,
+              mapped.status,
+              mapped.customerName || '',
+              mapped.phoneNumber || '',
+              (mapped.packageNames || []).join('; '),
+              mapped.amount,
+              mapped.netAmount,
+              mapped.balanceBefore,
+              mapped.balanceAfter,
+              mapped.reference,
+              mapped.description || '',
+            ]
+              .map(csvEscape)
+              .join(',') + '\n'
+          );
+        })
+        .join('');
+      await writeChunk(res, chunk);
+      exported += rows.length;
+      lastId = rows[rows.length - 1].id;
     }
 
-    lastId = rows[rows.length - 1].id;
-  }
-
-  res.end();
+    res.end();
+  });
 }

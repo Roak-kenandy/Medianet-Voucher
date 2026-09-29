@@ -25,6 +25,7 @@ function applyAccessTokenToRequest(req, token) {
     role: payload.role,
     email: payload.email,
     clientName: payload.clientName,
+    credentialsVersion: Number(payload.cv) || 0,
   };
 }
 
@@ -70,6 +71,9 @@ export function ensureActiveAccount(req, _res, next) {
     .then((user) => {
       if (!user || !user.is_active) {
         return next(new AppError('Account is inactive or not found', 401, 'UNAUTHORIZED'));
+      }
+      if ((Number(user.credentials_version) || 0) !== req.user.credentialsVersion) {
+        return next(new AppError('Session expired. Please log in again.', 401, 'SESSION_REVOKED'));
       }
       if (req.user.role === 'operator') {
         const portalRole = normalizePortalRole(user.portal_role);
@@ -174,7 +178,8 @@ export const authController = {
         },
       });
     } catch (err) {
-      clearRefreshCookie(res);
+      // A cross-tab race must not clear the cookie the winning tab just received.
+      if (err?.code !== 'REFRESH_RACE') clearRefreshCookie(res);
       next(err);
     }
   },
@@ -196,6 +201,9 @@ export const authController = {
       const user = await findUserById(lookupRole, req.user.id);
       if (!user || !user.is_active) {
         throw new AppError('User not found', 401, 'UNAUTHORIZED');
+      }
+      if ((Number(user.credentials_version) || 0) !== req.user.credentialsVersion) {
+        throw new AppError('Session expired. Please log in again.', 401, 'SESSION_REVOKED');
       }
       const role =
         req.user.role === 'operator' ? 'operator' : user.role || 'admin';

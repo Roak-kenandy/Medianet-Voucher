@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import { authController, authenticate, optionalAuthenticate } from '../middleware/auth.js';
-import { loginLimiter, refreshLimiter } from '../middleware/rateLimit.js';
+import { loginIpLimiter, loginLimiter, refreshLimiter } from '../middleware/rateLimit.js';
 import { loginSchema } from '../validators/schemas.js';
 
 const router = Router();
 
-router.post('/login', loginLimiter, (req, res, next) => {
+router.post('/login', loginIpLimiter, loginLimiter, (req, res, next) => {
   try {
     req.body = loginSchema.parse(req.body);
     authController.login(req, res, next);

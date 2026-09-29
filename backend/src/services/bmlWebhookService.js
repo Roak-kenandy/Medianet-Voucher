@@ -77,7 +77,7 @@ function extractWebhookContext(payload = {}, headers = {}) {
 export async function processBmlWebhook(payload, headers = {}, reqMeta = {}) {
   requireWebhookVerificationConfigured();
 
-  const headerVerified = verifyWebhookHeaders(headers);
+  const headerVerified = await verifyWebhookHeaders(headers);
   const legacyVerified = isProduction ? false : verifyLegacyWebhookPayload(payload);
 
   if (!headerVerified && !legacyVerified) {

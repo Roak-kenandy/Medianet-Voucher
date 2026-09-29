@@ -8,6 +8,8 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "migrate": "node src/db/migrate.js",
+    "migrate:prod": "node src/db/migrate.js --production",
+    "verify:security": "node scripts/verify-security-invariants.mjs",
     "seed": "node src/db/seed.js",
     "reset": "node src/db/reset.js"
   },

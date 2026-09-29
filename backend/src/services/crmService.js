@@ -1,9 +1,28 @@
 import { v4 as uuidv4 } from 'uuid';
 import { config } from '../config/index.js';
-import { AppError } from '../utils/errors.js';
+import { AppError, CrmBillableError, CrmPaymentError } from '../utils/errors.js';
 import { getPlanByPackageId } from './packageService.js';
 import { getServiceTagConfig, assertServiceTag } from '../constants/serviceTags.js';
-import { logAudit } from './auditService.js';
+
+const UNDELIVERED_ERROR_CODES = new Set([
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'UND_ERR_CONNECT_TIMEOUT',
+]);
+
+/** True only when the HTTP request provably never reached CRM (safe to retry / nothing posted). */
+function isUndeliveredRequestError(error) {
+  const code = error?.cause?.code || error?.code;
+  return Boolean(code && UNDELIVERED_ERROR_CODES.has(code));
+}
+
+/** 4xx answers mean CRM refused the request; 408/409 and 5xx leave the outcome unknown. */
+function isDefiniteRejectionStatus(status) {
+  return status >= 400 && status < 500 && status !== 408 && status !== 409;
+}
 
 function normalizePhone(phoneNumber) {
   const digits = String(phoneNumber || '').replace(/\D/g, '');
@@ -533,56 +552,99 @@ class CRMService {
     return this.handleResponse(response, 'Account creation');
   }
 
-  async createPayment(contactId, accountId, amount, options = {}) {
-    const maxAttempts = options.maxAttempts ?? 3;
-    const paymentRef =
-      options.idempotencyKey ?? `MTVOTT${Date.now()}${uuidv4().slice(0, 8)}`;
-    let lastFailureMessage = 'Payment API failed';
+  /**
+   * POST /payments exactly once per logical operation.
+   * `paymentReference` must be unique per operation (the wallet reservation reference) and is
+   * sent as `backoffice_code` so CRM staff can match every payment to one portal charge.
+   * Only failures where the request provably never reached CRM are retried; anything else that
+   * is not a clean success or a definite 4xx rejection is reported as `ambiguous`.
+   */
+  async createPayment(contactId, accountId, amount, { paymentReference } = {}) {
+    if (!paymentReference) {
+      throw new AppError('CRM payment reference is required', 500, 'INTERNAL_ERROR');
+    }
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      const payload = {
-        contact_id: contactId,
-        account_id: accountId,
-        amount,
-        currency_code: 'MVR',
-        notes: 'MTV & OTT Dealer Payment',
-        payment_method: { type: 'ELECTRONIC_TRANSFER' },
-        state: 'POSTED',
-        backoffice_code: paymentRef,
-        type_id: this.paymentTypeId,
-        external_payable: ['MTV & OTT Dealer Payment'],
-      };
+    const payload = {
+      contact_id: contactId,
+      account_id: accountId,
+      amount,
+      currency_code: 'MVR',
+      notes: 'MTV & OTT Dealer Payment',
+      payment_method: { type: 'ELECTRONIC_TRANSFER' },
+      state: 'POSTED',
+      backoffice_code: paymentReference,
+      type_id: this.paymentTypeId,
+      external_payable: ['MTV & OTT Dealer Payment'],
+    };
 
+    const maxDeliveryAttempts = 3;
+    for (let attempt = 1; attempt <= maxDeliveryAttempts; attempt += 1) {
+      let response;
       try {
-        const response = await this.crmFetch(`/payments`, {
+        response = await this.crmFetch(`/payments`, {
           method: 'POST',
           headers: this.headers,
           body: JSON.stringify(payload),
         });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-          lastFailureMessage = data?.message || `Payment API failed with status ${response.status}`;
-          if (attempt < maxAttempts) {
-            await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
-            continue;
-          }
-          return { success: false, message: lastFailureMessage };
-        }
-
-        return { success: true, data };
       } catch (error) {
-        lastFailureMessage = error.message;
-        if (attempt < maxAttempts) {
-          await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
+        if (isUndeliveredRequestError(error) && attempt < maxDeliveryAttempts) {
+          await delay(400 * attempt);
           continue;
         }
-        return { success: false, message: error.message };
+        if (isUndeliveredRequestError(error)) {
+          throw new CrmPaymentError('CRM is unreachable. No payment was recorded.', 'rejected', {
+            paymentReference,
+          });
+        }
+        console.error('[CRM] Payment outcome unknown:', paymentReference, error.message);
+        throw new CrmPaymentError(
+          'CRM did not confirm the payment in time. It will be reconciled by Medianet.',
+          'ambiguous',
+          { paymentReference }
+        );
       }
+
+      const text = await response.text().catch(() => '');
+      let data = null;
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        data = null;
+      }
+
+      if (response.ok) {
+        return { success: true, data: data || {}, paymentId: data?.id || null, paymentReference };
+      }
+
+      console.error(
+        `[CRM] Payment ${paymentReference} failed (${response.status}):`,
+        String(text).slice(0, 500)
+      );
+      if (isDefiniteRejectionStatus(response.status)) {
+        throw new CrmPaymentError(
+          `CRM rejected the payment: ${formatCrmError(data || {})}`,
+          'rejected',
+          { paymentReference, status: response.status }
+        );
+      }
+      throw new CrmPaymentError(
+        'CRM did not confirm the payment. It will be reconciled by Medianet.',
+        'ambiguous',
+        { paymentReference, status: response.status }
+      );
     }
 
-    return { success: false, message: lastFailureMessage };
+    throw new CrmPaymentError('CRM is unreachable. No payment was recorded.', 'rejected', {
+      paymentReference,
+    });
+  }
+
+  async countMatchingServices(contactId, plans) {
+    const productIds = new Set(plans.map((plan) => plan.product_id));
+    const servicesData = await this.fetchContactServices(contactId);
+    return (servicesData.content || []).filter((service) =>
+      productIds.has(this.getServiceProductId(service))
+    ).length;
   }
 
   async createSubscription(contactId, accountId, plans, maxAttempts = 4) {
@@ -602,47 +664,86 @@ class CRMService {
     }
 
     let lastError = 'Subscription API failed';
+    let baselineCount = null;
+    try {
+      baselineCount = await this.countMatchingServices(contactId, plans);
+    } catch {
+      baselineCount = null;
+    }
+
+    // A timeout or 5xx may still have created the services; only retry once CRM shows it did not.
+    const wasCreatedDespiteError = async () => {
+      if (baselineCount == null) return null;
+      try {
+        return (await this.countMatchingServices(contactId, plans)) > baselineCount;
+      } catch {
+        return null;
+      }
+    };
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      let response;
       try {
-        const response = await this.crmFetch(`/contacts/${contactId}/services`, {
+        response = await this.crmFetch(`/contacts/${contactId}/services`, {
           method: 'POST',
           headers: this.headers,
           body: JSON.stringify(payload),
         });
-
-        const raw = await response.text();
-        let data = {};
-        try {
-          data = raw ? JSON.parse(raw) : {};
-        } catch {
-          data = { message: raw || 'Non-JSON response' };
-        }
-
-        if (response.ok) {
-          return { success: true, data };
-        }
-
-        const errorMessage = formatCrmError(data);
-        lastError = errorMessage;
-
-        if (isRetryableSubscriptionError(response.status, data) && attempt < maxAttempts) {
-          await delay(750 * attempt);
-          continue;
-        }
-
-        return { success: false, error: errorMessage };
       } catch (error) {
         lastError = error.message;
-        if (attempt < maxAttempts) {
-          await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+        const created = isUndeliveredRequestError(error) ? false : await wasCreatedDespiteError();
+        if (created === true) return { success: true, data: {} };
+        if (created === false && attempt < maxAttempts) {
+          await delay(500 * attempt);
           continue;
         }
         return { success: false, error: error.message };
       }
+
+      const raw = await response.text();
+      let data = {};
+      try {
+        data = raw ? JSON.parse(raw) : {};
+      } catch {
+        data = { message: raw || 'Non-JSON response' };
+      }
+
+      if (response.ok) {
+        return { success: true, data };
+      }
+
+      const errorMessage = formatCrmError(data);
+      lastError = errorMessage;
+
+      if (isRetryableSubscriptionError(response.status, data) && attempt < maxAttempts) {
+        if (response.status >= 500) {
+          const created = await wasCreatedDespiteError();
+          if (created === true) return { success: true, data: {} };
+          if (created !== false) return { success: false, error: errorMessage };
+        }
+        await delay(750 * attempt);
+        continue;
+      }
+
+      return { success: false, error: errorMessage };
     }
 
     return { success: false, error: lastError };
+  }
+
+  extractSubscriptionId(data = {}) {
+    if (!data || typeof data !== 'object') return null;
+    const direct = data.subscription_id || data.subscription?.id;
+    if (direct) return direct;
+    const services = [
+      ...(Array.isArray(data.content) ? data.content : []),
+      ...(Array.isArray(data.services) ? data.services : []),
+    ];
+    for (const service of services) {
+      const id = service?.subscription_id || service?.subscription?.id;
+      if (id) return id;
+    }
+    return null;
   }
 
   async getSubscriptionDetails(contactId) {
@@ -655,8 +756,13 @@ class CRMService {
       const data = await this.handleResponse(response, 'Get subscriptions');
 
       if (data.content?.length) {
-        const subscription = data.content[data.content.length - 1];
-        return { subscription_id: subscription.id };
+        const createdAt = (sub) =>
+          Date.parse(sub.created_date || sub.created_on || sub.created_at || sub.first_activation_date || '') || 0;
+        let newest = data.content[data.content.length - 1];
+        for (const sub of data.content) {
+          if (createdAt(sub) > createdAt(newest)) newest = sub;
+        }
+        return { subscription_id: newest.id };
       }
 
       return { subscription_id: null };
@@ -887,65 +993,59 @@ class CRMService {
     return result;
   }
 
-  async setupSubscription(contactId, accountId, plans, preferredDeviceId = null) {
-    const totalAmount = plans.reduce(
-      (sum, plan) => sum + (Number(plan.priceAmount) || 0),
-      0
-    );
+  /**
+   * Payment → subscription → devices. Throws:
+   * - CrmPaymentError when the payment was rejected (nothing posted) or its outcome is unknown;
+   * - CrmBillableError when the payment posted but a later step failed.
+   */
+  async setupSubscription(contactId, accountId, plans, preferredDeviceId = null, { paymentReference } = {}) {
+    const totalAmount = Math.round(
+      plans.reduce((sum, plan) => sum + (Number(plan.priceAmount) || 0), 0) * 100
+    ) / 100;
 
-    const planKey = plans.map((plan) => plan.price_term_id).join('-');
-    const paymentIdempotencyKey = `MTV-SUB-${contactId}-${accountId}-${planKey}-${totalAmount}`;
-
-    const paymentResult = await this.createPayment(contactId, accountId, totalAmount, {
-      idempotencyKey: paymentIdempotencyKey,
-    });
-    if (!paymentResult.success) {
-      throw new Error(`Payment failed: ${paymentResult.message}`);
+    let paymentResult = { paymentId: null };
+    if (totalAmount > 0) {
+      paymentResult = await this.createPayment(contactId, accountId, totalAmount, { paymentReference });
+      // CRM rejects price_terms_id immediately after payment until the account balance settles.
+      await delay(1500);
     }
 
-    const postedPaymentId = paymentResult.data?.id || null;
+    const paymentId = paymentResult.paymentId;
+    let subscriptionId = null;
 
-    // CRM rejects price_terms_id immediately after payment until the account balance settles.
-    await delay(1500);
+    try {
+      const subscription = await this.createSubscription(contactId, accountId, plans);
+      if (!subscription?.success) {
+        throw new Error(`Subscription creation failed: ${subscription?.error || 'Unknown error'}`);
+      }
 
-    const subscription = await this.createSubscription(contactId, accountId, plans);
-    if (!subscription?.success) {
-      await logAudit({
-        actorType: 'system',
-        actorId: null,
-        action: 'CRM_ORPHAN_PAYMENT',
-        resourceType: 'crm_contact',
-        resourceId: null,
-        metadata: {
+      subscriptionId =
+        this.extractSubscriptionId(subscription.data) ||
+        (await this.getSubscriptionDetails(contactId)).subscription_id;
+
+      let deviceSetup = { deviceIds: [] };
+      if (subscriptionId) {
+        deviceSetup = await this.setupSubscriptionDevices(
           contactId,
-          accountId,
-          paymentId: postedPaymentId,
-          totalAmount,
-          error: subscription?.error || 'Unknown error',
-        },
-      });
-      throw new Error(
-        `Subscription creation failed: ${subscription?.error || 'Unknown error'}`
+          subscriptionId,
+          preferredDeviceId,
+          { plans, subscriptionCreateData: subscription.data }
+        );
+      }
+
+      return {
+        subscriptionId,
+        paymentId,
+        paymentReference: totalAmount > 0 ? paymentReference : null,
+        deviceIds: deviceSetup.deviceIds || [],
+      };
+    } catch (err) {
+      if (totalAmount <= 0) throw err;
+      throw new CrmBillableError(
+        `Payment was recorded in CRM but activation did not finish: ${err.message}`,
+        { contactId, accountId, paymentId, paymentReference, subscriptionId, totalAmount }
       );
     }
-
-    const subscriptionDetails = await this.getSubscriptionDetails(contactId);
-    let deviceSetup = { deviceIds: [] };
-
-    if (subscriptionDetails.subscription_id) {
-      deviceSetup = await this.setupSubscriptionDevices(
-        contactId,
-        subscriptionDetails.subscription_id,
-        preferredDeviceId,
-        { plans, subscriptionCreateData: subscription.data }
-      );
-    }
-
-    return {
-      subscriptionId: subscriptionDetails.subscription_id,
-      paymentId: paymentResult.data?.id || null,
-      deviceIds: deviceSetup.deviceIds || [],
-    };
   }
 
   async ensureContactAccount(contactId) {
@@ -1014,7 +1114,7 @@ class CRMService {
     };
   }
 
-  async registerNewUser(phoneNumber, fullName, packageIds) {
+  async registerNewUser(phoneNumber, fullName, packageIds, { paymentReference } = {}) {
     const serviceTag = await this.resolveServiceTagFromPackageIds(packageIds);
     const plans = await this.resolvePlans(packageIds);
     const registration = await this.registerCustomer(phoneNumber, fullName, serviceTag, {
@@ -1024,7 +1124,8 @@ class CRMService {
       registration.contactId,
       registration.accountId,
       plans,
-      registration.deviceId
+      registration.deviceId,
+      { paymentReference }
     );
 
     return {
@@ -1038,9 +1139,11 @@ class CRMService {
     };
   }
 
-  async addSubscriptionForExisting(contactId, accountId, packageIds) {
+  async addSubscriptionForExisting(contactId, accountId, packageIds, { paymentReference } = {}) {
     const plans = await this.resolvePlans(packageIds);
-    const subscription = await this.setupSubscription(contactId, accountId, plans);
+    const subscription = await this.setupSubscription(contactId, accountId, plans, null, {
+      paymentReference,
+    });
 
     return {
       contactId,
@@ -1102,7 +1205,7 @@ class CRMService {
     };
   }
 
-  async postCustomerPayment(contactId, amount) {
+  async postCustomerPayment(contactId, amount, { paymentReference } = {}) {
     this.assertConfigured();
     const normalizedAmount = Number(amount);
     if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
@@ -1110,23 +1213,20 @@ class CRMService {
     }
 
     const accountId = await this.ensureContactAccount(contactId);
-    const paymentIdempotencyKey = `MTV-TOPUP-${contactId}-${accountId}-${normalizedAmount}`;
     const paymentResult = await this.createPayment(contactId, accountId, normalizedAmount, {
-      idempotencyKey: paymentIdempotencyKey,
+      paymentReference,
     });
-    if (!paymentResult.success) {
-      throw new Error(`Payment failed: ${paymentResult.message}`);
-    }
 
     return {
       contactId,
       accountId,
-      paymentId: paymentResult.data?.id || null,
+      paymentId: paymentResult.paymentId,
+      paymentReference,
       amount: normalizedAmount,
     };
   }
 
-  async activatePackagesForContact(contactId, packageIds) {
+  async activatePackagesForContact(contactId, packageIds, { paymentReference } = {}) {
     this.assertConfigured();
     const serviceTag = await this.resolveServiceTagFromPackageIds(packageIds);
     const tagConfig = getServiceTagConfig(serviceTag);
@@ -1140,7 +1240,7 @@ class CRMService {
       // Tag may already exist on the contact
     }
 
-    return this.addSubscriptionForExisting(contactId, accountId, packageIds);
+    return this.addSubscriptionForExisting(contactId, accountId, packageIds, { paymentReference });
   }
 
   /**
@@ -1217,7 +1317,7 @@ class CRMService {
    * Main entry: provision OTT packages for a phone number.
    * Always creates a new CRM contact, account, device, and subscription(s).
    */
-  async provisionOttAccount(phoneNumber, fullName, packageIds) {
+  async provisionOttAccount(phoneNumber, fullName, packageIds, { paymentReference } = {}) {
     this.assertConfigured();
     await this.resolvePlans(packageIds);
 
@@ -1226,7 +1326,7 @@ class CRMService {
       throw new AppError('Phone number is required', 400, 'VALIDATION_ERROR');
     }
 
-    return this.registerNewUser(normalizedPhone, fullName, packageIds);
+    return this.registerNewUser(normalizedPhone, fullName, packageIds, { paymentReference });
   }
 }
 

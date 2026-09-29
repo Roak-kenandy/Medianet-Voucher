@@ -8,8 +8,9 @@ const pool = mysql.createPool({
   password: config.db.password,
   database: config.db.database,
   waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
+  connectionLimit: config.db.connectionLimit,
+  queueLimit: config.db.queueLimit,
+  connectTimeout: 10000,
   timezone: '+00:00',
   enableKeepAlive: true,
   /** Return DECIMAL columns as numbers so wallet arithmetic never string-concatenates. */

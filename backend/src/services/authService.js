@@ -59,22 +59,42 @@ export async function findUserById(role, id) {
   return rows[0] || null;
 }
 
-function isAccountLocked(user) {
-  if (!user.locked_until) return false;
-  return new Date(user.locked_until) > new Date();
+/** Rotated tokens replayed within this window are treated as a cross-tab race, not theft. */
+const REFRESH_REUSE_GRACE_SECONDS = 30;
+
+let dummyPasswordHashPromise = null;
+function getDummyPasswordHash() {
+  if (!dummyPasswordHashPromise) {
+    dummyPasswordHashPromise = bcrypt.hash('timing-equalizer-not-a-real-password', config.security.bcryptRounds);
+  }
+  return dummyPasswordHashPromise;
 }
 
-async function recordFailedLogin(role, userId) {
+/**
+ * Atomically reserves one password attempt before bcrypt runs, so parallel guesses cannot
+ * exceed the lockout threshold. Returns false when the account is locked.
+ */
+async function claimLoginAttempt(role, userId) {
   const table = getTableForRole(role);
   await query(
-    `UPDATE ${table}
-     SET failed_login_attempts = failed_login_attempts + 1,
-         locked_until = CASE
-           WHEN failed_login_attempts + 1 >= ? THEN DATE_ADD(NOW(), INTERVAL ? MINUTE)
-           ELSE locked_until
-         END
-     WHERE id = ?`,
-    [config.security.maxLoginAttempts, config.security.lockoutMinutes, userId]
+    `UPDATE ${table} SET failed_login_attempts = 0, locked_until = NULL
+     WHERE id = ? AND locked_until IS NOT NULL AND locked_until <= NOW()`,
+    [userId]
+  );
+  const result = await query(
+    `UPDATE ${table} SET failed_login_attempts = failed_login_attempts + 1
+     WHERE id = ? AND locked_until IS NULL AND failed_login_attempts < ?`,
+    [userId, config.security.maxLoginAttempts]
+  );
+  return result.affectedRows === 1;
+}
+
+async function lockIfThresholdReached(role, userId) {
+  const table = getTableForRole(role);
+  await query(
+    `UPDATE ${table} SET locked_until = DATE_ADD(NOW(), INTERVAL ? MINUTE)
+     WHERE id = ? AND locked_until IS NULL AND failed_login_attempts >= ?`,
+    [config.security.lockoutMinutes, userId, config.security.maxLoginAttempts]
   );
 }
 
@@ -91,6 +111,7 @@ function signAccessToken(user, role) {
     sub: user.id,
     role,
     email: user.email,
+    cv: Number(user.credentials_version) || 0,
   };
 
   if (role === 'operator') {
@@ -157,19 +178,15 @@ export async function login({ email, password }, reqMeta = {}) {
   const resolved = await resolveUserByEmail(email);
 
   if (!resolved) {
+    // Same bcrypt cost as a real account so response time does not reveal which emails exist.
+    await bcrypt.compare(password, await getDummyPasswordHash());
     throw new AppError('Invalid email or password', 401, 'INVALID_CREDENTIALS');
   }
 
   const { user: rawUser, role } = resolved;
   const user = role === 'operator' ? await findUserById('operator', rawUser.id) : rawUser;
 
-  if (user.locked_until && new Date(user.locked_until) <= new Date()) {
-    await resetFailedLogin(role, user.id);
-    user.failed_login_attempts = 0;
-    user.locked_until = null;
-  }
-
-  if (isAccountLocked(user)) {
+  if (!(await claimLoginAttempt(role, user.id))) {
     throw new AppError(
       'Account temporarily locked due to too many failed attempts. Try again later.',
       423,
@@ -180,7 +197,7 @@ export async function login({ email, password }, reqMeta = {}) {
   const passwordValid = await bcrypt.compare(password, user.password_hash);
 
   if (!passwordValid) {
-    await recordFailedLogin(role, user.id);
+    await lockIfThresholdReached(role, user.id);
     await logAudit({
       actorType: role,
       actorId: user.id,
@@ -219,16 +236,24 @@ export async function refreshSession(refreshToken) {
 
   const tokenHash = hashToken(refreshToken);
 
+  // Only a *rotated*, still-unexpired token being replayed signals theft. Logged-out, reset or
+  // expired tokens are simply rejected so an old cookie cannot be used to log a user out.
   const reusedRows = await query(
-    `SELECT user_type, user_id FROM refresh_tokens
+    `SELECT user_type, user_id,
+            revoked_at > NOW() - INTERVAL ${REFRESH_REUSE_GRACE_SECONDS} SECOND AS withinGrace
+     FROM refresh_tokens
      WHERE token_hash = ? AND revoked_at IS NOT NULL
+       AND revoked_reason = 'rotated' AND expires_at > NOW()
      LIMIT 1`,
     [tokenHash]
   );
 
   if (reusedRows[0]) {
+    if (Number(reusedRows[0].withinGrace) === 1) {
+      throw new AppError('Session was just refreshed in another tab. Retry.', 401, 'REFRESH_RACE');
+    }
     await query(
-      `UPDATE refresh_tokens SET revoked_at = NOW()
+      `UPDATE refresh_tokens SET revoked_at = NOW(), revoked_reason = 'reuse'
        WHERE user_type = ? AND user_id = ? AND revoked_at IS NULL`,
       [reusedRows[0].user_type, reusedRows[0].user_id]
     );
@@ -236,7 +261,7 @@ export async function refreshSession(refreshToken) {
       actorType: reusedRows[0].user_type,
       actorId: reusedRows[0].user_id,
       action: 'REFRESH_TOKEN_REUSE_DETECTED',
-      metadata: { reason: 'revoked_token_reused' },
+      metadata: { reason: 'rotated_token_reused' },
     });
     throw new AppError('Session expired. Please log in again.', 401, 'SESSION_REVOKED');
   }
@@ -263,7 +288,8 @@ export async function refreshSession(refreshToken) {
 
   // Rotate refresh token
   const revokeResult = await query(
-    `UPDATE refresh_tokens SET revoked_at = NOW() WHERE id = ? AND revoked_at IS NULL`,
+    `UPDATE refresh_tokens SET revoked_at = NOW(), revoked_reason = 'rotated'
+     WHERE id = ? AND revoked_at IS NULL`,
     [stored.id]
   );
   if (!revokeResult.affectedRows) {
@@ -282,18 +308,53 @@ export async function refreshSession(refreshToken) {
   };
 }
 
-export async function revokeAllRefreshTokens(userType, userId) {
+export async function revokeAllRefreshTokens(userType, userId, reason = 'admin') {
   await query(
-    `UPDATE refresh_tokens SET revoked_at = NOW()
+    `UPDATE refresh_tokens SET revoked_at = NOW(), revoked_reason = ?
      WHERE user_type = ? AND user_id = ? AND revoked_at IS NULL`,
-    [userType, userId]
+    [reason, userType, userId]
   );
+}
+
+const KNOWN_DEFAULT_PASSWORDS = ['ChangeMe@Secure123'];
+
+/** Checks stored hashes (not just the env var) for the shipped default admin password. */
+export async function warnIfDefaultAdminPassword() {
+  const admins = await query(`SELECT id, email, password_hash FROM admins WHERE is_active = 1`);
+  for (const admin of admins) {
+    for (const candidate of KNOWN_DEFAULT_PASSWORDS) {
+      if (admin.password_hash && (await bcrypt.compare(candidate, admin.password_hash))) {
+        const log = config.env === 'production' ? console.error : console.warn;
+        log(
+          `[Security] Staff account ${admin.email} still uses the default seed password. Change it immediately.`
+        );
+        await logAudit({
+          actorType: 'system',
+          actorId: null,
+          action: 'DEFAULT_ADMIN_PASSWORD_DETECTED',
+          resourceType: 'admin',
+          resourceId: admin.id,
+        });
+      }
+    }
+  }
+}
+
+export async function purgeExpiredRefreshTokens() {
+  const result = await query(
+    `DELETE FROM refresh_tokens WHERE expires_at < NOW() - INTERVAL 1 DAY LIMIT 5000`
+  );
+  return result.affectedRows || 0;
 }
 
 export async function logout(refreshToken, actor = {}, reqMeta = {}) {
   if (refreshToken) {
     const tokenHash = hashToken(refreshToken);
-    await query(`UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = ?`, [tokenHash]);
+    await query(
+      `UPDATE refresh_tokens SET revoked_at = NOW(), revoked_reason = 'logout'
+       WHERE token_hash = ? AND revoked_at IS NULL`,
+      [tokenHash]
+    );
   }
 
   if (actor.role && actor.id) {

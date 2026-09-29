@@ -4,6 +4,7 @@ import { calculateGstFromTotal } from './walletService.js';
 import { REPORT_SCAN_BATCH_SIZE } from '../constants/reportLimits.js';
 import { paginationSql } from '../utils/pagination.js';
 import { csvEscape } from '../utils/csv.js';
+import { runStreamingExport, writeChunk } from '../utils/streamWrite.js';
 
 function roundMoney(value) {
   return Math.round(Number(value) * 100) / 100;
@@ -411,10 +412,9 @@ export async function streamDealerTopupReportCsv(res, filters) {
 
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="operator-topup-report.csv"');
-  res.write('\ufeff');
 
   const headerLines = [
-    'Medianet Voucher — Operator Top-up Report',
+    '\ufeffMedianet Voucher — Operator Top-up Report',
     `Generated,${new Date().toISOString()}`,
     `Period,${filters.startDate || 'all'} to ${filters.endDate || 'all'}`,
     '',
@@ -430,13 +430,11 @@ export async function streamDealerTopupReportCsv(res, filters) {
     '',
     CSV_HEADERS.join(','),
   ];
-  res.write(`${headerLines.join('\n')}\n`);
-
-  await forEachDealerTopupBatch(filters, (mapped) => {
-    for (const row of mapped) {
-      res.write(`${mappedRowToCsvLine(row)}\n`);
-    }
+  await runStreamingExport(res, async () => {
+    await writeChunk(res, `${headerLines.join('\n')}\n`);
+    await forEachDealerTopupBatch(filters, async (mapped) => {
+      await writeChunk(res, mapped.map((row) => `${mappedRowToCsvLine(row)}\n`).join(''));
+    });
+    res.end();
   });
-
-  res.end();
 }

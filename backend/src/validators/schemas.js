@@ -56,9 +56,27 @@ export const createAdminSchema = z.object({
   role: z.enum(['admin', 'sales', 'finance']).optional().default('admin'),
 });
 
+const MONEY_MAX = 1_000_000;
+const WALLET_COMMISSION_MULTIPLIER_MAX = 10;
+
+/** Finite, positive MVR amount with at most 2 decimal places and a hard ceiling. */
+function moneyAmountSchema(label, max = MONEY_MAX) {
+  return z.coerce
+    .number()
+    .finite(`${label} must be a valid number`)
+    .positive(`${label} must be greater than zero`)
+    .max(max, `${label} cannot exceed ${max} MVR`)
+    .refine((value) => Math.abs(Math.round(value * 100) - value * 100) < 1e-6, `${label} can have at most 2 decimal places`);
+}
+
 const walletCommissionFields = {
   walletCommissionType: z.enum(['none', 'multiplier']).default('none'),
-  walletCommissionValue: z.coerce.number().min(0, 'Multiplier cannot be negative').default(1),
+  walletCommissionValue: z.coerce
+    .number()
+    .finite()
+    .min(0, 'Multiplier cannot be negative')
+    .max(WALLET_COMMISSION_MULTIPLIER_MAX, `Multiplier cannot exceed ${WALLET_COMMISSION_MULTIPLIER_MAX}`)
+    .default(1),
 };
 
 const operatorPortalPermissionsSchema = z
@@ -124,17 +142,23 @@ export const updateOperatorSchema = z
             /[0-9]/.test(value) &&
             /[^A-Za-z0-9]/.test(value)),
         'Password must be at least 12 characters with uppercase, lowercase, number, and special character'
+      )
+      .refine(
+        (value) => !value || Buffer.byteLength(value, 'utf8') <= 72,
+        'Password must not exceed 72 bytes (bcrypt limit)'
       ),
     isActive: z.boolean(),
     notes: z.string().trim().max(2000).optional().default(''),
     canSelfTopup: z.boolean().optional().default(true),
-    ...operatorPortalFields,
+    // No default: omitting the role keeps the operator's current role and permissions.
+    portalRole: z.enum(['supervisor', 'user']).optional(),
+    portalPermissions: operatorPortalPermissionsSchema,
     ...walletCommissionFields,
   })
   .superRefine(validateWalletCommission);
 
 export const walletTopupSchema = z.object({
-  amount: z.coerce.number().positive('Top-up amount must be greater than zero'),
+  amount: moneyAmountSchema('Top-up amount'),
 });
 
 export const walletTopupStatusQuerySchema = z.object({
@@ -151,6 +175,7 @@ const WALLET_ADJUST_MAX = 1_000_000;
 export const walletAdjustSchema = z.object({
   amount: z.coerce
     .number()
+    .finite('Adjustment amount must be a valid number')
     .refine((value) => value !== 0, 'Adjustment amount cannot be zero')
     .refine(
       (value) => Math.abs(value) <= WALLET_ADJUST_MAX,
@@ -160,7 +185,7 @@ export const walletAdjustSchema = z.object({
 });
 
 export const adminOperatorTopupSchema = z.object({
-  amount: z.coerce.number().positive('Wallet credit amount must be greater than zero'),
+  amount: moneyAmountSchema('Wallet credit amount'),
   trialAccounts: z.coerce.number().int().min(0).max(10000).optional().default(0),
   notes: z.string().trim().min(3, 'Notes are required').max(500),
 });
@@ -171,8 +196,13 @@ export const createPackageSchema = z.object({
   sku: z.string().trim().max(100).optional(),
   productId: z.string().uuid('Invalid product ID'),
   priceTermId: z.string().uuid('Invalid price term ID'),
-  priceAmount: z.coerce.number().min(0, 'Price must be zero or greater'),
-  currencyCode: z.string().trim().length(3).default('MVR'),
+  priceAmount: z.coerce
+    .number()
+    .finite()
+    .min(0, 'Price must be zero or greater')
+    .max(MONEY_MAX, `Price cannot exceed ${MONEY_MAX} MVR`),
+  // Wallets, CRM payments and BML are all MVR-only.
+  currencyCode: z.literal('MVR').default('MVR'),
   description: z.string().trim().max(2000).optional(),
 });
 
@@ -280,9 +310,7 @@ export const customerSearchQuerySchema = z.object({
   serviceTag: serviceTagSchema.default('OTT'),
 });
 
-const customerAmountSchema = z.coerce
-  .number()
-  .positive('Amount must be greater than zero');
+const customerAmountSchema = moneyAmountSchema('Amount', 100_000);
 
 export const customerCrmTopupSchema = z.object({
   crmContactId: z.string().uuid('Invalid customer reference'),

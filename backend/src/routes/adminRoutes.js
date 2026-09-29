@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { authenticate, ensureActiveAccount, requireStaffRole, requirePermission } from '../middleware/auth.js';
 import { asyncHandler, success } from '../utils/errors.js';
+import { validateIdParam } from '../utils/params.js';
+import { reportLimiter } from '../middleware/rateLimit.js';
 import { getClientMeta } from '../services/auditService.js';
 import { crmService } from '../services/crmService.js';
 import {
@@ -23,6 +25,7 @@ import {
   exportAdminOperatorActivations,
   operatorActivationsToCsv,
   listWalletTransactions,
+  listCrmReconciliationItems,
 } from '../services/walletService.js';
 import { findUserById } from '../services/authService.js';
 import {
@@ -64,6 +67,8 @@ import {
 const router = Router();
 
 router.use(authenticate, ensureActiveAccount, requireStaffRole());
+router.param('id', validateIdParam);
+router.param('transactionId', validateIdParam);
 
 router.get(
   '/packages',
@@ -125,6 +130,7 @@ router.patch(
 
 router.get(
   '/stats',
+  requirePermission('viewReports'),
   asyncHandler(async (_req, res) => {
     const stats = await getAdminStats();
     success(res, stats);
@@ -271,7 +277,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const operatorId = parseInt(req.params.id, 10);
     const transactionId = parseInt(req.params.transactionId, 10);
-    const paymentRef = req.body.paymentRef ? String(req.body.paymentRef) : null;
+    const paymentRef = req.body?.paymentRef ? String(req.body.paymentRef).trim().slice(0, 255) : null;
     const result = await completeTopup(transactionId, paymentRef, getClientMeta(req), {
       type: 'admin',
       id: req.user.id,
@@ -380,9 +386,10 @@ router.delete(
 router.get(
   '/reports',
   requirePermission('viewReports'),
+  reportLimiter,
   asyncHandler(async (req, res) => {
-    await runWithReportSlot(async () => {
-      const filters = reportQuerySchema.parse(req.query);
+    const filters = reportQuerySchema.parse(req.query);
+    await runWithReportSlot(req, async () => {
       const report = await generateReport(filters);
       success(res, report);
     });
@@ -392,11 +399,23 @@ router.get(
 router.get(
   '/reports/export',
   requirePermission('viewReports'),
+  reportLimiter,
   asyncHandler(async (req, res) => {
-    await runWithReportSlot(async () => {
-      const filters = reportQuerySchema.parse(req.query);
+    const filters = reportQuerySchema.parse(req.query);
+    await runWithReportSlot(req, async () => {
       await streamReportExport(res, filters);
     });
+  })
+);
+
+/** Charges held because a CRM payment may have posted without the activation completing. */
+router.get(
+  '/crm-reconciliation',
+  requirePermission('adjustWallet'),
+  asyncHandler(async (req, res) => {
+    const queryParams = listQuerySchema.parse(req.query);
+    const result = await listCrmReconciliationItems(queryParams);
+    success(res, result);
   })
 );
 

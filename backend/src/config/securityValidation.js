@@ -28,18 +28,17 @@ export function validateSecurityConfig() {
   if (config.jwt.accessSecret.length < minLen) {
     errors.push(`JWT_ACCESS_SECRET must be at least ${minLen} characters`);
   }
-  if (config.jwt.refreshSecret.length < minLen) {
-    errors.push(`JWT_REFRESH_SECRET must be at least ${minLen} characters`);
-  }
-
   if (isWeakJwtSecret(config.jwt.accessSecret)) {
     errors.push('JWT_ACCESS_SECRET must not use the .env.example placeholder or a known weak value');
   }
-  if (isWeakJwtSecret(config.jwt.refreshSecret)) {
-    errors.push('JWT_REFRESH_SECRET must not use the .env.example placeholder or a known weak value');
-  }
 
   if (isProduction) {
+    if (config.trustProxy === false) {
+      warnings.push(
+        'TRUST_PROXY=false — behind nginx every client shares the proxy IP, so per-IP rate limits become global'
+      );
+    }
+
     if (config.wallet.autoCompleteTopup) {
       errors.push('WALLET_AUTO_COMPLETE_TOPUP must be false when NODE_ENV=production');
     }

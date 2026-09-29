@@ -2,8 +2,39 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import pool from './pool.js';
+import { isProduction } from '../config/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+const MIGRATION_LOCK_NAME = 'medianet_voucher_schema_migrate';
+const MIGRATION_LOCK_TIMEOUT_SECONDS = 10;
+
+/**
+ * Files that existed before the migration ledger was introduced. Only these may be
+ * marked as applied without running them when an old database is bootstrapped.
+ */
+const PRE_LEDGER_MIGRATIONS = new Set([
+  '001_schema.sql',
+  '002_patch.sql',
+  '003_drop_promotions.sql',
+  '004_packages.sql',
+  '005_operator_packages.sql',
+  '006_admin_roles.sql',
+  '007_voucher_account_package.sql',
+  '008_voucher_account_packages.sql',
+  '009_operator_wallets.sql',
+  '010_operator_wallet_commission.sql',
+  '011_service_tags.sql',
+  '012_operator_service_scope.sql',
+  '013_wallet_commission_multiplier.sql',
+  '014_operator_trial_period.sql',
+  '015_operator_trial_accounts.sql',
+  '016_operator_wallet_self_topup.sql',
+  '017_operator_portal_roles.sql',
+  '018_voucher_account_origin_activity.sql',
+  '019_marketing_ads.sql',
+  '020_knowledge_documents.sql',
+]);
 
 function parseStatements(sql) {
   return sql
@@ -40,7 +71,7 @@ async function bootstrapMigrationLedger(connection, files) {
   }
 
   for (const file of files) {
-    if (file === '021_schema_migrations.sql') {
+    if (!PRE_LEDGER_MIGRATIONS.has(file)) {
       continue;
     }
     await connection.query('INSERT IGNORE INTO schema_migrations (filename) VALUES (?)', [file]);
@@ -48,7 +79,35 @@ async function bootstrapMigrationLedger(connection, files) {
   }
 }
 
+async function acquireMigrationLock(connection) {
+  const [rows] = await connection.query('SELECT GET_LOCK(?, ?) AS acquired', [
+    MIGRATION_LOCK_NAME,
+    MIGRATION_LOCK_TIMEOUT_SECONDS,
+  ]);
+  if (Number(rows[0]?.acquired) !== 1) {
+    throw new Error('Another migration run is in progress. Try again when it finishes.');
+  }
+}
+
+async function releaseMigrationLock(connection) {
+  try {
+    await connection.query('SELECT RELEASE_LOCK(?)', [MIGRATION_LOCK_NAME]);
+  } catch {
+    // Lock is released automatically when the connection closes.
+  }
+}
+
+function assertProductionIntent() {
+  if (isProduction && !process.argv.includes('--production')) {
+    throw new Error(
+      'Refusing to migrate a production database without --production. Take a backup, then run: npm run migrate:prod'
+    );
+  }
+}
+
 async function migrate() {
+  assertProductionIntent();
+
   const sqlDir = path.join(__dirname, '../../sql');
   const files = fs
     .readdirSync(sqlDir)
@@ -57,6 +116,7 @@ async function migrate() {
 
   const connection = await pool.getConnection();
   try {
+    await acquireMigrationLock(connection);
     await ensureMigrationsTable(connection);
     await bootstrapMigrationLedger(connection, files);
 
@@ -69,15 +129,24 @@ async function migrate() {
 
       const sql = fs.readFileSync(path.join(sqlDir, file), 'utf8');
       const statements = parseStatements(sql);
-      for (const statement of statements) {
-        await connection.query(statement);
+      // MySQL DDL commits implicitly; the transaction still makes data-only migrations atomic.
+      await connection.beginTransaction();
+      try {
+        for (const statement of statements) {
+          await connection.query(statement);
+        }
+        await connection.query('INSERT INTO schema_migrations (filename) VALUES (?)', [file]);
+        await connection.commit();
+      } catch (err) {
+        await connection.rollback().catch(() => {});
+        throw new Error(`${file}: ${err.message}`);
       }
-      await connection.query('INSERT INTO schema_migrations (filename) VALUES (?)', [file]);
       console.log(`Applied: ${file}`);
     }
 
     console.log('Database migration completed successfully.');
   } finally {
+    await releaseMigrationLock(connection);
     connection.release();
     await pool.end();
   }

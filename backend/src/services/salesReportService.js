@@ -6,6 +6,7 @@ import {
   forEachDealerTopupBatch,
 } from './dealerTopupReportService.js';
 import { csvEscape } from '../utils/csv.js';
+import { operatorSpendDebitSql } from '../utils/walletSql.js';
 
 function roundMoney(value) {
   return Math.round(Number(value) * 100) / 100;
@@ -34,7 +35,7 @@ function buildWalletDateFilters({ startDate, endDate }, params, operatorId) {
 }
 
 function buildAccountDateFilters({ startDate, endDate }, params, operatorId) {
-  const filters = ['1=1'];
+  const filters = [`va.status = 'created'`];
   if (operatorId) {
     filters.push('va.operator_id = ?');
     params.push(operatorId);
@@ -97,7 +98,7 @@ export async function generateSalesReport({ operatorId, startDate, endDate } = {
 
   const debitParams = [];
   const debitFilters = buildWalletDateFilters({ startDate, endDate }, debitParams, operatorId);
-  debitFilters.push(`wt.type = 'debit'`);
+  debitFilters.push(operatorSpendDebitSql('wt'));
 
   const debitRows = await query(
     `SELECT wt.operator_id AS operatorId,
@@ -197,7 +198,7 @@ export async function getSalesDashboardStats({ days = 30 } = {}) {
 
   const debitParams = [];
   const debitFilters = buildWalletDateFilters({ startDate, endDate }, debitParams, null);
-  debitFilters.push(`wt.type = 'debit'`);
+  debitFilters.push(operatorSpendDebitSql('wt'));
 
   const debitTrendRows = await query(
     `SELECT DATE(COALESCE(wt.completed_at, wt.created_at)) AS date,

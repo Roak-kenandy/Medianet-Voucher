@@ -15,24 +15,43 @@ export function clearAccessToken() {
   accessToken = null;
 }
 
+async function postRefresh() {
+  const res = await fetch(`${API_BASE}/auth/refresh`, {
+    method: 'POST',
+    credentials: 'include',
+  });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok && data.success, data };
+}
+
+/** Another tab rotated the shared refresh cookie a moment ago; retry with the new cookie. */
+async function refreshWithRaceRetry() {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const { ok, data } = await postRefresh();
+    if (ok) {
+      setAccessToken(data.data.accessToken);
+      return data.data.accessToken;
+    }
+    if (data?.code !== 'REFRESH_RACE') {
+      clearAccessToken();
+      throw new Error(data?.message || 'Session expired');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+  }
+  clearAccessToken();
+  throw new Error('Session expired');
+}
+
 export async function refreshAccessToken() {
   if (!refreshPromise) {
-    refreshPromise = fetch(`${API_BASE}/auth/refresh`, {
-      method: 'POST',
-      credentials: 'include',
-    })
-      .then(async (res) => {
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          clearAccessToken();
-          throw new Error(data.message || 'Session expired');
-        }
-        setAccessToken(data.data.accessToken);
-        return data.data.accessToken;
-      })
-      .finally(() => {
-        refreshPromise = null;
-      });
+    // Serialize refreshes across tabs where supported so only one rotation happens at a time.
+    const run = () => refreshWithRaceRetry();
+    refreshPromise = (navigator.locks?.request
+      ? navigator.locks.request('medianet-auth-refresh', run)
+      : run()
+    ).finally(() => {
+      refreshPromise = null;
+    });
   }
   return refreshPromise;
 }

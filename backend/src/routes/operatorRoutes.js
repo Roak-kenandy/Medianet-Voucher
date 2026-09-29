@@ -10,8 +10,10 @@ import {
   walletTopupLimiter,
   walletStatusLimiter,
   customerSearchLimiter,
+  reportLimiter,
 } from '../middleware/rateLimit.js';
 import { asyncHandler, success } from '../utils/errors.js';
+import { parseIdParam } from '../utils/params.js';
 import { getClientMeta } from '../services/auditService.js';
 import {
   getOperatorStats,
@@ -88,19 +90,23 @@ router.get(
 router.get(
   '/wallet/transactions/report',
   requireOperatorPermission('transactions'),
+  reportLimiter,
   asyncHandler(async (req, res) => {
     const filters = walletTransactionQuerySchema.parse(req.query);
-    const report = await generateWalletTransactionReport(req.user.id, filters);
-    success(res, report);
+    await runWithReportSlot(req, async () => {
+      const report = await generateWalletTransactionReport(req.user.id, filters);
+      success(res, report);
+    });
   })
 );
 
 router.get(
   '/wallet/transactions/export',
   requireOperatorPermission('transactions'),
+  reportLimiter,
   asyncHandler(async (req, res) => {
-    await runWithReportSlot(async () => {
-      const filters = walletTransactionQuerySchema.parse(req.query);
+    const filters = walletTransactionQuerySchema.parse(req.query);
+    await runWithReportSlot(req, async () => {
       await streamWalletTransactionReportCsv(res, req.user.id, filters);
     });
   })
@@ -240,7 +246,7 @@ router.get(
   '/knowledge-documents/:id/download',
   requireOperatorPermission('dashboard'),
   asyncHandler(async (req, res) => {
-    const docId = parseInt(req.params.id, 10);
+    const docId = parseIdParam(req.params.id);
     const { row, filePath } = await getKnowledgeDocumentFile(docId, { activeOnly: true });
     res.setHeader('Content-Type', row.mime_type);
     res.download(filePath, row.file_original_name);
@@ -294,9 +300,10 @@ router.post(
 router.get(
   '/reports',
   requireOperatorPermission('reports'),
+  reportLimiter,
   asyncHandler(async (req, res) => {
-    await runWithReportSlot(async () => {
-      const filters = operatorReportQuerySchema.parse(req.query);
+    const filters = operatorReportQuerySchema.parse(req.query);
+    await runWithReportSlot(req, async () => {
       const report = await generateOperatorReport(req.user.id, filters);
       success(res, report);
     });
@@ -306,9 +313,10 @@ router.get(
 router.get(
   '/reports/export',
   requireOperatorPermission('reports'),
+  reportLimiter,
   asyncHandler(async (req, res) => {
-    await runWithReportSlot(async () => {
-      const filters = operatorReportQuerySchema.parse(req.query);
+    const filters = operatorReportQuerySchema.parse(req.query);
+    await runWithReportSlot(req, async () => {
       await streamOperatorReportCsv(res, req.user.id, filters);
     });
   })

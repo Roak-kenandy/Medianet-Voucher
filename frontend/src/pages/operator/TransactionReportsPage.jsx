@@ -9,7 +9,10 @@ import { useToast } from '../../context/ToastContext';
 import { formatMoney } from '../../utils/money';
 import { getDefaultReportDateRange } from '../../utils/dates';
 import { downloadCsv } from '../../utils/reports';
+import TablePagination from '../../components/TablePagination';
 import '../admin/admin-shared.css';
+
+const REPORT_PAGE_SIZE = 50;
 
 export default function TransactionReportsPage() {
   const toast = useToast();
@@ -22,23 +25,34 @@ export default function TransactionReportsPage() {
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
 
+  const [appliedParams, setAppliedParams] = useState(null);
+
   const buildParams = () => ({
     startDate: filters.startDate || undefined,
     endDate: filters.endDate || undefined,
     type: filters.type || undefined,
   });
 
-  const generate = async () => {
+  const loadPage = async (params, page, { announce = false } = {}) => {
     setLoading(true);
     try {
-      const data = await operatorApi.generateTransactionReport(buildParams());
+      const data = await operatorApi.generateTransactionReport({ ...params, page, limit: REPORT_PAGE_SIZE });
       setReport(data);
-      toast.success(`Report generated — ${data.rows?.length || 0} transaction(s)`);
+      setAppliedParams(params);
+      if (announce) {
+        toast.success(`Report generated — ${data.summary?.totalTransactions ?? 0} transaction(s)`);
+      }
     } catch (err) {
       toast.error(err.message || 'Failed to generate report');
     } finally {
       setLoading(false);
     }
+  };
+
+  const generate = () => loadPage(buildParams(), 1, { announce: true });
+
+  const changePage = (page) => {
+    if (appliedParams) loadPage(appliedParams, page);
   };
 
   const exportCsv = async () => {
@@ -92,6 +106,7 @@ export default function TransactionReportsPage() {
                 <option value="topup">Wallet top-up</option>
                 <option value="debit">Customer charge</option>
                 <option value="adjustment">Adjustment</option>
+                <option value="refund">Refund</option>
               </select>
             </div>
           </div>
@@ -144,6 +159,14 @@ export default function TransactionReportsPage() {
               {formatMoney(report.summary.totalDebited, report.summary.currencyCode)}
             </div>
           </div>
+          {report.summary.totalRefunded > 0 && (
+            <div className="stat-card">
+              <div className="stat-card-label">Refunded</div>
+              <div className="stat-card-value">
+                {formatMoney(report.summary.totalRefunded, report.summary.currencyCode)}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -191,6 +214,16 @@ export default function TransactionReportsPage() {
                   </tbody>
                 </table>
               </div>
+            )}
+            {report.pagination && (
+              <TablePagination
+                page={report.pagination.page}
+                totalPages={report.pagination.totalPages}
+                total={report.pagination.total}
+                limit={report.pagination.limit}
+                onPageChange={changePage}
+                itemLabel="transactions"
+              />
             )}
           </div>
         </div>

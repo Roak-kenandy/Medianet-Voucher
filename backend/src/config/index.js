@@ -14,19 +14,39 @@ function requireEnv(key) {
   return value;
 }
 
+function boundedInt(raw, fallback, min, max) {
+  const parsed = parseInt(raw ?? '', 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+/** Express `trust proxy` value: hop count, `false`, or a named/CIDR list (default: local nginx only). */
+function parseTrustProxy(raw) {
+  if (raw == null || raw === '') return 'loopback';
+  const value = String(raw).trim();
+  if (value === 'false') return false;
+  if (value === 'true') {
+    throw new Error('TRUST_PROXY=true trusts any client-supplied X-Forwarded-For; use a hop count or proxy IP list');
+  }
+  if (/^\d+$/.test(value)) return parseInt(value, 10);
+  return value;
+}
+
 export const config = {
   env: nodeEnv,
   port: parseInt(process.env.PORT || '4000', 10),
+  trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
   db: {
     host: process.env.DB_HOST || '127.0.0.1',
     port: parseInt(process.env.DB_PORT || '3306', 10),
     database: requireEnv('DB_NAME'),
     user: requireEnv('DB_USER'),
     password: requireEnv('DB_PASSWORD'),
+    connectionLimit: boundedInt(process.env.DB_POOL_SIZE, 10, 2, 100),
+    queueLimit: boundedInt(process.env.DB_POOL_QUEUE_LIMIT, 200, 10, 10000),
   },
   jwt: {
     accessSecret: requireEnv('JWT_ACCESS_SECRET'),
-    refreshSecret: requireEnv('JWT_REFRESH_SECRET'),
     accessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '15m',
     refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
   },
@@ -56,7 +76,9 @@ export const config = {
     paymentTermsId: process.env.PAYMENT_TERMS_ID || '',
     paymentTypeId: process.env.PAYMENT_TYPE_ID || '199f072f-977d-4056-8262-d7e467bbccbb7',
     salesModelName: process.env.CRM_SALES_MODEL_NAME || 'Retail',
-    requestTimeoutMs: parseInt(process.env.CRM_REQUEST_TIMEOUT_MS || '60000', 10),
+    requestTimeoutMs: boundedInt(process.env.CRM_REQUEST_TIMEOUT_MS, 60000, 1000, 120000),
+    maxConcurrentPerOperator: boundedInt(process.env.CRM_MAX_CONCURRENT_PER_OPERATOR, 2, 1, 10),
+    maxConcurrentGlobal: boundedInt(process.env.CRM_MAX_CONCURRENT_GLOBAL, 8, 1, 50),
   },
   wallet: {
     currencyCode: process.env.WALLET_CURRENCY_CODE || process.env.CURRENCY_CODE || 'MVR',
@@ -88,6 +110,6 @@ export const config = {
     locale: process.env.BML_LOCALE || 'en',
     redirectUrl: process.env.BML_REDIRECT_URL || '',
     webhookUrl: process.env.BML_WEBHOOK_URL || '',
-    requestTimeoutMs: parseInt(process.env.BML_REQUEST_TIMEOUT_MS || '30000', 10),
+    requestTimeoutMs: boundedInt(process.env.BML_REQUEST_TIMEOUT_MS, 30000, 1000, 120000),
   },
 };

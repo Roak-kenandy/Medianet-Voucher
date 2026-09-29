@@ -5,6 +5,7 @@ import { getOperatorPackages } from './packageService.js';
 import { REPORT_DEFAULT_PAGE_SIZE } from '../constants/reportLimits.js';
 import { paginationSql } from '../utils/pagination.js';
 import { streamCsvFromOffsetBatches } from './reportPagination.js';
+import { csvRow } from '../utils/csv.js';
 
 function buildDateFilters(startDate, endDate, column = 'va.created_at') {
   const conditions = [];
@@ -136,34 +137,6 @@ export async function generateOperatorReport(
   };
 }
 
-export function operatorReportToCsv(report) {
-  const lines = [
-    'Operator Activity Report',
-    `Client,${report.summary.clientName}`,
-    `Package,${report.summary.packageType}`,
-    `Wallet Balance,${report.summary.walletBalance}`,
-    `Accounts Created,${report.summary.accountsCreated}`,
-    `Spent In Period,${report.summary.spentInPeriod}`,
-    `Period Records,${report.summary.recordsInPeriod}`,
-    '',
-    'Full Name,Phone,Status,Amount Charged,Created At',
-  ];
-
-  for (const row of report.rows) {
-    lines.push(
-      [
-        row.fullName,
-        row.phoneNumber,
-        row.status,
-        row.amountCharged ?? '',
-        row.createdAt,
-      ].join(',')
-    );
-  }
-
-  return lines.join('\n');
-}
-
 export async function streamOperatorReportCsv(res, operatorId, filters) {
   const report = await generateOperatorReport(operatorId, { ...filters, page: 1, limit: 1 });
   const { conditions, params, clause } = buildDateFilters(filters.startDate, filters.endDate);
@@ -172,10 +145,10 @@ export async function streamOperatorReportCsv(res, operatorId, filters) {
   const titleLines = report.summary
     ? [
         'Operator Activity Report',
-        `Client,${report.summary.clientName}`,
-        `Package,${report.summary.packageType}`,
-        `Wallet Balance,${report.summary.walletBalance}`,
-        `Period Records,${report.summary.recordsInPeriod}`,
+        csvRow(['Client', report.summary.clientName]),
+        csvRow(['Package', report.summary.packageType]),
+        csvRow(['Wallet Balance', report.summary.walletBalance]),
+        csvRow(['Period Records', report.summary.recordsInPeriod]),
         '',
       ]
     : ['Operator Activity Report', ''];
