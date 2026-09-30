@@ -34,7 +34,7 @@ const emptyForm = () => ({
   packageIds: [],
   email: '',
   password: '',
-  walletCommissionMultiplier: '',
+  walletCommissionPercent: '',
   canSelfTopup: true,
   portalRole: 'supervisor',
   portalPermissions: defaultOperatorPermissions(false),
@@ -47,29 +47,44 @@ function portalPermissionsFromOperator(operator) {
   return parseOperatorPermissions(role, operator.portal_permissions);
 }
 
+const COMMISSION_PERCENTS = [50, 40, 30, 20, 10];
+
 function multiplierFromOperator(operator) {
   const type = operator.wallet_commission_type || 'none';
   const value = Number(operator.wallet_commission_value) || 1;
   if (type === 'multiplier' && value > 1) return value;
-  return '';
+  return null;
 }
 
-function commissionPayload(multiplier) {
-  const value = Number(multiplier);
-  if (!Number.isFinite(value) || value <= 1) {
+function percentFromMultiplier(multiplier) {
+  if (!multiplier || multiplier <= 1) return '';
+  const percent = Math.round((multiplier - 1) * 10000) / 100;
+  if (COMMISSION_PERCENTS.includes(percent)) return String(percent);
+  return `legacy:${multiplier}`;
+}
+
+function commissionPayload(percent) {
+  if (typeof percent === 'string' && percent.startsWith('legacy:')) {
+    const value = Number(percent.slice(7));
+    if (Number.isFinite(value) && value > 1) {
+      return { walletCommissionType: 'multiplier', walletCommissionValue: value };
+    }
+  }
+  const value = Number(percent);
+  if (!COMMISSION_PERCENTS.includes(value)) {
     return { walletCommissionType: 'none', walletCommissionValue: 1 };
   }
-  return { walletCommissionType: 'multiplier', walletCommissionValue: value };
+  return {
+    walletCommissionType: 'multiplier',
+    walletCommissionValue: Math.round((1 + value / 100) * 100000) / 100000,
+  };
 }
 
 function formatCommissionLabel(operator) {
   const multiplier = multiplierFromOperator(operator);
-  if (multiplier > 1) {
-    const bonusPercent = Math.round((multiplier - 1) * 10000) / 100;
-    const ratio = String(Math.round(multiplier * 100000) / 100000);
-    return `×${ratio} (+${bonusPercent}%)`;
-  }
-  return 'None';
+  if (!multiplier) return 'None';
+  const percent = Math.round((multiplier - 1) * 10000) / 100;
+  return `${percent}%`;
 }
 
 function StatusBadge({ active }) {
@@ -163,7 +178,7 @@ export default function OperatorsTab() {
       packageIds,
       email: operator.email,
       password: '',
-      walletCommissionMultiplier: multiplierFromOperator(operator),
+      walletCommissionPercent: percentFromMultiplier(multiplierFromOperator(operator)),
       canSelfTopup: operator.wallet_self_topup_enabled !== 0,
       portalRole: operator.portal_role === 'user' ? 'user' : 'supervisor',
       portalPermissions: portalPermissionsFromOperator(operator),
@@ -187,10 +202,10 @@ export default function OperatorsTab() {
     setSubmitting(true);
 
     try {
-      const { walletCommissionMultiplier, ...formData } = createForm;
+      const { walletCommissionPercent, ...formData } = createForm;
       await adminApi.createOperator({
         ...formData,
-        ...commissionPayload(walletCommissionMultiplier),
+        ...commissionPayload(walletCommissionPercent),
         portalPermissions:
           formData.portalRole === 'user' ? formData.portalPermissions : undefined,
       });
@@ -220,10 +235,10 @@ export default function OperatorsTab() {
     setSubmitting(true);
 
     try {
-      const { walletCommissionMultiplier, ...formData } = editForm;
+      const { walletCommissionPercent, ...formData } = editForm;
       await adminApi.updateOperator(editModal.id, {
         ...formData,
-        ...commissionPayload(walletCommissionMultiplier),
+        ...commissionPayload(walletCommissionPercent),
         portalPermissions:
           formData.portalRole === 'user' ? formData.portalPermissions : undefined,
       });
@@ -369,23 +384,30 @@ export default function OperatorsTab() {
         />
       </div>
       <div className="form-group">
-        <label className="form-label">Top-up multiplier (optional)</label>
-        <input
-          type="number"
+        <label className="form-label">Commission</label>
+        <select
           className="form-input"
-          value={form.walletCommissionMultiplier}
-          onChange={(e) =>
-            setForm({
-              ...form,
-              walletCommissionMultiplier: e.target.value === '' ? '' : Number(e.target.value),
-            })
-          }
-          min={1}
-          step="any"
-          placeholder="e.g. 1.15 for 15% bonus"
-        />
+          value={form.walletCommissionPercent}
+          onChange={(e) => setForm({ ...form, walletCommissionPercent: e.target.value })}
+        >
+          <option value="">No commission</option>
+          {COMMISSION_PERCENTS.map((percent) => (
+            <option key={percent} value={String(percent)}>
+              {percent}%
+            </option>
+          ))}
+          {String(form.walletCommissionPercent).startsWith('legacy:') && (
+            <option value={form.walletCommissionPercent}>
+              {formatCommissionLabel({
+                wallet_commission_type: 'multiplier',
+                wallet_commission_value: Number(String(form.walletCommissionPercent).slice(7)),
+              })}{' '}
+              (current)
+            </option>
+          )}
+        </select>
         <p className="form-hint">
-          Optional. Leave blank for no bonus. e.g. 1.15 multiplies the payment total by 15% before GST.
+          Added on top of the amount received before GST. 50% on 1,000 MVR adds 500 MVR commission.
         </p>
       </div>
       <div className="form-group form-group-full">
@@ -560,7 +582,7 @@ export default function OperatorsTab() {
                     <th>Notes</th>
                     <th>Email</th>
                     <th>Wallet</th>
-                    <th>Multiplier</th>
+                    <th>Commission</th>
                     <th>Accounts</th>
                     <th>Portal</th>
                     <th>Status</th>

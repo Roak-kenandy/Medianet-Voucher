@@ -57,7 +57,7 @@ export const createAdminSchema = z.object({
 });
 
 const MONEY_MAX = 1_000_000;
-const WALLET_COMMISSION_MULTIPLIER_MAX = 10;
+const OPERATOR_COMMISSION_PERCENTS = [10, 20, 30, 40, 50];
 
 /** Finite, positive MVR amount with at most 2 decimal places and a hard ceiling. */
 function moneyAmountSchema(label, max = MONEY_MAX) {
@@ -74,8 +74,7 @@ const walletCommissionFields = {
   walletCommissionValue: z.coerce
     .number()
     .finite()
-    .min(0, 'Multiplier cannot be negative')
-    .max(WALLET_COMMISSION_MULTIPLIER_MAX, `Multiplier cannot exceed ${WALLET_COMMISSION_MULTIPLIER_MAX}`)
+    .min(0, 'Commission cannot be negative')
     .default(1),
 };
 
@@ -98,15 +97,21 @@ const operatorPortalFields = {
 };
 
 function validateWalletCommission(data, ctx) {
-  if (data.walletCommissionType === 'multiplier') {
-    if (data.walletCommissionValue < 1) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Multiplier must be at least 1',
-        path: ['walletCommissionValue'],
-      });
-    }
+  if (data.walletCommissionType !== 'multiplier') return;
+
+  const value = Number(data.walletCommissionValue);
+  if (OPERATOR_COMMISSION_PERCENTS.includes(value)) {
+    data.walletCommissionValue = Math.round((1 + value / 100) * 100000) / 100000;
+    return;
   }
+
+  if (value > 1 && value <= 10) return;
+
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: 'Commission must be 10%, 20%, 30%, 40%, or 50%',
+    path: ['walletCommissionValue'],
+  });
 }
 
 export const createOperatorSchema = z

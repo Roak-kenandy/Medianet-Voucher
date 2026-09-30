@@ -20,7 +20,7 @@ function commissionHint(wallet) {
   const multiplier = Number(wallet.walletCommissionValue) || 1;
   if (multiplier <= 1) return null;
   const bonusPercent = Math.round((multiplier - 1) * 10000) / 100;
-  return `Payment total is multiplied by ${multiplier.toFixed(2)} (+${bonusPercent}% bonus) before GST is calculated.`;
+  return `${bonusPercent}% commission is added to the payment before GST is calculated.`;
 }
 
 export default function WalletPage() {
