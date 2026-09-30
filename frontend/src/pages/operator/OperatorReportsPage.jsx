@@ -218,9 +218,16 @@ export default function OperatorReportsPage() {
                     <tbody>
                       {report.rows.map((row, i) => (
                         <tr key={i}>
-                          {columns.map((c) => (
-                            <td key={c}>{formatCellValue(c, row[c])}</td>
-                          ))}
+                          {columns.map((c) => {
+                            const text = formatCellValue(c, row[c]);
+                            const raw = row[c] == null ? '' : String(row[c]);
+                            const clip = typeof row[c] === 'string' && raw.length > 32;
+                            return (
+                              <td key={c}>
+                                {clip ? <span className="cell-clip" title={raw}>{text}</span> : (text || '—')}
+                              </td>
+                            );
+                          })}
                         </tr>
                       ))}
                     </tbody>

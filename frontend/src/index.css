@@ -356,6 +356,16 @@ textarea.form-input {
   font-size: 14px;
 }
 
+/* Long cell text stays on one line. Hover (title) shows the rest. */
+.cell-clip {
+  display: inline-block;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
 /* Modal */
 .modal-overlay {
   position: fixed;

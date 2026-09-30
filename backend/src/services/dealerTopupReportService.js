@@ -35,6 +35,18 @@ function isManualStaffActivation(metadata) {
 }
 
 export function resolveTopupFinancials(row, metadata) {
+  if (metadata.amountPaid != null && metadata.grossTotal != null) {
+    return {
+      amountPaid: roundMoney(metadata.amountPaid),
+      gstRate: metadata.gstRate ?? 0,
+      gstRatePercent: roundMoney(metadata.gstRatePercent ?? (metadata.gstRate || 0) * 100),
+      gstAmount: roundMoney(metadata.gstAmount ?? 0),
+      afterGst: roundMoney(metadata.afterGst ?? metadata.creditedAmount ?? row.net_amount),
+      commissionAmount: roundMoney(metadata.commissionAmount ?? row.commission_amount ?? 0),
+      totalTopupAmount: roundMoney(metadata.creditedAmount ?? row.net_amount),
+    };
+  }
+
   if (isManualStaffActivation(metadata)) {
     const credited = roundMoney(row.net_amount ?? row.amount);
     return {
@@ -104,6 +116,30 @@ function resolveTopupSource(row, metadata) {
   return row.type || 'Other';
 }
 
+const TOPUP_TYPE_LABELS = {
+  bank_transfer: 'Bank transfer',
+  quickpay: 'Quickpay',
+  cash: 'Cash',
+  other: 'Other',
+  bml: 'BML',
+  manual: 'Manual',
+};
+
+function formatRatio(value) {
+  const ratio = Number(value);
+  if (!Number.isFinite(ratio) || ratio <= 1) return '';
+  return String(Math.round(ratio * 100000) / 100000);
+}
+
+function resolvePaymentType(row, metadata) {
+  if (metadata.topupType && TOPUP_TYPE_LABELS[metadata.topupType]) {
+    return TOPUP_TYPE_LABELS[metadata.topupType];
+  }
+  if (isManualStaffActivation(metadata)) return 'Manual';
+  if (row.type === 'topup') return 'BML';
+  return 'Other';
+}
+
 const TOPUP_SELECT = `SELECT wt.id, wt.type, wt.reference, wt.amount, wt.commission_amount, wt.net_amount,
             wt.payment_ref, wt.description, wt.metadata, wt.created_by_type, wt.created_by_id,
             wt.created_at, wt.completed_at, wt.currency_code,
@@ -124,7 +160,11 @@ export function buildDealerTopupBaseFilters({ operatorId, startDate, endDate } =
       OR (
         wt.type = 'adjustment'
         AND wt.net_amount > 0
-        AND JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.activity')) = 'admin_operator_activation'
+        AND JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.activity')) IN ('admin_operator_activation', 'operator_topup_adjustment')
+      )
+      OR (
+        wt.type = 'debit'
+        AND JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.activity')) IN ('operator_topup_void', 'operator_topup_adjustment')
       )
     )`,
   ];
@@ -168,25 +208,46 @@ export function mapDealerTopupRow(row) {
   const metadata = parseMetadata(row.metadata);
   const financials = resolveTopupFinancials(row, metadata);
   const eventTime = row.completed_at || row.created_at;
+  const isCorrection = metadata.activity === 'operator_topup_adjustment' || metadata.activity === 'operator_topup_void';
+  const isDeduct = metadata.adjustmentAction === 'deduct' || metadata.activity === 'operator_topup_void';
+  const sign = isDeduct ? -1 : 1;
+  const grossTotal = roundMoney(
+    metadata.grossTotal ?? financials.amountPaid + financials.commissionAmount
+  );
+  const ratioSource =
+    metadata.commissionType === 'multiplier' && Number(metadata.commissionValue) > 1
+      ? metadata.commissionValue
+      : null;
 
   return {
     time: formatReportTime(eventTime),
+    action: isDeduct ? 'Deduct' : 'Add',
+    paymentType: resolvePaymentType(row, metadata),
+    receiptNo: metadata.receiptNo || row.payment_ref || row.reference || String(row.id),
     reference: row.reference || String(row.id),
     operator: row.client_name,
     operatorEmail: row.operator_email,
-    amountPaid: financials.amountPaid,
-    gstAmount: financials.gstAmount,
-    afterGst: financials.afterGst,
-    commission: financials.commissionAmount,
-    credited: financials.totalTopupAmount,
+    commissionRatio: formatRatio(ratioSource),
+    originalAmount: roundMoney(sign * financials.amountPaid),
+    originalWithoutGst: '',
+    totalTopupAmount: roundMoney(sign * grossTotal),
+    amountPaid: roundMoney(sign * financials.amountPaid),
+    gstAmount: roundMoney(sign * financials.gstAmount),
+    afterGst: roundMoney(sign * financials.afterGst),
+    commission: roundMoney(sign * financials.commissionAmount),
+    credited: roundMoney(sign * financials.totalTopupAmount),
     gstRatePercent: financials.gstRatePercent,
     source: resolveTopupSource(row, metadata),
     processedBy: resolveProcessedBy(row, metadata, row.operator_email, row.admin_email),
+    note: metadata.notes || row.description || '',
     paymentRef: row.payment_ref || '',
     operatorId: row.operator_id,
     currencyCode: row.currency_code || config.wallet.currencyCode,
     transactionId: row.id,
     completedAt: eventTime,
+    voided: Boolean(metadata.voided),
+    countsAsTopup: !isCorrection,
+    canVoid: !isDeduct,
   };
 }
 
@@ -347,35 +408,35 @@ export async function generateDealerTopupReport(filters) {
 
 const CSV_HEADERS = [
   'Time',
-  'Reference',
-  'Operator',
-  'Operator Email',
-  'Amount Paid',
-  'GST Amount',
-  'After GST',
-  'Commission',
-  'Credited to Wallet',
-  'GST Rate %',
-  'Source',
-  'Processed By',
-  'Payment Reference',
+  'Action',
+  'Type',
+  'ID/Receipt no',
+  'Dealer/Operator',
+  'Commission ratio',
+  'Original Amount',
+  'OA Without GST',
+  'Total TopUp Amount',
+  'GST %',
+  'BP Commission',
+  'User',
+  'Note',
 ];
 
 function mappedRowToCsvLine(row) {
   return [
     row.time,
-    row.reference,
+    row.action,
+    row.paymentType,
+    row.receiptNo,
     row.operator,
-    row.operatorEmail,
-    row.amountPaid,
+    row.commissionRatio,
+    row.originalAmount,
+    row.originalWithoutGst,
+    row.totalTopupAmount,
     row.gstAmount,
-    row.afterGst,
     row.commission,
-    row.credited,
-    row.gstRatePercent,
-    row.source,
     row.processedBy,
-    row.paymentRef,
+    row.note,
   ]
     .map(csvEscape)
     .join(',');

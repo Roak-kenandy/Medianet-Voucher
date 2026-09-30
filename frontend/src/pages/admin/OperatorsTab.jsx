@@ -66,7 +66,8 @@ function formatCommissionLabel(operator) {
   const multiplier = multiplierFromOperator(operator);
   if (multiplier > 1) {
     const bonusPercent = Math.round((multiplier - 1) * 10000) / 100;
-    return `×${multiplier.toFixed(2)} (+${bonusPercent}%)`;
+    const ratio = String(Math.round(multiplier * 100000) / 100000);
+    return `×${ratio} (+${bonusPercent}%)`;
   }
   return 'None';
 }

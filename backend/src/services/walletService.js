@@ -435,7 +435,7 @@ export async function mergeTransactionMetadata(connection, reference, patch) {
     : (sql, params) => query(sql, params);
   await runner(
     `UPDATE wallet_transactions
-     SET metadata = JSON_MERGE_PATCH(COALESCE(metadata, JSON_OBJECT()), CAST(? AS JSON))
+     SET metadata = JSON_MERGE_PATCH(COALESCE(metadata, JSON_OBJECT()), ?)
      WHERE reference = ?`,
     [JSON.stringify(patch), reference]
   );
@@ -1135,7 +1135,7 @@ export async function completeTopup(
 export async function adminOperatorTopup(
   adminId,
   operatorId,
-  { amount, trialAccounts = 0, notes },
+  { amount, trialAccounts = 0, notes, topupType = 'bank_transfer', receiptNo = '' },
   reqMeta = {},
   staff = {}
 ) {
@@ -1145,22 +1145,41 @@ export async function adminOperatorTopup(
   try {
     await connection.beginTransaction();
 
+    const commissionSettings = await getOperatorCommissionSettings(operatorId, connection);
+    const breakdown = calculateTopupCredit(creditAmount, {
+      commissionType: commissionSettings.commissionType,
+      commissionValue: commissionSettings.commissionValue,
+      gstRate: config.wallet.gstRate,
+    });
+
     const metadata = {
       activity: 'admin_operator_activation',
       source: 'admin_activation',
       notes,
+      topupType,
+      receiptNo: receiptNo || null,
       staffId: adminId,
       staffName: staff.name || null,
       staffEmail: staff.email || null,
       trialAccounts: Number(trialAccounts) || 0,
+      amountPaid: breakdown.amountPaid,
+      grossTotal: breakdown.grossTotal,
+      gstRate: breakdown.gstRate,
+      gstRatePercent: breakdown.gstRatePercent,
+      gstAmount: breakdown.gstAmount,
+      afterGst: breakdown.afterGst,
+      commissionType: commissionSettings.commissionType,
+      commissionValue: commissionSettings.commissionValue,
+      commissionAmount: breakdown.commission,
+      creditedAmount: breakdown.net,
     };
 
     const result = await creditWallet(connection, {
       operatorId,
       type: 'adjustment',
-      grossAmount: creditAmount,
-      netAmount: creditAmount,
-      commissionAmount: 0,
+      grossAmount: breakdown.grossTotal,
+      netAmount: breakdown.net,
+      commissionAmount: breakdown.commission,
       description: notes,
       createdByType: 'admin',
       createdById: adminId,
@@ -1214,6 +1233,12 @@ export async function adminOperatorTopup(
 
     return {
       amount: creditAmount,
+      amountPaid: breakdown.amountPaid,
+      grossTotal: breakdown.grossTotal,
+      gstAmount: breakdown.gstAmount,
+      commissionAmount: breakdown.commission,
+      commissionValue: commissionSettings.commissionValue,
+      netAmount: breakdown.net,
       currencyCode: config.wallet.currencyCode,
       balance: result.balanceAfter,
       balanceBefore: result.balanceBefore,
@@ -1392,6 +1417,134 @@ export function operatorActivationsToCsv(report) {
   }
 
   return `\ufeff${lines.join('\n')}`;
+}
+
+const TOPUP_TYPE_TO_STORED = {
+  bank_transfer: 'bank_transfer',
+  quickpay: 'quickpay',
+  cash: 'cash',
+  other: 'other',
+};
+
+/**
+ * Add or remove a chosen amount against a completed operator top-up.
+ * The original row stays. A new Add or Deduct row records the correction.
+ */
+export async function adjustOperatorTopup(adminId, transactionId, { action, amount, note }, reqMeta = {}, staff = {}) {
+  const connection = await getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const [rows] = await connection.execute(
+      `SELECT id, operator_id, type, status, reference, net_amount, amount, commission_amount,
+              payment_ref, metadata
+       FROM wallet_transactions WHERE id = ? FOR UPDATE`,
+      [transactionId]
+    );
+    const tx = rows[0];
+    if (!tx || tx.status !== 'completed') {
+      throw new AppError('Top-up not found', 404, 'NOT_FOUND');
+    }
+
+    const metadata = parseMetadata(tx.metadata);
+    const isDeductRow =
+      metadata.activity === 'operator_topup_void' || metadata.adjustmentAction === 'deduct';
+    const isOperatorTopup =
+      tx.type === 'topup' ||
+      metadata.activity === 'admin_operator_activation' ||
+      metadata.adjustmentAction === 'add';
+    if (!isOperatorTopup || isDeductRow) {
+      throw new AppError('Only an added operator top-up can be adjusted', 400, 'TOPUP_NOT_ADJUSTABLE');
+    }
+
+    const correction = roundMoney(amount);
+    if (correction <= 0) {
+      throw new AppError('Amount must be greater than zero', 400, 'VALIDATION_ERROR');
+    }
+
+    const topupType =
+      TOPUP_TYPE_TO_STORED[metadata.topupType] ||
+      (metadata.topupType === 'bml' || metadata.topupType === 'manual'
+        ? metadata.topupType
+        : tx.type === 'topup'
+          ? 'bml'
+          : 'manual');
+
+    const correctionMeta = {
+      activity: 'operator_topup_adjustment',
+      adjustmentAction: action,
+      adjusts: tx.reference,
+      adjustsId: tx.id,
+      notes: note,
+      staffId: adminId,
+      staffName: staff.name || null,
+      staffEmail: staff.email || null,
+      topupType,
+      receiptNo: metadata.receiptNo || tx.payment_ref || null,
+      amountPaid: correction,
+      grossTotal: correction,
+      gstAmount: 0,
+      afterGst: correction,
+      commissionAmount: 0,
+      creditedAmount: correction,
+    };
+
+    const result =
+      action === 'add'
+        ? await creditWallet(connection, {
+            operatorId: tx.operator_id,
+            type: 'adjustment',
+            grossAmount: correction,
+            netAmount: correction,
+            commissionAmount: 0,
+            description: note,
+            createdByType: 'admin',
+            createdById: adminId,
+            metadata: correctionMeta,
+          })
+        : await debitWallet(connection, {
+            operatorId: tx.operator_id,
+            amount: correction,
+            description: note,
+            createdByType: 'admin',
+            createdById: adminId,
+            metadata: correctionMeta,
+          });
+
+    await connection.commit();
+
+    await logAudit({
+      actorType: 'admin',
+      actorId: adminId,
+      action: action === 'add' ? 'OPERATOR_TOPUP_CREDIT_ADDED' : 'OPERATOR_TOPUP_CREDIT_REMOVED',
+      resourceType: 'wallet_transaction',
+      resourceId: tx.id,
+      ipAddress: reqMeta.ipAddress,
+      userAgent: reqMeta.userAgent,
+      metadata: {
+        operatorId: tx.operator_id,
+        reference: tx.reference,
+        adjustmentReference: result.reference,
+        action,
+        amount: correction,
+        note,
+      },
+    });
+
+    return {
+      reference: result.reference,
+      action,
+      amount: correction,
+      currencyCode: config.wallet.currencyCode,
+      balance: result.balanceAfter,
+    };
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
 }
 
 export async function adminAdjustWallet(adminId, operatorId, amount, description, reqMeta = {}) {

@@ -1,6 +1,9 @@
+import { useState } from 'react';
 import TableToolbar from '../TableToolbar';
 import TablePagination from '../TablePagination';
 import { formatMoney } from '../../utils/money';
+import { adminApi } from '../../api/client';
+import { useToast } from '../../context/ToastContext';
 import '../../pages/admin/admin-shared.css';
 
 const TOPUP_SUMMARY_KEYS = [
@@ -29,6 +32,8 @@ export default function TopupReportResults({
   onPageChange,
   pagination,
   loading = false,
+  canVoid = false,
+  onVoided,
 }) {
   const currencyCode = report?.summary?.currencyCode || 'MVR';
   const pagedRows = report?.rows || [];
@@ -37,6 +42,51 @@ export default function TopupReportResults({
     limit: pagedRows.length || 50,
     total: report?.pagination?.total ?? pagedRows.length,
     totalPages: report?.pagination?.totalPages ?? 1,
+  };
+
+  const toast = useToast();
+  const [voidTarget, setVoidTarget] = useState(null);
+  const [adjustAction, setAdjustAction] = useState('deduct');
+  const [adjustAmount, setAdjustAmount] = useState('');
+  const [voidNote, setVoidNote] = useState('');
+  const [voiding, setVoiding] = useState(false);
+
+  const openAdjust = (row) => {
+    setVoidTarget(row);
+    setAdjustAction('deduct');
+    setAdjustAmount('');
+    setVoidNote('');
+  };
+
+  const submitVoid = async () => {
+    if (!voidTarget) return;
+    const amount = Number(adjustAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error('Enter an amount greater than zero');
+      return;
+    }
+    if (voidNote.trim().length < 3) {
+      toast.error('Enter a note of at least 3 characters');
+      return;
+    }
+    setVoiding(true);
+    try {
+      const result = await adminApi.adjustOperatorTopup(voidTarget.transactionId, {
+        action: adjustAction,
+        amount,
+        note: voidNote.trim(),
+      });
+      const verb = result.action === 'add' ? 'Added' : 'Removed';
+      toast.success(`${verb} ${formatMoney(result.amount, currencyCode)}`);
+      setVoidTarget(null);
+      setAdjustAmount('');
+      setVoidNote('');
+      onVoided?.();
+    } catch (err) {
+      toast.error(err.message || 'Could not adjust this top-up');
+    } finally {
+      setVoiding(false);
+    }
   };
 
   if (!report) return null;
@@ -101,42 +151,60 @@ export default function TopupReportResults({
                 <table className="table topup-report-table">
                   <thead>
                     <tr>
-                      <th>Date &amp; Time</th>
-                      <th>Reference</th>
-                      <th>Operator</th>
-                      <th>Source</th>
-                      <th className="col-money">Amount Paid</th>
+                      <th>Time</th>
+                      <th>Action</th>
+                      <th>Type</th>
+                      <th>ID/Receipt no</th>
+                      <th>Dealer/Operator</th>
+                      <th>Commission ratio</th>
+                      <th className="col-money">Original Amount</th>
+                      <th className="col-money">Total TopUp</th>
                       <th className="col-money">GST</th>
-                      <th className="col-money">After GST</th>
-                      <th className="col-money">Commission</th>
-                      <th className="col-money col-highlight">Credited</th>
-                      <th>Processed By</th>
+                      <th className="col-money">BP Commission</th>
+                      <th>User</th>
+                      <th>Note</th>
+                      {canVoid && <th></th>}
                     </tr>
                   </thead>
                   <tbody>
                     {pagedRows.map((row) => (
-                      <tr key={row.reference || row.transactionId}>
+                      <tr key={`${row.action}-${row.transactionId}`}>
                         <td className="col-time">{row.time}</td>
+                        <td>{row.action}</td>
+                        <td>{row.paymentType || '—'}</td>
                         <td className="col-reference">
-                          <code>{row.reference}</code>
+                          <code title={row.receiptNo || undefined}>{row.receiptNo || '—'}</code>
                         </td>
                         <td className="col-operator">
-                          <span className="topup-operator-name">{row.operator}</span>
+                          <span className="topup-operator-name" title={row.operator}>{row.operator}</span>
                           {row.operatorEmail && (
-                            <span className="topup-operator-email">{row.operatorEmail}</span>
+                            <span className="topup-operator-email" title={row.operatorEmail}>{row.operatorEmail}</span>
                           )}
                         </td>
-                        <td>{row.source || '—'}</td>
-                        <td className="col-money">{formatMoney(row.amountPaid, currencyCode)}</td>
-                        <td className="col-money col-deduct">−{formatMoney(row.gstAmount, currencyCode)}</td>
-                        <td className="col-money">{formatMoney(row.afterGst, currencyCode)}</td>
-                        <td className="col-money col-bonus">
-                          {row.commission > 0 ? `+${formatMoney(row.commission, currencyCode)}` : '—'}
+                        <td>{row.commissionRatio || '—'}</td>
+                        <td className="col-money">{formatMoney(row.originalAmount, currencyCode)}</td>
+                        <td className="col-money col-highlight">{formatMoney(row.totalTopupAmount, currencyCode)}</td>
+                        <td className="col-money">{formatMoney(row.gstAmount, currencyCode)}</td>
+                        <td className="col-money">{row.commission ? formatMoney(row.commission, currencyCode) : '—'}</td>
+                        <td className="col-user">
+                          <span className="cell-clip" title={row.processedBy || undefined}>{row.processedBy}</span>
                         </td>
-                        <td className="col-money col-highlight">
-                          {formatMoney(row.credited, currencyCode)}
+                        <td>
+                          <span className="cell-clip" title={row.note || undefined}>{row.note || '—'}</span>
                         </td>
-                        <td className="col-user">{row.processedBy}</td>
+                        {canVoid && (
+                          <td>
+                            {row.canVoid ? (
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => openAdjust(row)}
+                              >
+                                Adjust
+                              </button>
+                            ) : null}
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -154,6 +222,78 @@ export default function TopupReportResults({
           )}
         </div>
       </div>
+
+      {voidTarget && (
+        <div className="modal-overlay" onClick={() => !voiding && setVoidTarget(null)}>
+          <div className="modal adjust-dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-labelledby="void-topup-title">
+            <div className="modal-header">
+              <h3 className="modal-title" id="void-topup-title">Adjust wallet credit</h3>
+              <button type="button" className="modal-close" onClick={() => setVoidTarget(null)} disabled={voiding} aria-label="Close">
+                ×
+              </button>
+            </div>
+            <div className="modal-body">
+              <p className="card-subtitle adjust-dialog-note">
+                {voidTarget.operator} was credited {formatMoney(voidTarget.credited, currencyCode)}.
+                The original row stays. The amount you enter is recorded as its own row.
+              </p>
+              <div className="form-group">
+                <label className="form-label">Action</label>
+                <div className="adjust-action-toggle">
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${adjustAction === 'add' ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => setAdjustAction('add')}
+                    disabled={voiding}
+                  >
+                    Add credit
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${adjustAction === 'deduct' ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => setAdjustAction('deduct')}
+                    disabled={voiding}
+                  >
+                    Remove credit
+                  </button>
+                </div>
+              </div>
+              <div className="form-group">
+                <label className="form-label" htmlFor="adjustAmount">Amount (MVR)</label>
+                <input
+                  id="adjustAmount"
+                  type="number"
+                  className="form-input"
+                  min="0.01"
+                  step="0.01"
+                  value={adjustAmount}
+                  onChange={(e) => setAdjustAmount(e.target.value)}
+                  placeholder="Amount to add or remove"
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label" htmlFor="voidNote">Note</label>
+                <textarea
+                  id="voidNote"
+                  className="form-input"
+                  rows={3}
+                  value={voidNote}
+                  onChange={(e) => setVoidNote(e.target.value)}
+                  placeholder="Why this amount is being changed"
+                />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn btn-secondary" onClick={() => setVoidTarget(null)} disabled={voiding}>
+                Cancel
+              </button>
+              <button type="button" className="btn btn-primary" onClick={submitVoid} disabled={voiding}>
+                {voiding ? 'Saving…' : 'Save adjustment'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

@@ -188,6 +188,14 @@ export const adminOperatorTopupSchema = z.object({
   amount: moneyAmountSchema('Wallet credit amount'),
   trialAccounts: z.coerce.number().int().min(0).max(10000).optional().default(0),
   notes: z.string().trim().min(3, 'Notes are required').max(500),
+  topupType: z.enum(['bank_transfer', 'quickpay', 'cash', 'other']).default('bank_transfer'),
+  receiptNo: z.string().trim().max(64).optional().default(''),
+});
+
+export const adjustOperatorTopupSchema = z.object({
+  action: z.enum(['add', 'deduct']),
+  amount: moneyAmountSchema('Amount'),
+  note: z.string().trim().min(3, 'A note is required').max(500),
 });
 
 export const createPackageSchema = z.object({

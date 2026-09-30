@@ -174,6 +174,11 @@ export const adminApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  adjustOperatorTopup: (transactionId, payload) =>
+    apiRequest(`/admin/wallet-topups/${transactionId}/void`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   getOperatorActivations: (params = {}) =>
     apiRequest(`/admin/operator-activations${buildQuery(params)}`),
   exportOperatorActivations: async (params = {}) => {

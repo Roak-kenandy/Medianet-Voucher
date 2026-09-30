@@ -21,6 +21,7 @@ import {
 } from '../../utils/reports';
 import { getDefaultReportDateRange } from '../../utils/dates';
 import { useAuth } from '../../context/AuthContext';
+import { hasPermission } from '../../constants/permissions';
 import './admin-shared.css';
 
 const REPORT_PAGE_SIZE = 50;
@@ -285,6 +286,8 @@ export default function ReportsPage() {
           onPageChange={handleTablePageChange}
           pagination={tablePagination}
           loading={tableLoading}
+          canVoid={hasPermission(user?.role, 'adjustWallet')}
+          onVoided={() => loadReport({ page: 1, search: tableSearch })}
         />
       )}
 
@@ -349,9 +352,20 @@ export default function ReportsPage() {
                     <tbody>
                       {tableRows.map((row, i) => (
                         <tr key={i}>
-                          {columns.map((c) => (
-                            <td key={c}>{formatCellValue(c, row[c], reportCurrency)}</td>
-                          ))}
+                          {columns.map((c) => {
+                            const text = formatCellValue(c, row[c], reportCurrency);
+                            const raw = row[c] == null ? '' : String(row[c]);
+                            const clip = typeof row[c] === 'string' && raw.length > 32;
+                            return (
+                              <td key={c}>
+                                {clip ? (
+                                  <span className="cell-clip" title={raw}>{text}</span>
+                                ) : (
+                                  text || '—'
+                                )}
+                              </td>
+                            );
+                          })}
                         </tr>
                       ))}
                     </tbody>

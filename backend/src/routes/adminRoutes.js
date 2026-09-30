@@ -20,6 +20,7 @@ import {
   getOperatorWallet,
   adminAdjustWallet,
   adminOperatorTopup,
+  adjustOperatorTopup,
   completeTopup,
   listAdminOperatorActivations,
   exportAdminOperatorActivations,
@@ -57,6 +58,7 @@ import {
   updateOperatorSchema,
   walletAdjustSchema,
   adminOperatorTopupSchema,
+  adjustOperatorTopupSchema,
   reportQuerySchema,
   listQuerySchema,
   operatorActivationsQuerySchema,
@@ -268,6 +270,23 @@ router.post(
       { name: staff?.name, email: staff?.email }
     );
     success(res, result, 201);
+  })
+);
+
+router.post(
+  '/wallet-topups/:transactionId/void',
+  requirePermission('adjustWallet'),
+  asyncHandler(async (req, res) => {
+    const payload = adjustOperatorTopupSchema.parse(req.body);
+    const staff = await findUserById('admin', req.user.id);
+    const result = await adjustOperatorTopup(
+      req.user.id,
+      Number(req.params.transactionId),
+      payload,
+      getClientMeta(req),
+      { name: staff?.name, email: staff?.email }
+    );
+    success(res, result);
   })
 );
 

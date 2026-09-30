@@ -78,10 +78,12 @@ function foldTopupRowsIntoOperators(byOperator, mappedRows) {
     const bucket = byOperator.get(key);
     bucket.operatorName = row.operator;
     bucket.operatorEmail = row.operatorEmail;
-    if (row.source === 'Manual activation') {
-      bucket.manualTopups += 1;
-    } else {
-      bucket.onlineTopups += 1;
+    if (row.countsAsTopup !== false && row.action !== 'Deduct') {
+      if (row.source === 'Manual activation') {
+        bucket.manualTopups += 1;
+      } else {
+        bucket.onlineTopups += 1;
+      }
     }
     bucket.amountPaid = roundMoney(bucket.amountPaid + row.amountPaid);
     bucket.gstAmount = roundMoney(bucket.gstAmount + row.gstAmount);

@@ -22,6 +22,33 @@ function formatTrialLabel(operator, wallet) {
   return `${remaining} of ${limit} free accounts left`;
 }
 
+function roundMoney(value) {
+  return Math.round(Number(value) * 100) / 100;
+}
+
+function previewStaffTopup(paid, wallet) {
+  const amountPaid = roundMoney(paid);
+  if (!Number.isFinite(amountPaid) || amountPaid <= 0 || !wallet) return null;
+
+  const type = wallet.walletCommissionType;
+  const value = Number(wallet.walletCommissionValue) || 1;
+  let grossTotal = amountPaid;
+  let commission = 0;
+  let ratio = null;
+
+  if (type === 'multiplier' && value > 1) {
+    grossTotal = roundMoney(amountPaid * value);
+    commission = roundMoney(grossTotal - amountPaid);
+    ratio = Math.round(value * 100000) / 100000;
+  }
+
+  const rate = Math.max(0, Number(wallet.gstRate) || 0);
+  const afterGst = rate > 0 ? roundMoney(grossTotal / (1 + rate)) : grossTotal;
+  const gstAmount = rate > 0 ? roundMoney(afterGst * rate) : 0;
+
+  return { amountPaid, grossTotal, commission, ratio, afterGst, gstAmount };
+}
+
 function formatDateTime(value) {
   if (!value) return '—';
   return new Date(value).toLocaleString(undefined, {
@@ -46,6 +73,8 @@ export default function OperatorTopupPage() {
   const [amount, setAmount] = useState('');
   const [trialAccounts, setTrialAccounts] = useState('0');
   const [notes, setNotes] = useState('');
+  const [topupType, setTopupType] = useState('bank_transfer');
+  const [receiptNo, setReceiptNo] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const defaultReportRange = getDefaultReportDateRange();
@@ -158,7 +187,7 @@ export default function OperatorTopupPage() {
     const trimmedNotes = notes.trim();
 
     if (!selectedOperator?.id || !value || value <= 0) {
-      toast.error('Select an operator and enter a valid wallet credit amount');
+      toast.error('Select an operator and enter a valid amount received');
       return;
     }
 
@@ -173,11 +202,20 @@ export default function OperatorTopupPage() {
         amount: value,
         trialAccounts: Number(trialAccounts) || 0,
         notes: trimmedNotes,
+        topupType,
+        receiptNo: receiptNo.trim(),
       });
 
-      toast.success(`Wallet activated for ${selectedOperator.client_name}`);
+      const credited = formatMoney(result.netAmount ?? result.amount, result.currencyCode);
+      const received = formatMoney(result.amountPaid ?? result.amount, result.currencyCode);
+      toast.success(
+        result.commissionAmount > 0
+          ? `${selectedOperator.client_name}: received ${received}, ${credited} added to the wallet`
+          : `Wallet activated for ${selectedOperator.client_name}: ${credited}`
+      );
       setAmount('');
       setNotes('');
+      setReceiptNo('');
       setTrialAccounts('0');
       setWallet((prev) =>
         prev
@@ -208,6 +246,9 @@ export default function OperatorTopupPage() {
       setSubmitting(false);
     }
   };
+
+  const creditPreview = previewStaffTopup(amount, wallet);
+  const currencyCode = wallet?.currencyCode;
 
   return (
     <Layout sidebar={<Sidebar role={user?.role || 'admin'} />} header={<Header />}>
@@ -308,7 +349,34 @@ export default function OperatorTopupPage() {
 
             <div className="form-grid">
               <div className="form-group">
-                <label htmlFor="topupAmount" className="form-label">Wallet credit amount (MVR)</label>
+                <label htmlFor="topupType" className="form-label">Type</label>
+                <select
+                  id="topupType"
+                  className="form-input"
+                  value={topupType}
+                  onChange={(e) => setTopupType(e.target.value)}
+                  disabled={!canTopup}
+                >
+                  <option value="bank_transfer">Bank transfer</option>
+                  <option value="quickpay">Quickpay</option>
+                  <option value="cash">Cash</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label htmlFor="receiptNo" className="form-label">Receipt no.</label>
+                <input
+                  id="receiptNo"
+                  className="form-input"
+                  value={receiptNo}
+                  onChange={(e) => setReceiptNo(e.target.value)}
+                  placeholder="Bank or Quickpay receipt"
+                  maxLength={64}
+                  disabled={!canTopup}
+                />
+              </div>
+              <div className="form-group">
+                <label htmlFor="topupAmount" className="form-label">Amount received (MVR)</label>
                 <input
                   id="topupAmount"
                   type="number"
@@ -317,12 +385,16 @@ export default function OperatorTopupPage() {
                   step="any"
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
-                  placeholder="Amount to add to wallet"
+                  placeholder="Amount received from the operator"
                   required
                   disabled={!canTopup}
                 />
                 <p className="form-hint">
-                  This is the exact amount added to the operator wallet. No GST or billing here.
+                  {!creditPreview
+                    ? 'Enter the amount received. The operator’s commission rate is applied before the wallet is credited.'
+                    : creditPreview.ratio
+                      ? `Ratio ${creditPreview.ratio}. Total ${formatMoney(creditPreview.grossTotal, currencyCode)}, BP commission ${formatMoney(creditPreview.commission, currencyCode)}, wallet credit ${formatMoney(creditPreview.afterGst, currencyCode)}.`
+                      : `No commission rate. ${formatMoney(creditPreview.afterGst, currencyCode)} is added to the wallet.`}
                 </p>
               </div>
 
@@ -483,7 +555,9 @@ export default function OperatorTopupPage() {
                             <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{row.staffEmail}</div>
                           )}
                         </td>
-                        <td style={{ maxWidth: 280, wordBreak: 'break-word' }}>{row.notes}</td>
+                        <td>
+                          <span className="cell-clip" title={row.notes || undefined}>{row.notes || '—'}</span>
+                        </td>
                         <td style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{row.reference}</td>
                       </tr>
                     ))}

@@ -202,12 +202,18 @@ export default function TransactionReportsPage() {
                         <td>{row.activity}</td>
                         <td>{row.customerName || '—'}</td>
                         <td>{row.phoneNumber || '—'}</td>
-                        <td>{(row.packageNames || []).join(', ') || '—'}</td>
+                        <td>
+                          <span className="cell-clip" title={(row.packageNames || []).join(', ') || undefined}>
+                            {(row.packageNames || []).join(', ') || '—'}
+                          </span>
+                        </td>
                         <td>{formatMoney(row.netAmount, row.currencyCode)}</td>
                         <td>{formatMoney(row.balanceBefore, row.currencyCode)}</td>
                         <td>{formatMoney(row.balanceAfter, row.currencyCode)}</td>
                         <td style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
-                          {row.description || '—'}
+                          <span className="cell-clip" title={row.description || undefined}>
+                            {row.description || '—'}
+                          </span>
                         </td>
                       </tr>
                     ))}

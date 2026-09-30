@@ -1,4 +1,6 @@
 import { query } from '../db/pool.js';
+import { calculateGstFromTotal } from './walletService.js';
+import { config } from '../config/index.js';
 import {
   getDealerTopupReportPaginated,
   dealerTopupReportToCsv,
@@ -54,33 +56,63 @@ export async function generateReport({
   return clientSummaryReport({ operatorId, packageType, startDate, endDate });
 }
 
+const CUSTOMER_LEDGER_ACTIVITIES = [
+  'create_account',
+  'customer_subscribe',
+  'customer_crm_topup',
+  'customer_topup',
+  'bulk_create',
+];
+
+function formatLedgerDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function readMeta(raw) {
+  if (!raw) return {};
+  if (typeof raw === 'object') return raw;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+function areaLabel(tag) {
+  if (tag === 'MEDIANET_TV') return 'Medianet TV';
+  if (tag === 'OTT') return 'Mobile';
+  return tag || '';
+}
+
 function buildCustomerSummaryFilters({ operatorId, packageType, startDate, endDate }, search) {
-  const filters = ['1=1'];
-  const params = [];
+  const filters = [
+    `wt.status = 'completed'`,
+    `(
+      (wt.type = 'debit' AND JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.activity')) IN (${CUSTOMER_LEDGER_ACTIVITIES.map(() => '?').join(', ')}))
+      OR wt.type = 'refund'
+    )`,
+  ];
+  const params = [...CUSTOMER_LEDGER_ACTIVITIES];
 
   if (startDate) {
-    filters.push('va.created_at >= ?');
+    filters.push('COALESCE(wt.completed_at, wt.created_at) >= ?');
     params.push(`${startDate} 00:00:00`);
   }
   if (endDate) {
-    filters.push('va.created_at <= ?');
+    filters.push('COALESCE(wt.completed_at, wt.created_at) <= ?');
     params.push(`${endDate} 23:59:59`);
   }
   if (operatorId) {
-    filters.push('va.operator_id = ?');
+    filters.push('wt.operator_id = ?');
     params.push(operatorId);
   }
   if (packageType) {
     filters.push(`(
-      EXISTS (
-        SELECT 1 FROM voucher_account_packages vap_f
-        JOIN packages p_f ON p_f.id = vap_f.package_id
-        WHERE vap_f.voucher_account_id = va.id AND p_f.name = ?
-      )
-      OR EXISTS (
-        SELECT 1 FROM packages p_f
-        WHERE p_f.id = va.package_id AND p_f.name = ?
-      )
+      JSON_SEARCH(wt.metadata, 'one', ?, NULL, '$.packageNames') IS NOT NULL
+      OR JSON_SEARCH(orig.metadata, 'one', ?, NULL, '$.packageNames') IS NOT NULL
     )`);
     params.push(packageType, packageType);
   }
@@ -89,46 +121,83 @@ function buildCustomerSummaryFilters({ operatorId, packageType, startDate, endDa
   if (term) {
     const like = `%${term}%`;
     filters.push(`(
-      va.full_name LIKE ?
-      OR va.phone_number LIKE ?
-      OR o.client_name LIKE ?
+      o.client_name LIKE ?
       OR o.email LIKE ?
+      OR va.full_name LIKE ?
+      OR va.phone_number LIKE ?
       OR va.external_ref LIKE ?
+      OR wt.reference LIKE ?
+      OR JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.customerName')) LIKE ?
+      OR JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.phoneNumber')) LIKE ?
     )`);
-    params.push(like, like, like, like, like);
+    params.push(like, like, like, like, like, like, like, like);
   }
 
   return { filters, params, where: `WHERE ${filters.join(' AND ')}` };
 }
 
 const CUSTOMER_SUMMARY_SELECT = `SELECT
-       va.id AS accountId,
-       va.full_name AS customerName,
-       va.phone_number AS phoneNumber,
-       va.service_tag AS serviceTag,
-       va.status,
-       va.external_ref AS externalRef,
-       va.error_message AS errorMessage,
-       va.amount_charged AS amountCharged,
-       va.created_at AS activatedAt,
-       o.id AS operatorId,
+       wt.id,
+       wt.type,
+       wt.net_amount AS netAmount,
+       wt.reference,
+       wt.metadata,
+       wt.created_at AS createdAt,
+       wt.completed_at AS completedAt,
+       orig.metadata AS originalMetadata,
        o.client_name AS operatorName,
        o.email AS operatorEmail,
-       GROUP_CONCAT(DISTINCT p.name ORDER BY p.name SEPARATOR ', ') AS packages`;
+       va.full_name AS accountName,
+       va.phone_number AS phoneNumber,
+       va.external_ref AS externalRef,
+       va.service_tag AS accountServiceTag`;
 
-const CUSTOMER_SUMMARY_FROM = `FROM voucher_accounts va
-     JOIN operators o ON o.id = va.operator_id
-     LEFT JOIN voucher_account_packages vap ON vap.voucher_account_id = va.id
-     LEFT JOIN packages p ON p.id = COALESCE(vap.package_id, va.package_id)`;
+const CUSTOMER_SUMMARY_FROM = `FROM wallet_transactions wt
+     JOIN operators o ON o.id = wt.operator_id
+     LEFT JOIN wallet_transactions orig
+       ON wt.type = 'refund'
+      AND orig.reference = JSON_UNQUOTE(JSON_EXTRACT(wt.metadata, '$.refundOf'))
+     LEFT JOIN voucher_accounts va
+       ON va.id = COALESCE(wt.voucher_account_id, orig.voucher_account_id)`;
 
-const CUSTOMER_SUMMARY_GROUP = `GROUP BY va.id, va.full_name, va.phone_number, va.service_tag, va.status, va.external_ref,
-              va.error_message, va.amount_charged, va.created_at, o.id, o.client_name, o.email`;
+const CUSTOMER_SUMMARY_ORDER = `ORDER BY COALESCE(wt.completed_at, wt.created_at) DESC, wt.id DESC`;
+
+export function mapCustomerLedgerRow(row) {
+  const metadata = readMeta(row.metadata);
+  const original = readMeta(row.originalMetadata);
+  const total = Math.round(Number(row.netAmount) * 100) / 100;
+  const signedTotal = row.type === 'refund' ? -Math.abs(total) : Math.abs(total);
+  const split = calculateGstFromTotal(Math.abs(signedTotal), config.wallet.gstRate);
+  const sign = signedTotal < 0 ? -1 : 1;
+  const amount = Math.round(sign * split.afterGst * 100) / 100;
+  const serviceTag = metadata.serviceTag || original.serviceTag || row.accountServiceTag || '';
+
+  return {
+    date: formatLedgerDate(row.completedAt || row.createdAt),
+    user: row.operatorEmail || '',
+    dealer: row.operatorName || '',
+    account: row.externalRef || metadata.phoneNumber || original.phoneNumber || row.phoneNumber || '',
+    area: areaLabel(serviceTag),
+    customerName: metadata.customerName || original.customerName || row.accountName || '',
+    atoll: '',
+    island: '',
+    ward: '',
+    street: '',
+    address: '',
+    paymentMethod: 'Wallet',
+    action: signedTotal < 0 ? 'Deduct' : 'Add',
+    amount,
+    gst: Math.round((signedTotal - amount) * 100) / 100,
+    total: signedTotal,
+    receipt: row.reference || '',
+  };
+}
 
 async function customerSummaryReport(filters, { page, limit, search, includeSummary }) {
   const { params, where } = buildCustomerSummaryFilters(filters, search);
 
   const [countRow] = await query(
-    `SELECT COUNT(DISTINCT va.id) AS total
+    `SELECT COUNT(*) AS total
      ${CUSTOMER_SUMMARY_FROM}
      ${where}`,
     params
@@ -141,37 +210,38 @@ async function customerSummaryReport(filters, { page, limit, search, includeSumm
     `${CUSTOMER_SUMMARY_SELECT}
      ${CUSTOMER_SUMMARY_FROM}
      ${where}
-     ${CUSTOMER_SUMMARY_GROUP}
-     ORDER BY va.created_at DESC
+     ${CUSTOMER_SUMMARY_ORDER}
      ${pageClause}`,
     params
   );
 
-  const mapped = rows.map((row) => ({
-    ...row,
-    amountCharged: row.amountCharged != null ? Number(row.amountCharged) : null,
-    activatedAt: row.activatedAt ? new Date(row.activatedAt).toISOString() : '',
-  }));
+  const mapped = rows.map(mapCustomerLedgerRow);
 
   let summary = null;
   if (includeSummary) {
+    const summaryFilters = buildCustomerSummaryFilters(filters, '');
     const [summaryRow] = await query(
       `SELECT
-         COUNT(DISTINCT va.id) AS totalCustomers,
-         SUM(CASE WHEN va.status = 'created' THEN 1 ELSE 0 END) AS createdCount,
-         SUM(CASE WHEN va.status IN ('pending', 'processing') THEN 1 ELSE 0 END) AS pendingCount,
-         SUM(CASE WHEN va.status = 'failed' THEN 1 ELSE 0 END) AS failedCount,
-         COUNT(DISTINCT va.operator_id) AS uniqueOperators
+         COUNT(*) AS totalPayments,
+         SUM(CASE WHEN wt.type = 'debit' THEN 1 ELSE 0 END) AS addCount,
+         SUM(CASE WHEN wt.type = 'refund' THEN 1 ELSE 0 END) AS deductCount,
+         COALESCE(SUM(CASE WHEN wt.type = 'refund' THEN -wt.net_amount ELSE wt.net_amount END), 0) AS netTotal
        ${CUSTOMER_SUMMARY_FROM}
-       ${buildCustomerSummaryFilters(filters, '').where}`,
-      buildCustomerSummaryFilters(filters, '').params
+       ${summaryFilters.where}`,
+      summaryFilters.params
     );
+    const netTotal = Math.round(Number(summaryRow.netTotal) * 100) / 100;
+    const split = calculateGstFromTotal(Math.abs(netTotal), config.wallet.gstRate);
+    const sign = netTotal < 0 ? -1 : 1;
+    const netAmount = Math.round(sign * split.afterGst * 100) / 100;
     summary = {
-      totalCustomers: Number(summaryRow.totalCustomers) || 0,
-      createdCount: Number(summaryRow.createdCount) || 0,
-      pendingCount: Number(summaryRow.pendingCount) || 0,
-      failedCount: Number(summaryRow.failedCount) || 0,
-      uniqueOperators: Number(summaryRow.uniqueOperators) || 0,
+      totalPayments: Number(summaryRow.totalPayments) || 0,
+      addCount: Number(summaryRow.addCount) || 0,
+      deductCount: Number(summaryRow.deductCount) || 0,
+      netAmount,
+      netGst: Math.round((netTotal - netAmount) * 100) / 100,
+      netTotal,
+      currencyCode: config.wallet.currencyCode,
     };
   }
 
@@ -389,51 +459,70 @@ export async function streamReportExport(res, filters) {
   if (reportType === 'customer_summary') {
     const { params, where } = buildCustomerSummaryFilters(filters, '');
     const [summaryRow] = await query(
-      `SELECT COUNT(DISTINCT va.id) AS totalCustomers
+      `SELECT COUNT(*) AS totalPayments
        ${CUSTOMER_SUMMARY_FROM}
        ${where}`,
       params
     );
 
     const titleLines = [
-      'Medianet Voucher — Customer Summary Report',
+      'Medianet Voucher — Customer Summary',
       `Generated,${new Date().toISOString()}`,
       `Period,${filters.startDate || 'all'} to ${filters.endDate || 'all'}`,
       '',
-      `Total Customers,${Number(summaryRow.totalCustomers) || 0}`,
+      `Payments,${Number(summaryRow.totalPayments) || 0}`,
       '',
     ];
 
     const headers = [
-      'accountId',
-      'customerName',
-      'phoneNumber',
-      'serviceTag',
-      'status',
-      'packages',
-      'operatorName',
-      'amountCharged',
-      'activatedAt',
+      'Date',
+      'User',
+      'Dealer',
+      'Account',
+      'Area',
+      'Customer name',
+      'Atoll',
+      'Island',
+      'Ward',
+      'Street',
+      'Address',
+      'Payment method',
+      'Action',
+      'Amount',
+      'GST',
+      'Total',
+      '#Receipt',
     ];
 
     await streamCsvFromOffsetBatches(res, {
       filename: 'report-customer_summary.csv',
       titleLines,
       headers,
-      rowToCells: (row) => [
-        row.accountId,
-        row.customerName,
-        row.phoneNumber,
-        row.serviceTag,
-        row.status,
-        row.packages,
-        row.operatorName,
-        row.amountCharged,
-        row.activatedAt ? new Date(row.activatedAt).toISOString() : '',
-      ],
-      countSql: `SELECT COUNT(DISTINCT va.id) AS total ${CUSTOMER_SUMMARY_FROM} ${where}`,
+      rowToCells: (row) => {
+        const mapped = mapCustomerLedgerRow(row);
+        return [
+          mapped.date,
+          mapped.user,
+          mapped.dealer,
+          mapped.account,
+          mapped.area,
+          mapped.customerName,
+          mapped.atoll,
+          mapped.island,
+          mapped.ward,
+          mapped.street,
+          mapped.address,
+          mapped.paymentMethod,
+          mapped.action,
+          mapped.amount,
+          mapped.gst,
+          mapped.total,
+          mapped.receipt,
+        ];
+      },
+      countSql: `SELECT COUNT(*) AS total ${CUSTOMER_SUMMARY_FROM} ${where}`,
       countParams: params,
-      batchSql: `${CUSTOMER_SUMMARY_SELECT} ${CUSTOMER_SUMMARY_FROM} ${where} ${CUSTOMER_SUMMARY_GROUP} ORDER BY va.created_at DESC`,
+      batchSql: `${CUSTOMER_SUMMARY_SELECT} ${CUSTOMER_SUMMARY_FROM} ${where} ${CUSTOMER_SUMMARY_ORDER}`,
       batchParams: params,
     });
     return;

@@ -89,6 +89,29 @@ const SUMMARY_LABELS = {
   totalAmountCharged: 'Amount Charged',
   totalGstAmount: 'Total GST',
   totalCommission: 'Total Commission',
+  date: 'Date',
+  user: 'User',
+  dealer: 'Dealer',
+  account: 'Account',
+  area: 'Area',
+  customerName: 'Customer name',
+  atoll: 'Atoll',
+  island: 'Island',
+  ward: 'Ward',
+  street: 'Street',
+  address: 'Address',
+  paymentMethod: 'Payment method',
+  action: 'Action',
+  amount: 'Amount',
+  gst: 'GST',
+  total: 'Total',
+  receipt: '#Receipt',
+  totalPayments: 'Payments',
+  addCount: 'Added',
+  deductCount: 'Deducted',
+  netAmount: 'Amount ex GST',
+  netGst: 'GST',
+  netTotal: 'Net total',
 };
 
 export function formatColumnLabel(key) {
@@ -109,6 +132,9 @@ const MONEY_SUMMARY_KEYS = new Set([
   'totalCredited',
   'totalWalletSpend',
   'totalAmountCharged',
+  'netAmount',
+  'netGst',
+  'netTotal',
 ]);
 
 const TEXT_SUMMARY_KEYS = new Set(['clientName', 'packageType', 'email', 'currencyCode']);
@@ -132,6 +158,9 @@ const MONEY_COLUMN_KEYS = new Set([
   'commission',
   'amountCharged',
   'walletSpend',
+  'amount',
+  'gst',
+  'total',
 ]);
 
 export function formatCellValue(key, value, currencyCode = 'MVR') {
