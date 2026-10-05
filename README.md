@@ -124,6 +124,59 @@ Base path: `/api`
 
 Detailed route definitions are in `backend/src/routes/`.
 
+## Staff passwords and account recovery
+
+- Any staff member can change their own password from **Staff → Change My Password** (ends all of their sessions).
+- An Admin can reset another staff member's password from the Staff list.
+- If nobody can sign in, or the seed admin still has the default password, set one from the server:
+
+  ```bash
+  cd backend
+  ADMIN_NEW_PASSWORD='<strong password>' npm run admin:set-password -- admin@example.com
+  ```
+
+  In production the API refuses to start while any active staff account still uses the default seed password.
+
+## Operator users
+
+An operator is a company (wallet, packages, customers). It can have several portal users, each with their own login email, password, role (Supervisor or Normal user) and permissions.
+
+- Creating an operator also creates its first user from the email and password on the form.
+- Staff with the *manage operators* permission manage users from **Operators → Manage Users**: view users (role, status, last login, active sessions, locked or not), add, edit, activate or deactivate, and reset passwords.
+- Resetting a password, changing a login email or deactivating a user signs that user out everywhere. Deactivating the operator signs out all of its users.
+- Migration `028_operator_users.sql` turns each existing operator login into that operator's first user, keeping the same email, password, role and sessions.
+
+## Operator commission and API keys
+
+- **Wallet top-up commission** is set per operator as a percent (`15`) or a ratio (`1.15`); both add the same bonus to the payment total before GST. Customer sales earn no commission.
+- **Operator API keys** are issued by staff with the *manage operators* permission, either when creating the operator or later from Edit Operator. A key is shown once; only its SHA-256 hash is stored (`operator_api_keys`). Keys can be revoked at any time. The operator API that consumes them is not built yet.
+
+## Operator API (v1)
+
+Operators can integrate their own systems through `/api/v1`, authenticated with an operator
+API key (`Authorization: Bearer mtvop_…`). It covers customer search by service code or phone,
+balance, current subscriptions, offers, packages, top-up, subscribe, renew, upgrade, and
+transaction lookup. It runs on the same services as the portal, so an operator's customer
+types, sales models, packages and eligibility rules apply identically. Money requests require
+an `Idempotency-Key` and are safe to retry. Every request that takes input is a POST with a JSON
+body, lookups included, so phone numbers and service codes stay out of URLs and access logs.
+
+The guide is shown in the portal under **Developer API**: to all staff, and to an operator's
+users only while **API access** is turned on for that operator (Operators → Edit Operator).
+It is served through signed-in routes only and is not in any public directory.
+
+- Guide for partners: [`backend/docs/partner-api.md`](backend/docs/partner-api.md)
+- OpenAPI description: [`backend/docs/partner-api.openapi.yaml`](backend/docs/partner-api.openapi.yaml)
+
+## Customer types and sales models
+
+Both are managed by Admins under **CRM Settings** instead of being fixed in code and `.env`.
+
+- **Customer types** (Mobile, TV, and any you add) each have a CRM tag name and id, a device product id and an optional price segment. An operator can only look up and create customers of the types it is allowed, and new customers get that type's CRM tag.
+- **Sales models** are the CRM price tiers. Each package records the sales model its price belongs to, and an operator can only be given packages from the sales models it is allowed.
+- Operators get both allow-lists in Create/Edit Operator. Package groups respect them: a group's packages outside an operator's types or sales models are simply not offered to that operator.
+- The built-in Mobile and TV types keep using `DEFAULT_TAG_ID`, `DEVICE_PRODUCT_ID`, `MEDIANET_TV_TAG_ID` and `MEDIANET_TV_DEVICE_PRODUCT_ID` from `.env` until ids are entered in CRM Settings. `CRM_SALES_MODEL_NAME` only seeds the first sales model.
+
 ## CRM integration
 
 Customer accounts are provisioned through the CRM API (`backend/src/services/crmService.js`). Voucher rows move from `pending` → `created` or `failed` based on the CRM response.
@@ -131,7 +184,7 @@ Customer accounts are provisioned through the CRM API (`backend/src/services/crm
 ## Production checklist
 
 - [ ] Strong, unique JWT secrets (64+ random characters)
-- [ ] Unique admin password; disable or rotate seed credentials
+- [ ] Unique admin password; disable or rotate seed credentials (the API will not start in production with the default)
 - [ ] HTTPS everywhere; secure `CORS_ORIGIN`
 - [ ] `NODE_ENV=production`
 - [ ] BML webhook URL configured and verified

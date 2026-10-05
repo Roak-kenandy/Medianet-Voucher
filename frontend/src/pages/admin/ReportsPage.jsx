@@ -23,6 +23,7 @@ import { getDefaultReportDateRange } from '../../utils/dates';
 import { useAuth } from '../../context/AuthContext';
 import { hasPermission } from '../../constants/permissions';
 import './admin-shared.css';
+import { formatDateTime } from '../../constants/appSettings';
 
 const REPORT_PAGE_SIZE = 50;
 
@@ -316,7 +317,7 @@ export default function ReportsPage() {
           <div className="card-header">
             <h3 className="card-title">Results</h3>
             <p className="card-subtitle">
-              Generated {new Date(report.generatedAt).toLocaleString()}
+              Generated {formatDateTime(report.generatedAt)}
               {report.pagination?.total != null && (
                 <> · {report.pagination.total.toLocaleString()} total rows</>
               )}

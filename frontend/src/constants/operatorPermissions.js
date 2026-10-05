@@ -85,7 +85,12 @@ export function getOperatorHomePath(user) {
 }
 
 export function permissionForOperatorPath(pathname) {
-  if (pathname.startsWith('/operator/help') || pathname.startsWith('/operator/settings')) {
+  if (
+    pathname.startsWith('/operator/help') ||
+    pathname.startsWith('/operator/settings') ||
+    // Shown per operator (API access), not per user permission; the server decides.
+    pathname.startsWith('/operator/developer')
+  ) {
     return null;
   }
   const entries = Object.entries(OPERATOR_ROUTE_PERMISSIONS).sort(

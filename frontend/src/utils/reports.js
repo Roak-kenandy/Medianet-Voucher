@@ -1,5 +1,7 @@
 import { formatPackageLabel } from '../constants/packages';
+import { getServiceTagShortLabel } from '../constants/serviceTags';
 import { formatMoney } from './money';
+import { formatDateTime, formatDate } from '../constants/appSettings';
 
 const COLUMN_LABELS = {
   operatorId: 'Operator ID',
@@ -169,13 +171,13 @@ export function formatCellValue(key, value, currencyCode = 'MVR') {
   if (MONEY_COLUMN_KEYS.has(key)) return formatMoney(value, currencyCode);
   if (key === 'gstRatePercent') return value != null ? `${value}%` : '—';
   if ((key === 'createdAt' || key === 'activatedAt') && value) {
-    return new Date(value).toLocaleString();
+    return formatDateTime(value);
   }
   if (key === 'serviceTag' && value) {
-    return value === 'MEDIANET_TV' ? 'Medianet TV' : value === 'OTT' ? 'Mobile' : String(value);
+    return getServiceTagShortLabel(String(value));
   }
   if (key === 'date' && value) {
-    return new Date(value).toLocaleDateString();
+    return formatDate(value);
   }
   return String(value ?? '');
 }

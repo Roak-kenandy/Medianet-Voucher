@@ -1,0 +1,637 @@
+openapi: 3.0.3
+info:
+  title: Medianet Operator API
+  version: "1.0"
+  description: >
+    Find customers, read balances and subscriptions, and top up, sell, renew or upgrade
+    packages on behalf of an operator. Anything that takes input is a POST with a JSON body,
+    including lookups; nothing is passed in the URL query string. See partner-api.md for the full guide, including how
+    the Idempotency-Key makes money requests safe to retry.
+servers:
+  - url: https://{host}/api/v1
+    variables:
+      host:
+        default: portal.example.com
+security:
+  - bearerKey: []
+  - headerKey: []
+tags:
+  - name: Account
+  - name: Catalogue
+  - name: Customers
+  - name: Sales
+  - name: Transactions
+
+paths:
+  /account:
+    get:
+      tags: [Account]
+      summary: Operator, enabled customer types and wallet
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Account" }
+        default: { $ref: "#/components/responses/Error" }
+  /wallet:
+    get:
+      tags: [Account]
+      summary: Operator wallet balance and free-account slots
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Wallet" }
+        default: { $ref: "#/components/responses/Error" }
+  /packages/list:
+    post:
+      tags: [Catalogue]
+      summary: Packages the operator may sell
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                serviceType: { type: string, example: OTT }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - properties:
+                      data:
+                        type: object
+                        properties:
+                          packages:
+                            type: array
+                            items: { $ref: "#/components/schemas/Package" }
+        default: { $ref: "#/components/responses/Error" }
+  /customers/search:
+    post:
+      tags: [Customers]
+      summary: Find customers by service code or phone
+      description: Returns one entry per device. Send exactly one of serviceCode or phone.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CustomerSearch" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - properties:
+                      data:
+                        type: object
+                        properties:
+                          customers:
+                            type: array
+                            items: { $ref: "#/components/schemas/Customer" }
+        default: { $ref: "#/components/responses/Error" }
+  /customers/balance:
+    post:
+      tags: [Customers]
+      summary: Customer account balance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CustomerRef" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - properties:
+                      data:
+                        allOf:
+                          - $ref: "#/components/schemas/Balance"
+                          - properties:
+                              customerId: { type: string, format: uuid }
+                              name: { type: string }
+        default: { $ref: "#/components/responses/Error" }
+  /customers/subscriptions:
+    post:
+      tags: [Customers]
+      summary: Current subscriptions on a device
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CustomerDeviceRef" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - properties:
+                      data:
+                        type: object
+                        properties:
+                          customerId: { type: string, format: uuid }
+                          deviceId: { type: string, format: uuid, nullable: true }
+                          serviceCode: { type: string, nullable: true }
+                          subscriptions:
+                            type: array
+                            items: { $ref: "#/components/schemas/Subscription" }
+        default: { $ref: "#/components/responses/Error" }
+  /customers/offers:
+    post:
+      tags: [Customers]
+      summary: What can be sold to a device, with prices
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CustomerDeviceRef" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - properties:
+                      data:
+                        type: object
+                        properties:
+                          customerId: { type: string, format: uuid }
+                          deviceId: { type: string, format: uuid, nullable: true }
+                          serviceCode: { type: string, nullable: true }
+                          offers:
+                            type: array
+                            items: { $ref: "#/components/schemas/Offer" }
+        default: { $ref: "#/components/responses/Error" }
+  /customers/topup:
+    post:
+      tags: [Sales]
+      summary: Add credit to the customer's account
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/CustomerRef"
+                - required: [amount]
+                  properties:
+                    amount: { type: number, minimum: 0.01, maximum: 100000, example: 100 }
+      responses:
+        "201":
+          description: Topped up
+          headers:
+            Idempotent-Replayed: { $ref: "#/components/headers/IdempotentReplayed" }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/TopupResult" }
+        default: { $ref: "#/components/responses/Error" }
+  /customers/subscribe:
+    post:
+      tags: [Sales]
+      summary: Sell one or more new packages to a device
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/CustomerDeviceRef"
+                - required: [packageIds]
+                  properties:
+                    packageIds: { type: array, minItems: 1, maxItems: 20, items: { type: integer } }
+                    amount: { type: number, description: Optional. Must equal the total price if sent. }
+      responses:
+        "201":
+          description: Subscribed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/PurchaseResult" }
+        default: { $ref: "#/components/responses/Error" }
+  /customers/renew:
+    post:
+      tags: [Sales]
+      summary: Renew a package the device already has
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/CustomerDeviceRef"
+                - required: [packageId]
+                  properties:
+                    packageId: { type: integer }
+                    amount: { type: number, description: Optional. Must equal the package price if sent. }
+      responses:
+        "201":
+          description: Renewed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/PurchaseResult" }
+        default: { $ref: "#/components/responses/Error" }
+  /customers/upgrade:
+    post:
+      tags: [Sales]
+      summary: Upgrade the device's base package
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/CustomerDeviceRef"
+                - required: [packageId, amount]
+                  properties:
+                    packageId: { type: integer }
+                    amount: { type: number, minimum: 0, description: The offer price. Refused with AMOUNT_MISMATCH if the price has changed. }
+      responses:
+        "201":
+          description: Upgraded
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/PurchaseResult" }
+        default: { $ref: "#/components/responses/Error" }
+  /transactions/list:
+    post:
+      tags: [Transactions]
+      summary: Operator wallet transactions
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                page: { type: integer, minimum: 1, default: 1 }
+                limit: { type: integer, minimum: 1, maximum: 100, default: 20 }
+                startDate: { type: string, format: date }
+                endDate: { type: string, format: date }
+                type: { type: string, enum: [topup, debit, adjustment, refund] }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - properties:
+                      data:
+                        type: object
+                        properties:
+                          transactions:
+                            type: array
+                            items: { $ref: "#/components/schemas/Transaction" }
+                          pagination: { $ref: "#/components/schemas/Pagination" }
+        default: { $ref: "#/components/responses/Error" }
+  /transactions/{reference}:
+    get:
+      tags: [Transactions]
+      summary: One transaction
+      parameters:
+        - { name: reference, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Transaction" }
+        default: { $ref: "#/components/responses/Error" }
+  /requests/{idempotencyKey}:
+    get:
+      tags: [Transactions]
+      summary: Outcome of a money request
+      parameters:
+        - { name: idempotencyKey, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/RequestStatus" }
+        default: { $ref: "#/components/responses/Error" }
+
+components:
+  securitySchemes:
+    bearerKey: { type: http, scheme: bearer, description: "Operator API key, e.g. mtvop_1a2b3c4d_…" }
+    headerKey: { type: apiKey, in: header, name: X-API-Key }
+  headers:
+    IdempotentReplayed:
+      description: Present and "true" when the response is a stored one for a repeated Idempotency-Key.
+      schema: { type: string, enum: ["true"] }
+  parameters:
+    idempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Unique per business operation. Repeat it to retry safely.
+      schema: { type: string, pattern: "^[A-Za-z0-9._:-]{8,100}$" }
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Envelope:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, enum: [true] }
+        data: {}
+    Error:
+      type: object
+      required: [success, code, message]
+      properties:
+        success: { type: boolean, enum: [false] }
+        code: { type: string, example: PACKAGE_NOT_ELIGIBLE }
+        message: { type: string }
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field: { type: string }
+              message: { type: string }
+    CustomerSearch:
+      type: object
+      description: serviceType plus exactly one of serviceCode or phone.
+      required: [serviceType]
+      properties:
+        serviceType: { type: string, example: OTT }
+        serviceCode: { type: string, example: "483920", description: The code on the customer's device. }
+        phone: { type: string, example: "7771234", description: 7-digit mobile number. }
+    CustomerRef:
+      description: The customer, addressed the same way they were found.
+      allOf:
+        - $ref: "#/components/schemas/CustomerSearch"
+        - required: [customerId]
+          properties:
+            customerId: { type: string, format: uuid }
+    CustomerDeviceRef:
+      allOf:
+        - $ref: "#/components/schemas/CustomerRef"
+        - properties:
+            deviceId:
+              type: string
+              format: uuid
+              description: Needed when the customer has several devices and phone was used.
+    Wallet:
+      type: object
+      properties:
+        balance: { type: number }
+        currency: { type: string, example: MVR }
+        freeAccounts:
+          type: object
+          properties:
+            limit: { type: integer }
+            used: { type: integer }
+            remaining: { type: integer }
+    Account:
+      type: object
+      properties:
+        operator:
+          type: object
+          properties: { id: { type: integer }, name: { type: string } }
+        apiKey:
+          type: object
+          properties: { name: { type: string }, prefix: { type: string } }
+        serviceTypes:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              label: { type: string }
+              isDefault: { type: boolean }
+        wallet: { $ref: "#/components/schemas/Wallet" }
+    Package:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        serviceType: { type: string }
+        price: { type: number }
+        currency: { type: string }
+        role: { type: string, enum: [base, addon, standalone] }
+        upgradeFamily: { type: string, nullable: true }
+        upgradeTier: { type: integer, nullable: true }
+        requiresOneOf: { type: array, items: { type: integer } }
+        salesModel: { type: string, nullable: true }
+    Balance:
+      type: object
+      properties:
+        balance: { type: number, description: Negative is credit the customer holds; positive is owed. }
+        credit: { type: number }
+        due: { type: number }
+        currency: { type: string }
+        accountState: { type: string, nullable: true }
+    Subscription:
+      type: object
+      properties:
+        serviceId: { type: string }
+        name: { type: string }
+        sku: { type: string, nullable: true }
+        state: { type: string, enum: [EFFECTIVE, NOT_EFFECTIVE, PAUSED, PENDING_VERIFICATION] }
+        price: { type: number, nullable: true }
+        currency: { type: string, nullable: true }
+        billingPeriod:
+          type: object
+          nullable: true
+          properties: { duration: { type: integer }, unit: { type: string, example: MONTH } }
+        autoRenew: { type: boolean, nullable: true }
+        inTrial: { type: boolean }
+        activatedOn: { type: string, format: date-time, nullable: true }
+        dueDate: { type: string, format: date-time, nullable: true }
+    Offer:
+      type: object
+      properties:
+        packageId: { type: integer }
+        name: { type: string }
+        role: { type: string, enum: [base, addon, standalone] }
+        action: { type: string, enum: [subscribe, renew, upgrade], nullable: true }
+        available: { type: boolean }
+        reason: { type: string, nullable: true }
+        price: { type: number, nullable: true, description: What the operator wallet is charged now. }
+        listPrice: { type: number }
+        currency: { type: string }
+        upgrade:
+          type: object
+          nullable: true
+          properties:
+            mode: { type: string, enum: [change, replace] }
+            replaces:
+              type: object
+              nullable: true
+              properties: { packageId: { type: integer }, name: { type: string } }
+            credit: { type: number }
+            cancelsAddons:
+              type: array
+              items:
+                type: object
+                properties: { packageId: { type: integer }, name: { type: string } }
+        requiresOneOf: { type: array, items: { type: integer } }
+    Customer:
+      type: object
+      properties:
+        customerId: { type: string, format: uuid }
+        deviceId: { type: string, format: uuid, nullable: true }
+        serviceCode: { type: string, nullable: true }
+        customerCode: { type: string, nullable: true }
+        name: { type: string }
+        phone: { type: string, nullable: true }
+        serviceType: { type: string }
+        deviceCount: { type: integer }
+        balance:
+          nullable: true
+          allOf: [{ $ref: "#/components/schemas/Balance" }]
+        subscriptions:
+          type: array
+          nullable: true
+          items: { $ref: "#/components/schemas/Subscription" }
+        offers:
+          type: array
+          nullable: true
+          items: { $ref: "#/components/schemas/Offer" }
+    WalletMove:
+      type: object
+      properties:
+        balanceBefore: { type: number }
+        balanceAfter: { type: number }
+    TopupResult:
+      type: object
+      properties:
+        reference: { type: string }
+        status: { type: string, enum: [completed] }
+        customerId: { type: string, format: uuid }
+        name: { type: string }
+        amount: { type: number }
+        currency: { type: string }
+        wallet: { $ref: "#/components/schemas/WalletMove" }
+    PurchaseResult:
+      type: object
+      properties:
+        reference: { type: string }
+        status: { type: string, enum: [completed] }
+        action: { type: string, enum: [subscribe, renew, upgrade] }
+        customerId: { type: string, format: uuid }
+        deviceId: { type: string, format: uuid, nullable: true }
+        serviceCode: { type: string, nullable: true }
+        name: { type: string }
+        packages:
+          type: array
+          items:
+            type: object
+            properties: { id: { type: integer }, name: { type: string } }
+        amountCharged: { type: number }
+        listPrice: { type: number }
+        currency: { type: string }
+        usedFreeAccount: { type: boolean }
+        upgrade:
+          type: object
+          nullable: true
+          properties:
+            mode: { type: string, enum: [change, replace] }
+            replaced: { type: string, nullable: true }
+            credit: { type: number }
+            cancelledAddons: { type: array, items: { type: string } }
+        wallet: { $ref: "#/components/schemas/WalletMove" }
+    Transaction:
+      type: object
+      properties:
+        reference: { type: string }
+        type: { type: string, enum: [topup, debit, adjustment, refund] }
+        activity: { type: string }
+        status: { type: string }
+        crmState: { type: string, nullable: true, enum: [completed, pending, needs_reconciliation, refunded, null] }
+        amount: { type: number }
+        currency: { type: string }
+        balanceBefore: { type: number, nullable: true }
+        balanceAfter: { type: number, nullable: true }
+        description: { type: string, nullable: true }
+        customerId: { type: string, nullable: true }
+        customerName: { type: string, nullable: true }
+        phone: { type: string, nullable: true }
+        serviceCode: { type: string, nullable: true }
+        serviceType: { type: string, nullable: true }
+        packageIds: { type: array, items: { type: integer } }
+        packageNames: { type: array, items: { type: string } }
+        channel: { type: string, enum: [api, portal] }
+        idempotencyKey: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time, nullable: true }
+    Pagination:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+    RequestStatus:
+      type: object
+      properties:
+        idempotencyKey: { type: string }
+        endpoint: { type: string, enum: [topup, subscribe, renew, upgrade] }
+        state: { type: string, enum: [processing, completed] }
+        httpStatus: { type: integer, nullable: true }
+        response: { type: object, nullable: true }
+        createdAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time, nullable: true }

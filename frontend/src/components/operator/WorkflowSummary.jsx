@@ -27,6 +27,10 @@ export default function WorkflowSummary({
       : walletBalance;
   const isTrialFree = trialFreeCount > 0 && resolvedCharge === 0 && unitCost > 0;
   const showBalanceChange = walletBalance != null && unitCost > 0;
+  // The action cannot go ahead without enough balance, so a negative "balance after" would
+  // describe something that never happens. Show how much is missing instead.
+  const isShort = !canAfford && !isTrialFree && resolvedCharge > 0 && walletBalance != null;
+  const shortBy = isShort ? Math.max(0, resolvedCharge - walletBalance) : 0;
 
   return (
     <div className="workflow-summary">
@@ -37,10 +41,16 @@ export default function WorkflowSummary({
         </div>
         {showBalanceChange && (
           <div className="workflow-summary-top-meta">
-            After this action:{' '}
-            {isTrialFree
-              ? `${formatMoney(walletBalance, currencyCode)} (unchanged)`
-              : formatMoney(balanceAfter, currencyCode)}
+            {isShort ? (
+              <>Not enough for this action: {formatMoney(shortBy, currencyCode)} short</>
+            ) : (
+              <>
+                After this action:{' '}
+                {isTrialFree
+                  ? `${formatMoney(walletBalance, currencyCode)} (unchanged)`
+                  : formatMoney(balanceAfter, currencyCode)}
+              </>
+            )}
           </div>
         )}
       </div>
@@ -103,11 +113,13 @@ export default function WorkflowSummary({
 
             {showBalanceChange && (
               <div className="summary-line" style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--color-border)' }}>
-                <span className="summary-line-label">Balance after</span>
-                <span className={`summary-line-value${!canAfford && !isTrialFree ? ' danger' : ' success'}`}>
-                  {isTrialFree
-                    ? `${formatMoney(walletBalance, currencyCode)} (unchanged)`
-                    : formatMoney(balanceAfter, currencyCode)}
+                <span className="summary-line-label">{isShort ? 'Short by' : 'Balance after'}</span>
+                <span className={`summary-line-value${isShort ? ' danger' : ' success'}`}>
+                  {isShort
+                    ? formatMoney(shortBy, currencyCode)
+                    : isTrialFree
+                      ? `${formatMoney(walletBalance, currencyCode)} (unchanged)`
+                      : formatMoney(balanceAfter, currencyCode)}
                 </span>
               </div>
             )}
@@ -117,7 +129,8 @@ export default function WorkflowSummary({
         {!canAfford && resolvedCharge > 0 && (
           <div className="workflow-summary-alert danger">
             Insufficient balance. You need {formatMoney(resolvedCharge, currencyCode)} but have{' '}
-            {formatMoney(walletBalance, currencyCode)}.{' '}
+            {formatMoney(walletBalance, currencyCode)}. Add at least {formatMoney(shortBy, currencyCode)} to
+            continue.{' '}
             <Link to="/operator/wallet" style={{ fontWeight: 600 }}>Top up wallet</Link>
           </div>
         )}

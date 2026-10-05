@@ -2,16 +2,17 @@ import { Download, Printer } from 'lucide-react';
 import Logo from '../Logo';
 import { formatMoney } from '../../utils/money';
 import { printBill, downloadBillHtml } from '../../utils/bill';
+import { getAppSettings } from '../../constants/appSettings';
 
-function formatBillDate(value) {
+/** Bill dates use the portal time zone sent with the bill, not the viewer's browser zone. */
+function formatBillDate(value, timeZone) {
   if (!value) return '—';
-  return new Date(value).toLocaleString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  const options = { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
+  try {
+    return new Date(value).toLocaleString(undefined, { ...options, timeZone: timeZone || getAppSettings().timeZone });
+  } catch {
+    return new Date(value).toLocaleString(undefined, options);
+  }
 }
 
 function formatPercent(value) {
@@ -48,6 +49,9 @@ export default function WalletTopupBill({ bill }) {
             <Logo size={48} framed className="wallet-topup-bill-logo" />
             <div>
               <p className="wallet-topup-bill-tagline">Voucher Portal · Wallet Top-up Receipt</p>
+              {bill.issuerTinNumber && (
+                <p className="wallet-topup-bill-tagline">TIN: {bill.issuerTinNumber}</p>
+              )}
             </div>
           </div>
           <div className="wallet-topup-bill-meta">
@@ -57,7 +61,7 @@ export default function WalletTopupBill({ bill }) {
             </div>
             <div>
               <span className="wallet-topup-bill-meta-label">Date</span>
-              <strong>{formatBillDate(bill.issuedAt)}</strong>
+              <strong>{formatBillDate(bill.issuedAt, bill.timeZone)}</strong>
             </div>
             <div>
               <span className="wallet-topup-bill-meta-label">Status</span>

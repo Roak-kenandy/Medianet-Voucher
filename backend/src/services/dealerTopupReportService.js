@@ -214,10 +214,12 @@ export function mapDealerTopupRow(row) {
   const grossTotal = roundMoney(
     metadata.grossTotal ?? financials.amountPaid + financials.commissionAmount
   );
-  const ratioSource =
-    metadata.commissionType === 'multiplier' && Number(metadata.commissionValue) > 1
-      ? metadata.commissionValue
-      : null;
+  let ratioSource = null;
+  if (metadata.commissionType === 'multiplier' && Number(metadata.commissionValue) > 1) {
+    ratioSource = metadata.commissionValue;
+  } else if (metadata.commissionType === 'percent' && Number(metadata.commissionValue) > 0) {
+    ratioSource = 1 + Number(metadata.commissionValue) / 100;
+  }
 
   return {
     time: formatReportTime(eventTime),

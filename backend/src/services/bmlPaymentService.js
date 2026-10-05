@@ -111,6 +111,8 @@ async function bmlRequest(method, path, body = null) {
   const options = {
     method,
     headers,
+    // Never follow redirects: the Authorization header must not leave the configured host.
+    redirect: 'error',
     signal: AbortSignal.timeout(config.bml.requestTimeoutMs),
   };
 

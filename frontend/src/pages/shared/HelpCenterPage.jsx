@@ -18,7 +18,7 @@ const ADMIN_FAQ = [
   },
   {
     q: 'How do I create an operator?',
-    a: 'Go to Operators, click Create Operator, select one or more packages, fill in client details, choose a commission of 10%, 20%, 30%, 40%, or 50%, and save. Partners top up their own wallet — you do not assign a starting balance.',
+    a: 'Go to Operators, click Create Operator, select one or more packages, fill in client details, set an optional wallet top-up commission as a percent (for example 10, 20, 30, 40 or 50) or a ratio (1.5 is the same as 50%) — both add the bonus to the payment total before GST — and save. To give several operators the same packages, create a package group under Packages → Package Groups and tick it for each operator; changing the group later changes all of them. Tick "Generate an API key" if the operator will use the operator API; the key is shown once. The email and password you enter become the first user of the operator; add more users, edit them or reset their passwords from Manage Users in the action menu of that operator. Partners top up their own wallet — you do not assign a starting balance.',
   },
   {
     q: 'How do I add another staff account?',

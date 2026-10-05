@@ -3,6 +3,10 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const nodeEnv = process.env.NODE_ENV || 'development';
+if (!['production', 'development', 'test'].includes(nodeEnv)) {
+  // A typo such as "prod" would silently run without any production safeguards.
+  throw new Error(`Unsupported NODE_ENV "${nodeEnv}" (use production, development or test)`);
+}
 export const isProduction = nodeEnv === 'production';
 export const isDevelopment = nodeEnv === 'development';
 
@@ -53,7 +57,10 @@ export const config = {
   corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:5173',
   security: {
     bcryptRounds: 12,
+    // Failed attempts allowed per account + client address before that client is blocked.
     maxLoginAttempts: 5,
+    // Account-wide ceiling across all clients within the lockout window (distributed guessing).
+    accountLockThreshold: boundedInt(process.env.LOGIN_ACCOUNT_LOCK_THRESHOLD, 50, 10, 1000),
     lockoutMinutes: 15,
     bulkUploadMax: 10,
   },
@@ -79,6 +86,9 @@ export const config = {
     requestTimeoutMs: boundedInt(process.env.CRM_REQUEST_TIMEOUT_MS, 60000, 1000, 120000),
     maxConcurrentPerOperator: boundedInt(process.env.CRM_MAX_CONCURRENT_PER_OPERATOR, 2, 1, 10),
     maxConcurrentGlobal: boundedInt(process.env.CRM_MAX_CONCURRENT_GLOBAL, 8, 1, 50),
+    // Customer lookups (read-only) draw from their own pool so they cannot crowd out paid flows.
+    maxReadConcurrentPerOperator: boundedInt(process.env.CRM_MAX_READ_CONCURRENT_PER_OPERATOR, 2, 1, 10),
+    maxReadConcurrentGlobal: boundedInt(process.env.CRM_MAX_READ_CONCURRENT_GLOBAL, 8, 1, 50),
   },
   wallet: {
     currencyCode: process.env.WALLET_CURRENCY_CODE || process.env.CURRENCY_CODE || 'MVR',

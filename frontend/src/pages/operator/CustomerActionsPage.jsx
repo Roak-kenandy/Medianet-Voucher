@@ -5,7 +5,8 @@ import Layout from '../../components/Layout';
 import Sidebar from '../../components/Sidebar';
 import Header from '../../components/Header';
 import ServiceTypePicker from '../../components/operator/ServiceTypePicker';
-import PackagePicker from '../../components/operator/PackagePicker';
+import PackageOptions from '../../components/operator/PackageOptions';
+import CustomerCard, { AccountBalance, ServiceList } from '../../components/operator/CustomerCard';
 import WorkflowSummary, {
   WorkflowHeaderStats,
   WorkflowStep,
@@ -26,7 +27,6 @@ import {
   sanitizePhoneInput,
   getPhoneValidationMessage,
 } from '../../utils/phone';
-import { resolveActivePackageIds } from '../../utils/packageSelection';
 import './operator-workflow.css';
 
 const MODES = {
@@ -34,7 +34,7 @@ const MODES = {
     key: 'topup',
     label: 'Topup',
     icon: CircleDollarSign,
-    subtitle: 'Add credit to a customer\'s account — no package subscription.',
+    subtitle: 'Find a customer, check their account balance, then add credit. No package is added.',
     summaryFootnote:
       'Adds funds to the customer\'s account. Your wallet is charged for the amount you enter. No package is added.',
   },
@@ -42,15 +42,19 @@ const MODES = {
     key: 'subscribe',
     label: 'Subscribe',
     icon: PackageCheck,
-    subtitle: 'Add a package subscription — amount must exactly match the package total.',
+    subtitle: 'Find a customer, check their current services and due dates, then continue, upgrade or add a package.',
     summaryFootnote:
-      'Activates the selected package for the customer. The amount must exactly match the package total.',
+      'Only packages this customer is eligible for are offered. Your wallet is charged the package price.',
   },
 };
 
-function amountsMatch(expected, provided) {
-  return Math.round(Number(expected) * 100) === Math.round(Number(provided) * 100);
-}
+const QUICK_TOPUP_AMOUNTS = [50, 100, 200, 500];
+
+const PURCHASE_LABELS = {
+  subscribe: { button: 'Subscribe', verb: 'Add', done: 'Subscription completed', toast: 'Subscription created' },
+  renew: { button: 'Renew', verb: 'Continue', done: 'Renewal completed', toast: 'Package renewed' },
+  upgrade: { button: 'Upgrade', verb: 'Upgrade to', done: 'Upgrade completed', toast: 'Package upgraded' },
+};
 
 export default function CustomerActionsPage() {
   const toast = useToast();
@@ -63,8 +67,8 @@ export default function CustomerActionsPage() {
   const [customers, setCustomers] = useState([]);
   const [amounts, setAmounts] = useState({});
   const [packages, setPackages] = useState([]);
-  const [packageIds, setPackageIds] = useState([]);
-  const [amountInput, setAmountInput] = useState('');
+  // The purchase being prepared: { customerId, action, packageIds }. One customer at a time.
+  const [selection, setSelection] = useState(null);
   const [walletBalance, setWalletBalance] = useState(null);
   const [trialAccountLimit, setTrialAccountLimit] = useState(0);
   const [trialAccountsUsed, setTrialAccountsUsed] = useState(0);
@@ -74,6 +78,11 @@ export default function CustomerActionsPage() {
   const [processingId, setProcessingId] = useState(null);
   const [error, setError] = useState('');
   const [serviceTag, setServiceTag] = useState('OTT');
+  // 'phone' or 'code' (the service code on the customer's device)
+  const [searchBy, setSearchBy] = useState('phone');
+  const [serviceCode, setServiceCode] = useState('');
+  // What the current results were found with; sent along when charging so the server re-checks it.
+  const [searchedCode, setSearchedCode] = useState('');
   const [serviceScope, setServiceScope] = useState('BOTH');
   const [hasSearched, setHasSearched] = useState(false);
   const [lastResult, setLastResult] = useState(null);
@@ -90,12 +99,6 @@ export default function CustomerActionsPage() {
       setServiceScope(scope);
       const defaultTag = defaultServiceTag(scope);
       setServiceTag(defaultTag);
-      const tagPackages = (stats.packages || []).filter(
-        (pkg) => (pkg.serviceTag || 'OTT') === defaultTag
-      );
-      if (tagPackages.length === 1) {
-        setPackageIds([tagPackages[0].id]);
-      }
     });
   }, []);
 
@@ -106,37 +109,36 @@ export default function CustomerActionsPage() {
     [packages, serviceTag]
   );
 
-  const activePackageIds = resolveActivePackageIds(packageIds, taggedPackages);
-  const selectedPackages = taggedPackages.filter((pkg) =>
-    activePackageIds.map(Number).includes(Number(pkg.id))
-  );
+  const activePackageIds = selection?.packageIds || [];
+  const selectedPackages = taggedPackages.filter((pkg) => activePackageIds.includes(Number(pkg.id)));
+  const purchaseLabels = PURCHASE_LABELS[selection?.action] || PURCHASE_LABELS.subscribe;
 
-  const unitCost = sumPackagePrices(taggedPackages, activePackageIds);
-  const subscribeChargePreview = computeAccountCreationCharge(unitCost, 1, trialAccountsRemaining);
+  // An upgrade is priced by CRM (new package less credit for unused days), not by list price.
+  const upgradeCharge =
+    selection?.action === 'upgrade'
+      ? customers
+          .find((row) => row.key === selection.customerId)
+          ?.packageOptions?.find((option) => option.packageId === activePackageIds[0])?.charge
+      : null;
+  const unitCost = upgradeCharge ? upgradeCharge.amount : sumPackagePrices(taggedPackages, activePackageIds);
+  // Free-account slots only apply to new packages; renewals and upgrades are always paid.
+  const subscribeChargePreview = computeAccountCreationCharge(
+    unitCost,
+    1,
+    selection?.action === 'subscribe' ? trialAccountsRemaining : 0
+  );
   const canAffordSubscribe =
     walletBalance == null ||
-    unitCost === 0 ||
+    subscribeChargePreview.effectiveCharge === 0 ||
     subscribeChargePreview.usesTrial ||
     walletBalance >= subscribeChargePreview.effectiveCharge;
-  const packagesReady =
-    taggedPackages.length > 0 &&
-    (taggedPackages.length === 1 || activePackageIds.length > 0);
-  const amountValid = unitCost > 0 && amountsMatch(unitCost, amountInput);
   const isSubscribe = mode === 'subscribe';
-  const searchReady = isSubscribe ? packagesReady : true;
-
-  useEffect(() => {
-    if (unitCost > 0) {
-      setAmountInput(String(unitCost));
-    } else {
-      setAmountInput('');
-    }
-  }, [unitCost]);
 
   const resetSearchState = () => {
     setHasSearched(false);
     setCustomers([]);
     setAmounts({});
+    setSelection(null);
     setLastResult(null);
     setError('');
   };
@@ -148,9 +150,7 @@ export default function CustomerActionsPage() {
   };
 
   const handleServiceTagChange = (tag) => {
-    const nextPackages = packages.filter((pkg) => (pkg.serviceTag || 'OTT') === tag);
     setServiceTag(tag);
-    setPackageIds(nextPackages.length === 1 ? [nextPackages[0].id] : []);
     resetSearchState();
   };
 
@@ -159,31 +159,39 @@ export default function CustomerActionsPage() {
     setError('');
     setCustomers([]);
     setAmounts({});
+    setSelection(null);
     setHasSearched(false);
     setLastResult(null);
 
-    const phoneError = getPhoneValidationMessage(phoneNumber);
-    if (phoneError) {
-      setError(phoneError);
-      return;
-    }
-
-    if (isSubscribe && !packagesReady) {
-      setError('Select at least one package before searching');
-      return;
+    const byCode = searchBy === 'code';
+    const code = serviceCode.trim();
+    if (byCode) {
+      if (!/^[A-Za-z0-9-]{3,32}$/.test(code)) {
+        setError('Enter a valid service code');
+        return;
+      }
+    } else {
+      const phoneError = getPhoneValidationMessage(phoneNumber);
+      if (phoneError) {
+        setError(phoneError);
+        return;
+      }
     }
 
     setSearching(true);
 
     try {
       const result = await operatorApi.searchCustomers(
-        sanitizePhoneInput(phoneNumber),
+        byCode ? { code } : { phone: sanitizePhoneInput(phoneNumber) },
         serviceTag
       );
+      setSearchedCode(byCode ? code : '');
       setCustomers(result.customers || []);
       setHasSearched(true);
       if (!result.customers?.length) {
-        toast.info(`No ${getServiceTagLabel(serviceTag)} customers found for this phone number`);
+        toast.info(
+          `No ${getServiceTagLabel(serviceTag)} customers found for this ${byCode ? 'service code' : 'phone number'}`
+        );
       }
     } catch (err) {
       setHasSearched(true);
@@ -193,6 +201,12 @@ export default function CustomerActionsPage() {
       setSearching(false);
     }
   };
+
+  /** Identifies the customer to the server the same way they were found: by service code or by phone. */
+  const customerLookupKey = (customer) =>
+    searchedCode
+      ? { serviceCode: searchedCode }
+      : { phoneNumber: String(customer.phone || '').replace(/\D/g, '').slice(-7) || sanitizePhoneInput(phoneNumber) };
 
   const handleTopup = async (customer) => {
     const amount = Math.round(Number(amounts[customer.id]) * 100) / 100;
@@ -213,7 +227,7 @@ export default function CustomerActionsPage() {
       const result = await operatorApi.crmTopupCustomer({
         crmContactId: customer.id,
         fullName: customer.name,
-        phoneNumber: customer.phone || sanitizePhoneInput(phoneNumber),
+        ...customerLookupKey(customer),
         serviceTag,
         amount,
       });
@@ -221,7 +235,23 @@ export default function CustomerActionsPage() {
       setWalletBalance(result.walletBalance);
       setLastResult({ type: 'topup', ...result });
       toast.success(`Top-up completed for ${customer.name}`);
-      setCustomers((prev) => prev.filter((row) => row.id !== customer.id));
+      // Keep the customer on screen with the new balance so another top-up can follow.
+      setCustomers((prev) =>
+        prev.map((row) => {
+          if (row.id !== customer.id || !row.account) return row;
+          const balance = Math.round((row.account.balance - amount) * 100) / 100;
+          return {
+            ...row,
+            account: {
+              ...row.account,
+              balance,
+              creditAmount: balance < 0 ? Math.abs(balance) : 0,
+              dueAmount: balance > 0 ? balance : 0,
+            },
+          };
+        })
+      );
+      setAmounts((prev) => ({ ...prev, [customer.id]: '' }));
     } catch (err) {
       setError(err.message || 'Top-up failed');
       toast.error(err.message || 'Top-up failed');
@@ -231,13 +261,8 @@ export default function CustomerActionsPage() {
   };
 
   const handleSubscribe = async (customer) => {
-    if (!packagesReady) {
-      toast.error('Select at least one package');
-      return;
-    }
-
-    if (!amountValid) {
-      toast.error(`Amount must exactly match ${formatMoney(unitCost, currencyCode)}`);
+    if (selection?.customerId !== customer.key || !activePackageIds.length) {
+      toast.error('Select a package for this customer');
       return;
     }
 
@@ -248,30 +273,46 @@ export default function CustomerActionsPage() {
       return;
     }
 
-    setProcessingId(customer.id);
+    setProcessingId(customer.key);
     setError('');
 
     try {
+      const lookupKey = customerLookupKey(customer);
       const result = await operatorApi.subscribeCustomer({
         crmContactId: customer.id,
         fullName: customer.name,
-        phoneNumber: customer.phone || sanitizePhoneInput(phoneNumber),
+        ...lookupKey,
+        ...(customer.deviceId ? { deviceId: customer.deviceId } : {}),
         serviceTag,
-        packageIds: activePackageIds.map(Number),
-        amount: Number(amountInput),
+        packageIds: activePackageIds,
+        amount: unitCost,
       });
 
       setWalletBalance(result.walletBalance);
-      if (!result.amountCharged) {
+      if (result.action === 'subscribe' && !result.amountCharged) {
         setTrialAccountsRemaining((prev) => Math.max(0, prev - 1));
         setTrialAccountsUsed((prev) => prev + 1);
       }
       setLastResult({ type: 'subscribe', ...result });
-      toast.success(`Subscription created for ${customer.name}`);
-      setCustomers((prev) => prev.filter((row) => row.id !== customer.id));
+      toast.success(`${(PURCHASE_LABELS[result.action] || PURCHASE_LABELS.subscribe).toast} for ${customer.name}`);
+      setSelection(null);
+
+      // Reload the customer so their services and what they can buy next are up to date.
+      try {
+        const refreshed = await operatorApi.searchCustomers(
+          lookupKey.serviceCode ? { code: lookupKey.serviceCode } : { phone: lookupKey.phoneNumber },
+          serviceTag
+        );
+        const fresh = (refreshed.customers || []).find((row) => row.key === customer.key);
+        setCustomers((prev) =>
+          fresh ? prev.map((row) => (row.key === customer.key ? fresh : row)) : prev.filter((row) => row.key !== customer.key)
+        );
+      } catch {
+        setCustomers((prev) => prev.filter((row) => row.key !== customer.key));
+      }
     } catch (err) {
-      setError(err.message || 'Subscribe failed');
-      toast.error(err.message || 'Subscribe failed');
+      setError(err.message || `${purchaseLabels.button} failed`);
+      toast.error(err.message || `${purchaseLabels.button} failed`);
     } finally {
       setProcessingId(null);
     }
@@ -318,7 +359,9 @@ export default function CustomerActionsPage() {
           {lastResult && (
             <div className="success-panel" style={{ marginBottom: 20 }}>
               <p className="success-panel-title">
-                {lastResult.type === 'subscribe' ? 'Subscription completed' : 'Top-up completed'}
+                {lastResult.type === 'subscribe'
+                  ? (PURCHASE_LABELS[lastResult.action] || PURCHASE_LABELS.subscribe).done
+                  : 'Top-up completed'}
               </p>
               <p style={{ fontSize: 14, color: 'var(--color-text-secondary)' }}>
                 {lastResult.fullName} · {lastResult.phoneNumber}
@@ -326,7 +369,14 @@ export default function CustomerActionsPage() {
               {lastResult.type === 'subscribe' && (
                 <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginTop: 8 }}>
                   <strong>Packages:</strong>{' '}
-                  {(lastResult.packageNames || selectedPackages.map((p) => p.name)).join(', ')}
+                  {(lastResult.packageNames || []).join(', ')}
+                  {lastResult.replacedPackage ? ` (replaced ${lastResult.replacedPackage})` : ''}
+                  {lastResult.creditApplied > 0
+                    ? ` · ${formatMoney(lastResult.creditApplied, currencyCode)} credit for unused days applied`
+                    : ''}
+                  {lastResult.cancelledAddons?.length
+                    ? ` · Cancelled add-on: ${lastResult.cancelledAddons.join(', ')}`
+                    : ''}
                 </p>
               )}
               <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginTop: 4 }}>
@@ -343,7 +393,7 @@ export default function CustomerActionsPage() {
           <WorkflowStep
             step={1}
             title="Customer type"
-            description="Choose Mobile or TV"
+            description="Choose the kind of customer you are looking for"
           >
             <div className="form-group" style={{ marginBottom: 0 }}>
               <ServiceTypePicker
@@ -354,91 +404,83 @@ export default function CustomerActionsPage() {
             </div>
           </WorkflowStep>
 
-          {isSubscribe && (
-            <WorkflowStep
-              step={2}
-              title="Choose package"
-              description="Select package(s) and confirm the exact amount"
-            >
-              {packages.length > 0 && taggedPackages.length === 0 && (
-                <div className="alert alert-info" style={{ marginBottom: 20 }}>
-                  No {getServiceTagLabel(serviceTag)} packages assigned to your operator account.
-                </div>
-              )}
-
-              <div className="form-group">
-                <label className="form-label">
-                  {taggedPackages.length > 1 ? 'Select package(s)' : 'Package'}
-                </label>
-                <PackagePicker
-                  packages={taggedPackages}
-                  selectedIds={activePackageIds}
-                  onChange={setPackageIds}
-                  currencyCode={currencyCode}
-                  disabled={!canAffordSubscribe && unitCost > 0}
-                />
-              </div>
-
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label htmlFor="subscribeAmount" className="form-label">
-                  Amount (must match package total)
-                </label>
-                <input
-                  id="subscribeAmount"
-                  type="number"
-                  className={`form-input${amountInput && !amountValid ? ' error' : ''}`}
-                  min="0"
-                  step="any"
-                  value={amountInput}
-                  onChange={(e) => setAmountInput(e.target.value)}
-                  disabled={!packagesReady}
-                />
-                <p className="form-hint">
-                  {packagesReady
-                    ? `Required amount: ${formatMoney(unitCost, currencyCode)}`
-                    : 'Select a package to see the required amount'}
-                </p>
-              </div>
-            </WorkflowStep>
-          )}
-
-          {!isSubscribe && (
-            <div className="alert alert-info" style={{ marginBottom: 20 }}>
-              Enter any amount after you find the customer. This adds credit to their account only — no package subscription.
-            </div>
-          )}
-
           <WorkflowStep
-            step={isSubscribe ? 3 : 2}
+            step={2}
             title="Find customer"
-            description="Search by phone number"
+            description="Search by phone number or service code"
           >
             {error && <div className="alert alert-error">{error}</div>}
 
             <form onSubmit={handleSearch} className="workflow-search-row">
               <div className="form-group">
-                <label htmlFor="customerPhoneNumber" className="form-label">Phone number</label>
-                <input
-                  id="customerPhoneNumber"
-                  type="tel"
-                  inputMode="numeric"
-                  autoComplete="tel-national"
-                  className="form-input"
-                  value={phoneNumber}
-                  onChange={(e) => setPhoneNumber(sanitizePhoneInput(e.target.value))}
-                  placeholder="9XXXXXX"
-                  required
-                  minLength={MALDIVES_PHONE_LENGTH}
-                  maxLength={MALDIVES_PHONE_LENGTH}
-                  pattern="[79][0-9]{6}"
-                  disabled={searching || !searchReady}
-                />
-                <p className="form-hint">{PHONE_HINT}</p>
+                <label className="form-label">Search by</label>
+                <div className="scope-selector">
+                  {[
+                    { key: 'phone', label: 'Phone number' },
+                    { key: 'code', label: 'Service code' },
+                  ].map((option) => (
+                    <label
+                      key={option.key}
+                      className={`scope-selector-item${searchBy === option.key ? ' is-selected' : ''}`}
+                    >
+                      <input
+                        type="radio"
+                        name="customerSearchBy"
+                        checked={searchBy === option.key}
+                        onChange={() => {
+                          setSearchBy(option.key);
+                          setCustomers([]);
+                          setHasSearched(false);
+                          setError('');
+                        }}
+                        disabled={searching}
+                      />
+                      <span>{option.label}</span>
+                    </label>
+                  ))}
+                </div>
               </div>
+              {searchBy === 'code' ? (
+                <div className="form-group">
+                  <label htmlFor="customerServiceCode" className="form-label">Service code</label>
+                  <input
+                    id="customerServiceCode"
+                    className="form-input"
+                    value={serviceCode}
+                    onChange={(e) => setServiceCode(e.target.value.replace(/[^A-Za-z0-9-]/g, '').slice(0, 32))}
+                    placeholder="e.g. 123456"
+                    required
+                    minLength={3}
+                    maxLength={32}
+                    disabled={searching}
+                  />
+                  <p className="form-hint">The code shown on the customer's device or account.</p>
+                </div>
+              ) : (
+                <div className="form-group">
+                  <label htmlFor="customerPhoneNumber" className="form-label">Phone number</label>
+                  <input
+                    id="customerPhoneNumber"
+                    type="tel"
+                    inputMode="numeric"
+                    autoComplete="tel-national"
+                    className="form-input"
+                    value={phoneNumber}
+                    onChange={(e) => setPhoneNumber(sanitizePhoneInput(e.target.value))}
+                    placeholder="9XXXXXX"
+                    required
+                    minLength={MALDIVES_PHONE_LENGTH}
+                    maxLength={MALDIVES_PHONE_LENGTH}
+                    pattern="[79][0-9]{6}"
+                    disabled={searching}
+                  />
+                  <p className="form-hint">{PHONE_HINT}</p>
+                </div>
+              )}
               <button
                 type="submit"
                 className="btn btn-primary"
-                disabled={searching || !searchReady}
+                disabled={searching}
               >
                 <Search size={18} />
                 {searching ? 'Searching...' : 'Search'}
@@ -446,14 +488,15 @@ export default function CustomerActionsPage() {
             </form>
           </WorkflowStep>
 
+
           {(searching || hasSearched) && (
             <WorkflowStep
-              step={isSubscribe ? 4 : 3}
-              title={isSubscribe ? 'Confirm subscribe' : 'Add credit'}
+              step={3}
+              title={isSubscribe ? 'Customer, current services and packages' : 'Customer and account balance'}
               description={
                 isSubscribe
-                  ? 'Activate the package for the selected customer'
-                  : 'Enter the amount and confirm the top-up'
+                  ? 'Check what the customer has, then continue it, upgrade it or add a package'
+                  : 'Check the balance, then enter the amount to add'
               }
             >
               {searching ? (
@@ -462,128 +505,154 @@ export default function CustomerActionsPage() {
                 </div>
               ) : customers.length === 0 ? (
                 <div className="workflow-results-empty">
-                  <p>No {getServiceTagLabel(serviceTag)} customers found for this phone number.</p>
+                  <p>
+                    No {getServiceTagLabel(serviceTag)} customers found for this{' '}
+                    {searchedCode ? 'service code' : 'phone number'}.
+                  </p>
                   <Link to="/operator/create" className="btn btn-secondary btn-sm">
                     <UserPlus size={14} /> Create new account instead
                   </Link>
                 </div>
               ) : isSubscribe ? (
-                <div className="table-wrapper">
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>Customer name</th>
-                        <th>Phone</th>
-                        <th>Type</th>
-                        <th>Code</th>
-                        <th>Package(s)</th>
-                        <th>Amount</th>
-                        <th style={{ width: 140 }}>Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {customers.map((customer) => (
-                        <tr key={customer.id}>
-                          <td style={{ fontWeight: 500 }}>{customer.name}</td>
-                          <td>{customer.phone}</td>
-                          <td>
-                            <span className="badge badge-info">
-                              {customer.serviceTypeShort ||
-                                (customer.serviceTag === 'MEDIANET_TV' ? 'TV' : 'Mobile')}
-                            </span>
-                          </td>
-                          <td style={{ fontFamily: 'var(--font-mono, monospace)', letterSpacing: '0.04em' }}>
-                            {customer.deviceCodeMasked || '—'}
-                          </td>
-                          <td style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
-                            {selectedPackages.map((p) => p.name).join(', ') || '—'}
-                          </td>
-                          <td style={{ fontWeight: 600 }}>{formatMoney(unitCost, currencyCode)}</td>
-                          <td>
+                customers.map((customer) => {
+                  const mine = selection?.customerId === customer.key ? selection : null;
+                  const busy = processingId === customer.key;
+                  return (
+                    <CustomerCard key={customer.key} customer={customer}>
+                      <h5 className="customer-card-section-title">
+                        {customer.deviceCode ? `Services on device ${customer.deviceCode}` : 'Current services'}
+                      </h5>
+                      {customer.deviceCount > 1 && (
+                        <p className="form-hint" style={{ marginTop: 0 }}>
+                          This customer has {customer.deviceCount} devices. Packages bought here go to this device only.
+                        </p>
+                      )}
+                      <ServiceList services={customer.services} />
+
+                      <h5 className="customer-card-section-title" style={{ marginTop: 20 }}>
+                        What this customer can buy
+                      </h5>
+                      {packages.length > 0 && taggedPackages.length === 0 ? (
+                        <div className="alert alert-info">
+                          No {getServiceTagLabel(serviceTag)} packages assigned to your operator account.
+                        </div>
+                      ) : (
+                        <PackageOptions
+                          options={customer.packageOptions}
+                          packages={taggedPackages}
+                          currencyCode={currencyCode}
+                          selection={mine}
+                          disabled={processingId != null}
+                          onSelect={(next) => setSelection(next ? { customerId: customer.key, ...next } : null)}
+                        />
+                      )}
+
+                      {mine && (
+                        <div className="customer-confirm-row" style={{ marginTop: 16 }}>
+                          <div>
+                            <strong>
+                              {purchaseLabels.verb} {selectedPackages.map((p) => p.name).join(', ')}
+                            </strong>
+                            <div className="customer-card-contact">
+                              {subscribeChargePreview.usesTrial
+                                ? 'Uses a free account slot. Your wallet is not charged.'
+                                : canAffordSubscribe
+                                  ? `${formatMoney(subscribeChargePreview.effectiveCharge, currencyCode)} will be taken from your wallet`
+                                  : `Your wallet has ${formatMoney(walletBalance, currencyCode)}, which is less than ${formatMoney(subscribeChargePreview.effectiveCharge, currencyCode)}`}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            disabled={!canAffordSubscribe || busy}
+                            onClick={() => handleSubscribe(customer)}
+                          >
+                            {busy ? 'Processing...' : purchaseLabels.button}
+                          </button>
+                        </div>
+                      )}
+                    </CustomerCard>
+                  );
+                })
+              ) : (
+                // The balance belongs to the customer's account, so show each customer once.
+                customers.filter((row, index) => customers.findIndex((other) => other.id === row.id) === index).map((customer) => {
+                  const amount = amounts[customer.id] ?? '';
+                  const parsedAmount = Number(amount);
+                  const hasAmount = Number.isFinite(parsedAmount) && parsedAmount > 0;
+                  const walletShort = hasAmount && walletBalance != null && walletBalance < parsedAmount;
+                  const busy = processingId === customer.id;
+                  // CRM balance: negative is credit. A top-up moves it further into credit.
+                  const balanceAfter = customer.account && hasAmount ? customer.account.balance - parsedAmount : null;
+
+                  return (
+                    <CustomerCard key={customer.id} customer={customer}>
+                      <div className="customer-card-columns">
+                        <AccountBalance account={customer.account} />
+                        <div className="customer-topup-form">
+                          <label className="form-label" htmlFor={`topup-amount-${customer.id}`}>
+                            Top-up amount ({currencyCode})
+                          </label>
+                          <div className="customer-topup-row">
+                            <input
+                              id={`topup-amount-${customer.id}`}
+                              type="number"
+                              className="form-input"
+                              min="1"
+                              step="any"
+                              placeholder="Amount"
+                              value={amount}
+                              onChange={(e) =>
+                                setAmounts((prev) => ({ ...prev, [customer.id]: e.target.value }))
+                              }
+                              disabled={busy}
+                            />
                             <button
                               type="button"
-                              className="btn btn-primary btn-sm"
-                              disabled={
-                                !canAffordSubscribe ||
-                                !amountValid ||
-                                processingId === customer.id ||
-                                !packagesReady
-                              }
-                              onClick={() => handleSubscribe(customer)}
+                              className="btn btn-primary"
+                              disabled={!hasAmount || walletShort || busy}
+                              onClick={() => handleTopup(customer)}
                             >
-                              {processingId === customer.id ? 'Processing...' : 'Subscribe'}
+                              {busy ? 'Processing...' : 'Top up'}
                             </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="table-wrapper">
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>Customer name</th>
-                        <th>Phone</th>
-                        <th>Type</th>
-                        <th>Code</th>
-                        <th style={{ width: 160 }}>Top-up amount</th>
-                        <th style={{ width: 120 }}>Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {customers.map((customer) => {
-                        const amount = amounts[customer.id] ?? '';
-                        const parsedAmount = Number(amount);
-                        const canSubmit =
-                          Number.isFinite(parsedAmount) &&
-                          parsedAmount > 0 &&
-                          (walletBalance == null || walletBalance >= parsedAmount);
-
-                        return (
-                          <tr key={customer.id}>
-                            <td style={{ fontWeight: 500 }}>{customer.name}</td>
-                            <td>{customer.phone}</td>
-                            <td>
-                              <span className="badge badge-info">
-                                {customer.serviceTypeShort ||
-                                  (customer.serviceTag === 'MEDIANET_TV' ? 'TV' : 'Mobile')}
-                              </span>
-                            </td>
-                            <td style={{ fontFamily: 'var(--font-mono, monospace)', letterSpacing: '0.04em' }}>
-                              {customer.deviceCodeMasked || '—'}
-                            </td>
-                            <td>
-                              <input
-                                type="number"
-                                className="form-input"
-                                min="1"
-                                step="any"
-                                placeholder="Amount"
-                                value={amount}
-                                onChange={(e) =>
-                                  setAmounts((prev) => ({ ...prev, [customer.id]: e.target.value }))
-                                }
-                                disabled={processingId === customer.id}
-                              />
-                            </td>
-                            <td>
+                          </div>
+                          <div className="customer-topup-quick">
+                            {QUICK_TOPUP_AMOUNTS.map((quick) => (
                               <button
+                                key={quick}
                                 type="button"
-                                className="btn btn-primary btn-sm"
-                                disabled={!canSubmit || processingId === customer.id}
-                                onClick={() => handleTopup(customer)}
+                                className="btn btn-secondary btn-sm"
+                                disabled={busy}
+                                onClick={() => setAmounts((prev) => ({ ...prev, [customer.id]: String(quick) }))}
                               >
-                                {processingId === customer.id ? 'Processing...' : 'Top up'}
+                                {formatMoney(quick, currencyCode)}
                               </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                            ))}
+                          </div>
+                          {walletShort ? (
+                            <p className="customer-topup-preview" style={{ color: 'var(--color-danger-text)' }}>
+                              Your wallet has {formatMoney(walletBalance, currencyCode)}, which is less than this amount.
+                            </p>
+                          ) : balanceAfter != null ? (
+                            <p className="customer-topup-preview">
+                              After this top-up the customer will have{' '}
+                              <strong>
+                                {balanceAfter <= 0
+                                  ? `${formatMoney(Math.abs(balanceAfter), currencyCode)} credit`
+                                  : `${formatMoney(balanceAfter, currencyCode)} still due`}
+                              </strong>
+                              .
+                            </p>
+                          ) : (
+                            <p className="customer-topup-preview">
+                              The amount is taken from your wallet and added to the customer's account.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </CustomerCard>
+                  );
+                })
               )}
             </WorkflowStep>
           )}
@@ -604,11 +673,11 @@ export default function CustomerActionsPage() {
               unitCost={isSubscribe ? unitCost : 0}
               chargeAmount={isSubscribe ? subscribeChargePreview.effectiveCharge : 0}
               trialFreeCount={isSubscribe ? subscribeChargePreview.freeCount : 0}
-              canAfford={isSubscribe ? canAffordSubscribe && amountValid : true}
+              canAfford={isSubscribe ? canAffordSubscribe : true}
               showAction={false}
               footnote={
                 isSubscribe && subscribeChargePreview.usesTrial
-                  ? 'This subscription uses a free trial slot. Your wallet will not be charged.'
+                  ? 'This subscription uses a free account slot. Your wallet will not be charged.'
                   : modeConfig.summaryFootnote
               }
             />

@@ -6,6 +6,7 @@ import { logAudit } from './auditService.js';
 import { paginationSql } from '../utils/pagination.js';
 import { csvEscape, csvRow } from '../utils/csv.js';
 import { formatTrialForResponse } from '../utils/trial.js';
+import { getAppSettings } from './appSettingsService.js';
 import {
   assertBmlPaymentMatchesTopup,
   buildRedirectUrl,
@@ -127,6 +128,8 @@ function buildTopupMetadata(breakdown, commissionSettings) {
     commissionValue: commissionSettings.commissionValue,
     commissionAmount: breakdown.commission,
     creditedAmount: breakdown.net,
+    // Kept with the top-up so its bill never changes when the settings do.
+    issuerTinNumber: getAppSettings().tinNumber || null,
   };
 }
 
@@ -138,8 +141,12 @@ export function formatOperatorCommission({ commissionType, commissionValue }) {
     }
     return { commissionType: 'multiplier', commissionValue: multiplier };
   }
-  if (commissionType === 'fixed' || commissionType === 'percent') {
-    return { commissionType: 'none', commissionValue: 1 };
+  if (commissionType === 'percent') {
+    const percent = Number(commissionValue) || 0;
+    if (percent <= 0) {
+      return { commissionType: 'none', commissionValue: 1 };
+    }
+    return { commissionType: 'percent', commissionValue: percent };
   }
   return { commissionType: 'none', commissionValue: 1 };
 }
@@ -1061,7 +1068,9 @@ export async function completeTopup(
       }
     }
 
-    if (isBmlEnabled() && !options.skipBmlVerification) {
+    // The webhook / status-poll path has already fetched and matched the payment at BML.
+    const bmlVerifiedByCaller = Boolean(options.skipBmlVerification);
+    if (isBmlEnabled() && !bmlVerifiedByCaller) {
       if (!resolvedPaymentRef) {
         throw new AppError(
           'Cannot complete top-up without verified Bank of Maldives payment',
@@ -1071,7 +1080,8 @@ export async function completeTopup(
       }
       const bmlTxn = await getPaymentTransaction(resolvedPaymentRef);
       assertBmlPaymentMatchesTopup(tx, bmlTxn);
-    } else if (isProduction && !config.wallet.allowManualTopupComplete) {
+    } else if (!bmlVerifiedByCaller && isProduction && !config.wallet.allowManualTopupComplete) {
+      // Only an unverified (manual) completion is blocked in production.
       throw new AppError('Manual top-up completion is disabled', 403, 'FORBIDDEN');
     }
 
@@ -1126,6 +1136,81 @@ export async function completeTopup(
         'BML_PAYMENT_ALREADY_USED'
       );
     }
+    throw err;
+  } finally {
+    connection.release();
+  }
+}
+
+/**
+ * Staff change to an operator's free account quota. `add` raises the grant; `deduct` takes
+ * back unused quota; `revoke` removes everything that is still unused. The grant can never
+ * drop below what the operator has already used, so past free accounts are not disturbed.
+ */
+export async function adminAdjustTrialQuota(adminId, operatorId, { action, accounts = 0, notes }, reqMeta = {}) {
+  const connection = await getConnection();
+  try {
+    await connection.beginTransaction();
+
+    // Row lock: account creation consumes trial slots under the same lock.
+    const [rows] = await connection.execute(
+      `SELECT trial_account_limit, trial_accounts_used FROM operators WHERE id = ? FOR UPDATE`,
+      [operatorId]
+    );
+    if (!rows[0]) {
+      throw new AppError('Operator not found', 404, 'NOT_FOUND');
+    }
+
+    const limitBefore = Math.max(0, Number(rows[0].trial_account_limit) || 0);
+    const used = Math.max(0, Number(rows[0].trial_accounts_used) || 0);
+    const remainingBefore = Math.max(0, limitBefore - used);
+    const count = Math.max(0, Number(accounts) || 0);
+
+    let limitAfter;
+    if (action === 'add') {
+      limitAfter = limitBefore + count;
+    } else if (action === 'deduct') {
+      if (count > remainingBefore) {
+        throw new AppError(
+          `Only ${remainingBefore} unused free account(s) can be deducted`,
+          400,
+          'TRIAL_QUOTA_INSUFFICIENT'
+        );
+      }
+      limitAfter = limitBefore - count;
+    } else {
+      limitAfter = Math.min(limitBefore, used);
+    }
+
+    await connection.execute(`UPDATE operators SET trial_account_limit = ? WHERE id = ?`, [
+      limitAfter,
+      operatorId,
+    ]);
+    await connection.commit();
+
+    await logAudit({
+      actorType: 'admin',
+      actorId: adminId,
+      action: 'OPERATOR_TRIAL_QUOTA_ADJUSTED',
+      resourceType: 'operator',
+      resourceId: operatorId,
+      ipAddress: reqMeta.ipAddress,
+      userAgent: reqMeta.userAgent,
+      metadata: {
+        action,
+        accounts: action === 'revoke' ? remainingBefore : count,
+        notes,
+        limitBefore,
+        limitAfter,
+        used,
+        remainingBefore,
+        remainingAfter: Math.max(0, limitAfter - used),
+      },
+    });
+
+    return { operatorId, action, ...formatTrialForResponse(limitAfter, used) };
+  } catch (err) {
+    await connection.rollback();
     throw err;
   } finally {
     connection.release();
@@ -1652,6 +1737,11 @@ export function buildWalletTopupBill(transaction, operator = {}) {
     billNumber: transaction.reference,
     transactionId: transaction.id,
     issuedAt: transaction.completed_at || transaction.created_at,
+    // Issuer tax number and the time zone the bill date should be shown in.
+    // Top-ups made before the TIN was recorded with them fall back to the current setting.
+    issuerTinNumber:
+      metadata.issuerTinNumber !== undefined ? metadata.issuerTinNumber : getAppSettings().tinNumber || null,
+    timeZone: getAppSettings().timeZone,
     operatorName: operator.client_name || operator.clientName || '',
     operatorEmail: operator.email || '',
     paymentMethod: 'Bank of Maldives',
@@ -1695,15 +1785,22 @@ function formatActivityLabel(metadata = {}) {
   if (metadata.activity === 'create_account') return 'Create Account';
   if (metadata.activity === 'customer_crm_topup') return 'Customer Top-up';
   if (metadata.activity === 'customer_subscribe') return 'Customer Subscribe';
+  if (metadata.activity === 'customer_renew') return 'Customer Renewal';
+  if (metadata.activity === 'customer_upgrade') return 'Customer Upgrade';
   if (metadata.activity === 'customer_topup') return 'Customer Top-up';
   if (metadata.activity === 'bulk_create') return 'Bulk Create';
   if (metadata.activity === 'admin_operator_activation') return 'Operator Activation';
   return null;
 }
 
+/**
+ * `includeMetadata` is for staff callers only. The stored metadata holds staff identity and
+ * internal BML/CRM bookkeeping, so operator responses carry just the named fields below.
+ */
 export async function listWalletTransactions(
   operatorId,
-  { page = 1, limit = 20, startDate, endDate, type } = {}
+  { page = 1, limit = 20, startDate, endDate, type } = {},
+  { includeMetadata = false } = {}
 ) {
   const { page: pageNum, limit: limitNum, clause } = paginationSql(page, limit);
   const filters = ['operator_id = ?'];
@@ -1741,8 +1838,10 @@ export async function listWalletTransactions(
   const transactions = rows.map((row) => {
     const metadata = parseMetadata(row.metadata);
     const activity = formatActivityLabel(metadata) || (row.type === 'topup' ? 'Wallet Top-up' : row.type);
+    const { metadata: rawMetadata, ...publicRow } = mapTransactionRow(row);
     return {
-      ...mapTransactionRow(row),
+      ...publicRow,
+      ...(includeMetadata ? { metadata: rawMetadata } : {}),
       activity,
       customerName: metadata.customerName || null,
       phoneNumber: metadata.phoneNumber || null,

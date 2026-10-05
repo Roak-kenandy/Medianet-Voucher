@@ -5,6 +5,7 @@ import { formatMoney } from '../../utils/money';
 import { adminApi } from '../../api/client';
 import { useToast } from '../../context/ToastContext';
 import '../../pages/admin/admin-shared.css';
+import { formatDateTime } from '../../constants/appSettings';
 
 const TOPUP_SUMMARY_KEYS = [
   'totalRecords',
@@ -117,7 +118,7 @@ export default function TopupReportResults({
           <div>
             <h3 className="card-title">Operator Top-up Report</h3>
             <p className="card-subtitle">
-              Generated {new Date(report.generatedAt).toLocaleString()}
+              Generated {formatDateTime(report.generatedAt)}
               {report.filters.startDate && report.filters.endDate && (
                 <> · {report.filters.startDate} to {report.filters.endDate}</>
               )}

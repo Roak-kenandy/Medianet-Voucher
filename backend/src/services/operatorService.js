@@ -5,16 +5,25 @@ import { logAudit } from './auditService.js';
 import { crmService } from './crmService.js';
 import { buildDailyTrend } from '../utils/chartData.js';
 import { paginationSql } from '../utils/pagination.js';
-import { withCrmSlot } from '../utils/crmConcurrency.js';
+import { withCrmSlot, withCrmReadSlot } from '../utils/crmConcurrency.js';
 import { operatorSpendDebitSql } from '../utils/walletSql.js';
-import { getOperatorPackageIds, getOperatorPackages, sumPackagePrices, assertPackagesAssignable } from './packageService.js';
+import {
+  getOperatorPackageIds,
+  getOperatorPackages,
+  getPackageCatalog,
+  toEligibilityPackage,
+  sumPackagePrices,
+  assertPackagesAssignable,
+} from './packageService.js';
 import {
   debitWallet,
   generateReference,
   mergeTransactionMetadata,
   refundWalletDebit,
 } from './walletService.js';
-import { assertServiceTag, getAllowedServiceTags } from '../constants/serviceTags.js';
+import { assertServiceTag, listServiceTypesPublic } from '../constants/serviceTags.js';
+import { getOperatorServiceTypeKeys } from './crmConfigService.js';
+import { evaluatePackageOptions, resolvePurchase } from '../utils/packageEligibility.js';
 import {
   formatTrialForResponse,
   getTrialQuotaInfo,
@@ -22,19 +31,44 @@ import {
 } from '../utils/trial.js';
 import { csvEscape, csvRow } from '../utils/csv.js';
 
-async function getOperatorServiceScope(operatorId, connection = null) {
-  const runner = connection
-    ? (sql, params) => connection.execute(sql, params).then(([rows]) => rows)
-    : query;
-  const [operator] = await runner(
-    `SELECT service_scope FROM operators WHERE id = ? LIMIT 1`,
-    [operatorId]
-  );
-  return operator?.service_scope || 'BOTH';
+/**
+ * Where a sale came from. Portal requests carry nothing; partner API requests carry the key
+ * that made them and their idempotency key, recorded on the ledger row and the audit entry.
+ */
+function channelMetadata(reqMeta = {}) {
+  return reqMeta.channel ? { ...reqMeta.channel } : {};
 }
 
-function assertOperatorServiceTag(serviceScope, serviceTag) {
-  const allowed = getAllowedServiceTags(serviceScope);
+/** Adding, renewing and upgrading a package are all "subscribe" activity in reports and filters. */
+const SUBSCRIBE_ACTIVITIES = ['customer_subscribe', 'customer_renew', 'customer_upgrade'];
+const PURCHASE_ACTIVITY = {
+  subscribe: 'customer_subscribe',
+  renew: 'customer_renew',
+  upgrade: 'customer_upgrade',
+};
+
+/**
+ * What the eligibility rules need for one operator and customer type: every package of the
+ * type (to recognise what a customer holds) and the active ones this operator may sell.
+ */
+async function loadEligibilityContext(operatorId, serviceTag) {
+  const [catalog, operatorPackages] = await Promise.all([
+    getPackageCatalog(serviceTag),
+    getOperatorPackages(operatorId),
+  ]);
+  const requirementsById = new Map(catalog.map((pkg) => [Number(pkg.id), pkg.requiredPackageIds]));
+  const offered = operatorPackages
+    .filter((pkg) => pkg.is_active && (pkg.service_tag || 'OTT') === serviceTag)
+    .map((pkg) => ({
+      ...toEligibilityPackage(pkg),
+      requiredPackageIds: requirementsById.get(Number(pkg.id)) || [],
+    }));
+  return { catalog, offered };
+}
+
+/** The operator must be allowed to serve this customer type (staff-managed allow-list). */
+async function assertOperatorServiceTag(operatorId, serviceTag) {
+  const allowed = await getOperatorServiceTypeKeys(operatorId);
   if (!allowed.includes(serviceTag)) {
     throw new AppError('This customer type is not enabled for your account', 403, 'SERVICE_NOT_ALLOWED');
   }
@@ -83,8 +117,9 @@ export async function getOperatorStats(operatorId) {
     throw new AppError('Operator not found', 404, 'NOT_FOUND');
   }
 
-  const serviceScope = operator.service_scope || 'BOTH';
-  const allowedServiceTags = getAllowedServiceTags(serviceScope);
+  // Default customer type first. `serviceScope` keeps its old name for the frontend.
+  const allowedServiceTags = await getOperatorServiceTypeKeys(operatorId);
+  const serviceScope = allowedServiceTags;
   const allPackages = await getOperatorPackages(operatorId);
   const packages = allPackages.filter((pkg) =>
     allowedServiceTags.includes(pkg.service_tag || 'OTT')
@@ -177,7 +212,7 @@ export async function getOperatorStats(operatorId) {
     } else if (activity === 'customer_crm_topup' || activity === 'customer_topup') {
       chargeBreakdown.customerTopup.count += 1;
       chargeBreakdown.customerTopup.amount += amount;
-    } else if (activity === 'customer_subscribe') {
+    } else if (SUBSCRIBE_ACTIVITIES.includes(activity)) {
       chargeBreakdown.customerSubscribe.count += 1;
       chargeBreakdown.customerSubscribe.amount += amount;
     } else if (activity === 'bulk_create') {
@@ -204,7 +239,7 @@ export async function getOperatorStats(operatorId) {
 
   const recentAccounts = await query(
     `SELECT va.id, va.full_name, va.phone_number, va.status, va.amount_charged, va.created_at,
-            GROUP_CONCAT(DISTINCT p.name ORDER BY p.name SEPARATOR ', ') AS package_names
+            GROUP_CONCAT(DISTINCT COALESCE(vap.package_name, p.name) ORDER BY COALESCE(vap.package_name, p.name) SEPARATOR ', ') AS package_names
      FROM voucher_accounts va
      LEFT JOIN voucher_account_packages vap ON vap.voucher_account_id = va.id
      LEFT JOIN packages p ON p.id = COALESCE(vap.package_id, va.package_id)
@@ -237,6 +272,8 @@ export async function getOperatorStats(operatorId) {
     if (metadata.activity === 'create_account') activityLabel = 'Create Account';
     else if (metadata.activity === 'customer_crm_topup') activityLabel = 'Customer Top-up';
     else if (metadata.activity === 'customer_subscribe') activityLabel = 'Customer Subscribe';
+    else if (metadata.activity === 'customer_renew') activityLabel = 'Customer Renewal';
+    else if (metadata.activity === 'customer_upgrade') activityLabel = 'Customer Upgrade';
     else if (metadata.activity === 'customer_topup') activityLabel = 'Customer Top-up';
     else if (metadata.activity === 'bulk_create') activityLabel = 'Bulk Create';
     else if (metadata.activity === 'wallet_topup' || row.type === 'topup') activityLabel = 'Wallet Top-up';
@@ -260,6 +297,7 @@ export async function getOperatorStats(operatorId) {
     clientName: operator.client_name,
     serviceScope,
     allowedServiceTags,
+    serviceTypes: listServiceTypesPublic().filter((type) => allowedServiceTags.includes(type.key)),
     packageType,
     packageNames,
     packages: packages.map((pkg) => ({
@@ -338,7 +376,10 @@ function activityFilterSql(activityFilter) {
     };
   }
   if (activityFilter === 'subscribe') {
-    return { clause: `history.activity = 'customer_subscribe'`, params: [] };
+    return {
+      clause: `history.activity IN ('customer_subscribe', 'customer_renew', 'customer_upgrade')`,
+      params: [],
+    };
   }
   if (activityFilter === 'topup') {
     return {
@@ -388,7 +429,7 @@ function buildCustomerHistoryQuery(operatorId, { search = '', startDate, endDate
         va.service_tag,
         COALESCE(va.origin_activity, 'create_account') AS activity,
         va.status,
-        GROUP_CONCAT(DISTINCT p.name ORDER BY p.name SEPARATOR ', ') AS package_names,
+        GROUP_CONCAT(DISTINCT COALESCE(vap.package_name, p.name) ORDER BY COALESCE(vap.package_name, p.name) SEPARATOR ', ') AS package_names,
         va.amount_charged,
         va.external_ref,
         va.error_message,
@@ -622,12 +663,24 @@ async function lockActiveOperator(connection, operatorId) {
 /** Phase 1 — must run inside a transaction that already holds the operator row lock. */
 async function reserveVoucherAccounts(
   connection,
-  { operatorId, operator, accounts, packageIds, pricing, serviceTag, activity, metadataExtra = {} }
+  {
+    operatorId,
+    operator,
+    accounts,
+    packageIds,
+    pricing,
+    serviceTag,
+    activity,
+    metadataExtra = {},
+    allowTrial = true,
+  }
 ) {
   const unitCost = roundMoney(pricing.total);
   const packageNames = pricing.packages.map((pkg) => pkg.name);
   const walletBalance = roundMoney(operator.wallet_balance);
-  const trialQuota = getTrialQuotaInfo(operator.trial_account_limit, operator.trial_accounts_used);
+  const trialQuota = allowTrial
+    ? getTrialQuotaInfo(operator.trial_account_limit, operator.trial_accounts_used)
+    : getTrialQuotaInfo(0, 0);
   const paidCount = unitCost > 0 ? countPaidAccountCreations(accounts.length, trialQuota.trialAccountsRemaining) : 0;
   const requiredBalance = roundMoney(unitCost * paidCount);
 
@@ -653,10 +706,26 @@ async function reserveVoucherAccounts(
     );
     const voucherAccountId = insertResult.insertId;
 
+    // Snapshot each package as sold (name, list price, CRM ids, sales model) so later edits
+    // to the package never change this account's history or any report built from it.
     for (const packageId of packageIds) {
+      const priced = pricing.packages.find((pkg) => Number(pkg.id) === Number(packageId));
       await connection.execute(
-        `INSERT INTO voucher_account_packages (voucher_account_id, package_id) VALUES (?, ?)`,
-        [voucherAccountId, packageId]
+        `INSERT INTO voucher_account_packages
+           (voucher_account_id, package_id, package_name, price_amount, currency_code,
+            product_id, price_term_id, sales_model_name, service_tag)
+         SELECT ?, p.id, COALESCE(?, p.name), COALESCE(?, p.price_amount), COALESCE(?, p.currency_code),
+                p.product_id, p.price_term_id, sm.name, p.service_tag
+         FROM packages p
+         LEFT JOIN sales_models sm ON sm.id = p.sales_model_id
+         WHERE p.id = ?`,
+        [
+          voucherAccountId,
+          priced?.name ?? null,
+          priced?.priceAmount ?? null,
+          priced?.currencyCode ?? null,
+          packageId,
+        ]
       );
     }
 
@@ -908,7 +977,8 @@ async function resolveActivatePackageIds(operatorId, packageIds, serviceTag, con
   return requested;
 }
 
-export async function searchCustomers(operatorId, phoneNumber, serviceTag = 'OTT') {
+/** Search by phone number, or by the service code on the customer's device (`{ phone }` or `{ code }`). */
+export async function searchCustomers(operatorId, { phone, code }, serviceTag = 'OTT') {
   const [operator] = await query(
     `SELECT id, is_active, service_scope FROM operators WHERE id = ? LIMIT 1`,
     [operatorId]
@@ -920,8 +990,59 @@ export async function searchCustomers(operatorId, phoneNumber, serviceTag = 'OTT
     throw new AppError('Operator account is inactive', 403, 'FORBIDDEN');
   }
 
-  assertOperatorServiceTag(operator.service_scope || 'BOTH', serviceTag);
-  return crmService.searchCustomersByPhone(phoneNumber, serviceTag);
+  await assertOperatorServiceTag(operatorId, serviceTag);
+  const [result, eligibility] = await Promise.all([
+    withCrmReadSlot(operatorId, () =>
+      code
+        ? crmService.searchCustomersByServiceCode(code, serviceTag)
+        : crmService.searchCustomersByPhone(phone, serviceTag)
+    ),
+    loadEligibilityContext(operatorId, serviceTag),
+  ]);
+
+  // What each customer can be sold: continue, upgrade, add, or not available with a reason.
+  // Null when the customer's services could not be read, because nothing can be decided then.
+  for (const customer of result.customers || []) {
+    customer.packageOptions =
+      customer.services == null
+        ? null
+        : evaluatePackageOptions({ ...eligibility, services: customer.services });
+  }
+
+  // An upgrade is priced by CRM (new package less credit for the unused days), so each one
+  // is estimated now. When CRM will not change the service in place, the upgrade is still
+  // offered as a replacement: full price, old package cancelled, new one started.
+  const upgrades = (result.customers || []).flatMap((customer) =>
+    (customer.packageOptions || [])
+      .filter((option) => option.action === 'upgrade')
+      .map((option) => ({ customer, option }))
+  );
+  await Promise.all(
+    upgrades.map(async ({ customer, option }) => {
+      let estimate;
+      try {
+        estimate = await withCrmReadSlot(operatorId, () =>
+          crmService.estimateServiceChange(customer.id, option, option.packageId)
+        );
+      } catch {
+        // CRM did not answer, so it is not known which kind of upgrade this is.
+        Object.assign(option, {
+          eligible: false,
+          action: null,
+          reason: 'CRM could not price this upgrade. Search again to retry.',
+        });
+        return;
+      }
+      if (estimate.allowed) {
+        option.upgradeMode = 'change';
+        option.charge = { amount: estimate.amount, newCharge: estimate.newCharge, credit: estimate.credit };
+      } else {
+        option.upgradeMode = 'replace';
+        option.replaceReason = estimate.reason;
+      }
+    })
+  );
+  return result;
 }
 
 export async function crmTopupCustomer(operatorId, data, reqMeta = {}) {
@@ -930,8 +1051,6 @@ export async function crmTopupCustomer(operatorId, data, reqMeta = {}) {
 
 async function crmTopupCustomerInner(operatorId, data, reqMeta) {
   const amount = roundMoney(data.amount);
-  const fullName = data.fullName.trim();
-  const phoneNumber = data.phoneNumber.trim();
 
   const [operatorPreview] = await query(
     `SELECT id, is_active, service_scope FROM operators WHERE id = ? LIMIT 1`,
@@ -943,9 +1062,11 @@ async function crmTopupCustomerInner(operatorId, data, reqMeta) {
   if (!operatorPreview.is_active) {
     throw new AppError('Operator account is inactive', 403, 'FORBIDDEN');
   }
-  assertOperatorServiceTag(operatorPreview.service_scope || 'BOTH', data.serviceTag);
+  await assertOperatorServiceTag(operatorId, data.serviceTag);
 
-  await assertCrmContactMatchesPhoneLookup(data.crmContactId, phoneNumber, data.serviceTag);
+  const binding = await resolveCustomerBinding(data);
+  const { phoneNumber } = binding;
+  const fullName = String(data.fullName || binding.customer.name || 'Customer').trim();
 
   // Phase 1: take the money under the operator lock before anything is posted to CRM.
   let debit;
@@ -953,7 +1074,7 @@ async function crmTopupCustomerInner(operatorId, data, reqMeta) {
   try {
     await connection.beginTransaction();
     const operator = await lockActiveOperator(connection, operatorId);
-    assertOperatorServiceTag(operator.service_scope || 'BOTH', data.serviceTag);
+    await assertOperatorServiceTag(operatorId, data.serviceTag);
 
     debit = await debitWallet(connection, {
       operatorId,
@@ -969,6 +1090,7 @@ async function crmTopupCustomerInner(operatorId, data, reqMeta) {
         crmContactId: data.crmContactId,
         topupAmount: amount,
         crmState: 'pending',
+        ...channelMetadata(reqMeta),
       },
     });
     await connection.commit();
@@ -1038,11 +1160,13 @@ async function crmTopupCustomerInner(operatorId, data, reqMeta) {
       phoneNumber,
       crmPaymentId: crmResult.paymentId,
       paymentReference: debit.reference,
+      ...channelMetadata(reqMeta),
     },
   });
 
   const walletBalance = await readWalletBalance(operatorId);
   return {
+    crmContactId: data.crmContactId,
     fullName,
     phoneNumber,
     serviceTag: data.serviceTag,
@@ -1077,26 +1201,104 @@ async function refundTopupDebit(operatorId, debit, fullName, phoneNumber, reason
   }
 }
 
-async function assertCrmContactMatchesPhoneLookup(crmContactId, phoneNumber, serviceTag) {
-  const lookup = await crmService.searchCustomersByPhone(phoneNumber, serviceTag);
-  const contactMatches = (lookup.customers || []).some(
+/**
+ * Confirms the CRM contact the operator is about to charge for really is the one a lookup
+ * returns, by the same key the operator searched with (service code or phone number).
+ * Returns the phone number to record with the sale.
+ */
+async function resolveCustomerBinding(
+  { crmContactId, phoneNumber, serviceCode, serviceTag, deviceId },
+  { requireDevice = false } = {}
+) {
+  const lookup = serviceCode
+    ? await crmService.searchCustomersByServiceCode(serviceCode, serviceTag)
+    : await crmService.searchCustomersByPhone(phoneNumber, serviceTag);
+  // One entry per device of the customer.
+  const entries = (lookup.customers || []).filter(
     (customer) => String(customer.id) === String(crmContactId)
   );
-  if (!contactMatches) {
+  let match = entries[0];
+  if (requireDevice && match) {
+    if (deviceId) {
+      match = entries.find((customer) => customer.deviceId === deviceId);
+      if (!match) {
+        throw new AppError('This device does not belong to the customer', 400, 'VALIDATION_ERROR');
+      }
+    } else if (entries.length > 1) {
+      throw new AppError(
+        'This customer has more than one device. Choose the device to sell to.',
+        400,
+        'DEVICE_REQUIRED'
+      );
+    }
+  }
+  if (!match) {
     throw new AppError(
-      'Customer reference does not match a phone lookup for this service',
+      serviceCode
+        ? 'Customer reference does not match a service code lookup for this service'
+        : 'Customer reference does not match a phone lookup for this service',
       400,
       'VALIDATION_ERROR'
     );
   }
+
+  const crmPhone = String(match.phone || '').replace(/\D/g, '').slice(-7);
+  return { phoneNumber: String(phoneNumber || '').trim() || crmPhone || '', customer: match };
 }
 
 export async function subscribeCustomer(operatorId, data, reqMeta = {}) {
   return withCrmSlot(operatorId, () => subscribeCustomerInner(operatorId, data, reqMeta));
 }
 
-async function subscribeCustomerInner(operatorId, data, reqMeta) {
-  await assertCrmContactMatchesPhoneLookup(data.crmContactId, data.phoneNumber, data.serviceTag);
+async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
+  const binding = await resolveCustomerBinding(rawData, { requireDevice: true });
+  const data = {
+    ...rawData,
+    phoneNumber: binding.phoneNumber,
+    fullName: String(rawData.fullName || binding.customer.name || 'Customer').trim(),
+  };
+  // A package is sold to one device; its services are what the rules below look at.
+  const deviceId = binding.customer.deviceId || null;
+
+  // Decide what this purchase is (new package, renewal or upgrade) from what the customer
+  // already has. The rules are re-checked here, so a client cannot skip them.
+  if (binding.customer.services == null) {
+    throw new AppError(
+      'Could not read the customer\'s current services from CRM. Please try again.',
+      502,
+      'CRM_ERROR'
+    );
+  }
+  const eligibility = await loadEligibilityContext(operatorId, data.serviceTag);
+  const purchase = resolvePurchase(
+    { ...eligibility, services: binding.customer.services, packageIds: data.packageIds },
+    (message) => {
+      throw new AppError(message, 400, 'PACKAGE_NOT_ELIGIBLE');
+    }
+  );
+  // The partner API has one endpoint per kind of purchase and says which one it means.
+  if (data.expectedAction && data.expectedAction !== purchase.action) {
+    const kind = { subscribe: 'a new subscription', renew: 'a renewal', upgrade: 'an upgrade' };
+    throw new AppError(
+      `For this customer this purchase is ${kind[purchase.action]}, not ${kind[data.expectedAction]}.`,
+      409,
+      'ACTION_MISMATCH'
+    );
+  }
+  const activity = PURCHASE_ACTIVITY[purchase.action];
+  const option = purchase.options[0];
+
+  // An upgrade costs what CRM says it costs right now: the new package for the days left in
+  // the term, less credit for the old one. Asked again here so the charge is never stale.
+  // When CRM will not change the service in place, the upgrade is done as a replacement
+  // instead: full price, old package cancelled, new one started.
+  let upgradeEstimate = null;
+  let upgradeMode = null;
+  if (purchase.action === 'upgrade') {
+    const estimate = await crmService.estimateServiceChange(data.crmContactId, option, option.packageId);
+    upgradeMode = estimate.allowed ? 'change' : 'replace';
+    if (estimate.allowed) upgradeEstimate = estimate;
+  }
 
   let reservation;
   let resolvedPackageIds;
@@ -1106,7 +1308,7 @@ async function subscribeCustomerInner(operatorId, data, reqMeta) {
   try {
     await connection.beginTransaction();
     const operator = await lockActiveOperator(connection, operatorId);
-    assertOperatorServiceTag(operator.service_scope || 'BOTH', data.serviceTag);
+    await assertOperatorServiceTag(operatorId, data.serviceTag);
 
     resolvedPackageIds = await resolveActivatePackageIds(
       operatorId,
@@ -1115,10 +1317,18 @@ async function subscribeCustomerInner(operatorId, data, reqMeta) {
       connection
     );
     pricing = await sumPackagePrices(resolvedPackageIds, { connection });
+    if (upgradeEstimate) {
+      // Packages keep their list price in the sale record; the charge is the CRM estimate.
+      pricing = { ...pricing, listTotal: pricing.total, total: upgradeEstimate.amount };
+    }
 
-    if (!amountsMatch(pricing.total, data.amount)) {
+    // The portal always sends the amount it showed; API callers may leave it out to accept
+    // the current price.
+    if (data.amount != null && !amountsMatch(pricing.total, data.amount)) {
       throw new AppError(
-        `Amount must exactly match the selected package total (${pricing.total} ${pricing.currencyCode}).`,
+        upgradeEstimate
+          ? `The upgrade price is now ${pricing.total} ${pricing.currencyCode}. Search the customer again to refresh it.`
+          : `Amount must exactly match the selected package total (${pricing.total} ${pricing.currencyCode}).`,
         400,
         'AMOUNT_MISMATCH'
       );
@@ -1132,8 +1342,27 @@ async function subscribeCustomerInner(operatorId, data, reqMeta) {
       packageIds: resolvedPackageIds,
       pricing,
       serviceTag: data.serviceTag,
-      activity: 'customer_subscribe',
-      metadataExtra: { crmContactId: data.crmContactId },
+      activity,
+      // Free-account slots are for new packages; renewals and upgrades are always paid.
+      allowTrial: purchase.action === 'subscribe',
+      metadataExtra: {
+        ...channelMetadata(reqMeta),
+        crmContactId: data.crmContactId,
+        crmDeviceId: deviceId,
+        serviceCode: binding.customer.deviceCode || null,
+        purchaseAction: purchase.action,
+        ...(purchase.action === 'subscribe'
+          ? {}
+          : {
+              crmServiceId: option.serviceId,
+              replacedPackage: option.replaces?.name || null,
+              cancelledAddons: option.cancels.map((item) => item.name),
+            }),
+        ...(upgradeMode ? { upgradeMode } : {}),
+        ...(upgradeEstimate
+          ? { listPrice: pricing.listTotal, crmNewCharge: upgradeEstimate.newCharge, crmCredit: upgradeEstimate.credit }
+          : {}),
+      },
     });
     await connection.commit();
   } catch (err) {
@@ -1146,10 +1375,35 @@ async function subscribeCustomerInner(operatorId, data, reqMeta) {
   const outcome = await provisionReservation(
     operatorId,
     reservation,
-    (paymentReference) =>
-      crmService.activatePackagesForContact(data.crmContactId, resolvedPackageIds, { paymentReference }),
+    (paymentReference) => {
+      if (purchase.action === 'renew') {
+        return crmService.renewServiceForContact(data.crmContactId, option.serviceId, option.packageId, {
+          paymentReference,
+        });
+      }
+      if (upgradeMode === 'replace') {
+        return crmService.replaceServiceForContact(
+          data.crmContactId,
+          { serviceId: option.serviceId, cancelServiceIds: option.cancels.map((item) => item.serviceId) },
+          option.packageId,
+          { paymentReference, deviceId }
+        );
+      }
+      if (purchase.action === 'upgrade') {
+        return crmService.upgradeServiceForContact(
+          data.crmContactId,
+          { serviceId: option.serviceId, cancelServiceIds: option.cancels.map((item) => item.serviceId) },
+          option.packageId,
+          { paymentReference, amount: upgradeEstimate.amount, deviceId }
+        );
+      }
+      return crmService.activatePackagesForContact(data.crmContactId, resolvedPackageIds, {
+        paymentReference,
+        deviceId,
+      });
+    },
     reqMeta,
-    { activity: 'customer_subscribe', crmContactId: data.crmContactId }
+    { activity, crmContactId: data.crmContactId }
   );
 
   if (outcome.status !== 'created') {
@@ -1159,7 +1413,7 @@ async function subscribeCustomerInner(operatorId, data, reqMeta) {
   await logAudit({
     actorType: 'operator',
     actorId: operatorId,
-    action: 'CUSTOMER_SUBSCRIBE',
+    action: purchase.action === 'renew' ? 'CUSTOMER_RENEW' : purchase.action === 'upgrade' ? 'CUSTOMER_UPGRADE' : 'CUSTOMER_SUBSCRIBE',
     resourceType: 'voucher_account',
     resourceId: reservation.voucherAccountId,
     ipAddress: reqMeta.ipAddress,
@@ -1171,11 +1425,27 @@ async function subscribeCustomerInner(operatorId, data, reqMeta) {
       serviceTag: data.serviceTag,
       phoneNumber: reservation.phoneNumber,
       paymentReference: reservation.paymentReference,
+      ...channelMetadata(reqMeta),
+      purchaseAction: purchase.action,
+      crmServiceId: option.serviceId,
+      replacedPackage: option.replaces?.name || null,
+      cancelledAddons: option.cancels.map((item) => item.name),
     },
   });
 
   const walletBalance = await readWalletBalance(operatorId);
   return {
+    action: purchase.action,
+    upgradeMode,
+    reference: reservation.paymentReference,
+    chargeType: reservation.chargeType,
+    crmContactId: data.crmContactId,
+    deviceId,
+    serviceCode: binding.customer.deviceCode || null,
+    listPrice: pricing.listTotal ?? pricing.total,
+    creditApplied: upgradeEstimate?.credit ?? 0,
+    replacedPackage: option.replaces?.name || null,
+    cancelledAddons: option.cancels.map((item) => item.name),
     id: reservation.voucherAccountId,
     fullName: reservation.fullName,
     phoneNumber: reservation.phoneNumber,
@@ -1222,6 +1492,10 @@ function buildChargeDescription(activity, customerName, phoneNumber, packageName
     description = `Customer wallet top-up for ${customerLabel}`;
   } else if (activity === 'customer_subscribe') {
     description = `Customer subscribe — ${packagesLabel} for ${customerLabel}`;
+  } else if (activity === 'customer_renew') {
+    description = `Customer renewal — ${packagesLabel} for ${customerLabel}`;
+  } else if (activity === 'customer_upgrade') {
+    description = `Customer upgrade — ${packagesLabel} for ${customerLabel}`;
   } else if (activity === 'customer_topup') {
     description = `Customer top-up — ${packagesLabel} for ${customerLabel}`;
   } else if (activity === 'bulk_create') {
@@ -1243,7 +1517,7 @@ async function createAndProvisionAccounts(operatorId, accounts, packageIds, pric
   try {
     await connection.beginTransaction();
     const operator = await lockActiveOperator(connection, operatorId);
-    assertOperatorServiceTag(operator.service_scope || 'BOTH', serviceTag);
+    await assertOperatorServiceTag(operatorId, serviceTag);
     reservations = await reserveVoucherAccounts(connection, {
       operatorId,
       operator,
@@ -1309,7 +1583,7 @@ async function resolveCreationPricing(operatorId, requestedPackageIds, serviceTa
     const plans = await assertPackagesAssignable(packageIds);
     resolvedTag = plans[0]?.serviceTag || 'OTT';
   }
-  assertOperatorServiceTag(operator.service_scope || 'BOTH', resolvedTag);
+  await assertOperatorServiceTag(operatorId, resolvedTag);
   const pricing = await assertPackagesMatchServiceTag(packageIds, resolvedTag, null);
   return { packageIds, pricing, serviceTag: resolvedTag };
 }

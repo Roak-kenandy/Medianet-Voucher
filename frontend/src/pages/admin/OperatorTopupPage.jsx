@@ -40,6 +40,10 @@ function previewStaffTopup(paid, wallet) {
     grossTotal = roundMoney(amountPaid * value);
     commission = roundMoney(grossTotal - amountPaid);
     ratio = Math.round(value * 100000) / 100000;
+  } else if (type === 'percent' && value > 0) {
+    commission = roundMoney(amountPaid * (value / 100));
+    grossTotal = roundMoney(amountPaid + commission);
+    ratio = Math.round((1 + value / 100) * 100000) / 100000;
   }
 
   const rate = Math.max(0, Number(wallet.gstRate) || 0);

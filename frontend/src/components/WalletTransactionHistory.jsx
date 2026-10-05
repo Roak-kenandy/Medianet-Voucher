@@ -3,6 +3,7 @@ import { ArrowDownLeft, ArrowUpRight } from 'lucide-react';
 import TablePagination from './TablePagination';
 import { operatorApi } from '../api/client';
 import { formatMoney } from '../utils/money';
+import { formatDateTime } from '../constants/appSettings';
 
 function TypeBadge({ type, status, activity }) {
   const label = activity || (status === 'pending' ? `${type} (pending)` : type);
@@ -51,7 +52,7 @@ function TransactionDescription({ tx }) {
 function TransactionCard({ tx, detailed }) {
   return (
     <div className="data-card">
-      <div className="data-card-title">{new Date(tx.createdAt).toLocaleString()}</div>
+      <div className="data-card-title">{formatDateTime(tx.createdAt)}</div>
       <div className="data-card-row">
         <span className="data-card-label">Activity</span>
         <span className="data-card-value">
@@ -172,7 +173,7 @@ export default function WalletTransactionHistory({
           <tbody>
             {transactions.map((tx) => (
               <tr key={tx.id}>
-                <td>{new Date(tx.createdAt).toLocaleString()}</td>
+                <td>{formatDateTime(tx.createdAt)}</td>
                 <td><TypeBadge type={tx.type} status={tx.status} activity={tx.activity} /></td>
                 {detailed && <td>{tx.customerName || '—'}</td>}
                 {detailed && <td>{tx.phoneNumber || '—'}</td>}

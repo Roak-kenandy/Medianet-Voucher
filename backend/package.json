@@ -11,6 +11,7 @@
     "migrate:prod": "node src/db/migrate.js --production",
     "verify:security": "node scripts/verify-security-invariants.mjs",
     "seed": "node src/db/seed.js",
+    "admin:set-password": "node src/db/setAdminPassword.js",
     "reset": "node src/db/reset.js"
   },
   "dependencies": {

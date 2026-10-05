@@ -62,11 +62,88 @@ function formatCrmError(data = {}) {
   return `${message} (${parameters.join(', ')})`;
 }
 
-export function maskDeviceCustomFieldCode(value) {
-  const raw = String(value ?? '').trim();
-  if (!raw) return null;
-  if (raw.length <= 4) return `${raw}***`;
-  return `${raw.slice(0, 4)}***`;
+const CONTACT_LOOKUP_CONCURRENCY = 3;
+
+/** CRM dates are epoch seconds; the portal API uses ISO strings. */
+function epochToIso(value) {
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds > 0 ? new Date(seconds * 1000).toISOString() : null;
+}
+
+/** One CRM subscription service reduced to what an operator needs to see. */
+function mapCustomerService(service) {
+  const terms = service.terms || {};
+  // The date the customer is paid up to: the termed period for recurring services, the
+  // access period for one-time services, otherwise the last billed-to date.
+  const dueDate =
+    epochToIso(terms.termed_period?.end_date) ||
+    epochToIso(terms.access_period?.end_date) ||
+    epochToIso(service.billing?.billed_to);
+  return {
+    id: service.id,
+    name: service.product?.name || 'Service',
+    sku: service.product?.sku || null,
+    productId: service.product?.id || null,
+    classification: service.product?.classification || null,
+    state: service.state || null,
+    subscriptionId: service.subscription?.id || null,
+    subscriptionState: service.subscription?.state || null,
+    price: service.price?.price != null ? Number(service.price.price) : null,
+    currencyCode: service.price?.currency_code || null,
+    billingPeriod: service.price?.billing_period
+      ? { duration: service.price.billing_period.duration, unit: service.price.billing_period.uot }
+      : null,
+    billingModel: terms.billing_model || null,
+    autoRenew: terms.auto_renew ?? null,
+    inTrial: service.trial_period?.trial_state === 'IN_TRIAL',
+    activatedOn: epochToIso(service.first_activated_on),
+    dueDate,
+  };
+}
+
+/** Key of the device custom field that holds the customer's service code. */
+const SERVICE_CODE_FIELD_KEY = 'code';
+
+/** Service codes are short alphanumeric values; anything else cannot be a code (and `;` would break the CRM filter). */
+function normalizeServiceCode(serviceCode) {
+  const code = String(serviceCode ?? '').trim();
+  if (!/^[A-Za-z0-9-]{3,32}$/.test(code)) {
+    throw new AppError('Enter a valid service code', 400, 'VALIDATION_ERROR');
+  }
+  return code;
+}
+
+/** Runs `worker` over `items` with at most `limit` in flight; results keep input order. */
+async function mapWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let next = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
+function lastSevenDigits(value) {
+  const digits = String(value ?? '').replace(/\D/g, '');
+  return digits.length >= 7 ? digits.slice(-7) : null;
+}
+
+/**
+ * True when one of the contact's own phone numbers is the requested 7-digit number
+ * (country code prefixes are ignored). A contact that carries no phone data at all cannot
+ * be bound to the requested number and is rejected.
+ */
+export function contactMatchesPhone(contact, normalizedPhone) {
+  const candidates = [contact?.phone?.number, contact?.phone_number, contact?.phoneNumber];
+  for (const entry of Array.isArray(contact?.phones) ? contact.phones : []) {
+    candidates.push(entry?.number ?? entry);
+  }
+  return candidates.some((candidate) => lastSevenDigits(candidate) === normalizedPhone);
 }
 
 function extractDeviceCodeFromDevices(devicesData) {
@@ -75,10 +152,19 @@ function extractDeviceCodeFromDevices(devicesData) {
     const fields = device.custom_fields || [];
     const codeField = fields.find((field) => String(field?.key || '').toLowerCase() === 'code');
     if (codeField?.value != null && String(codeField.value).trim() !== '') {
-      return maskDeviceCustomFieldCode(codeField.value);
+      // Shown in full: operators use it to confirm they have the right customer.
+      return String(codeField.value).trim();
     }
   }
   return null;
+}
+
+function deviceServiceCode(device) {
+  const field = (device?.custom_fields || []).find(
+    (item) => String(item?.key || '').toLowerCase() === 'code'
+  );
+  const value = field?.value != null ? String(field.value).trim() : '';
+  return value || null;
 }
 
 function isRetryableSubscriptionError(status, data = {}) {
@@ -143,7 +229,8 @@ class CRMService {
     return assertServiceTag(plan.serviceTag);
   }
 
-  async fetchProductCatalog(serviceTag = 'OTT') {
+  /** `salesModelName` picks which CRM price tier is offered (defaults to the .env model). */
+  async fetchProductCatalog(serviceTag = 'OTT', salesModelName = config.crm.salesModelName) {
     this.assertConfigured();
     const tagConfig = getServiceTagConfig(assertServiceTag(serviceTag));
     const products = await this.fetchAllProductsByTag(tagConfig.crmTagName);
@@ -153,7 +240,7 @@ class CRMService {
         const prices = await this.fetchProductPrices(
           product.id,
           tagConfig.crmPriceSegmentName,
-          config.crm.salesModelName
+          salesModelName
         );
         if (!prices.length) return null;
 
@@ -323,6 +410,9 @@ class CRMService {
     const { headers: extraHeaders, ...rest } = options;
     return fetch(url, {
       ...rest,
+      // Never follow redirects: the api_key header and request body would be re-sent to
+      // whatever origin the response points at.
+      redirect: 'error',
       headers: { ...this.headers, ...extraHeaders },
       signal: rest.signal ?? AbortSignal.timeout(config.crm.requestTimeoutMs),
     });
@@ -506,7 +596,7 @@ class CRMService {
     return this.handleResponse(response, 'Fetch contact devices');
   }
 
-  async fetchMaskedDeviceCodeForContact(contactId) {
+  async fetchDeviceCodeForContact(contactId) {
     try {
       const devicesData = await this.fetchDevicesByContactId(contactId);
       return extractDeviceCodeFromDevices(devicesData);
@@ -998,7 +1088,13 @@ class CRMService {
    * - CrmPaymentError when the payment was rejected (nothing posted) or its outcome is unknown;
    * - CrmBillableError when the payment posted but a later step failed.
    */
-  async setupSubscription(contactId, accountId, plans, preferredDeviceId = null, { paymentReference } = {}) {
+  async setupSubscription(
+    contactId,
+    accountId,
+    plans,
+    preferredDeviceId = null,
+    { paymentReference, beforeActivation = null, targetDeviceId = null } = {}
+  ) {
     const totalAmount = Math.round(
       plans.reduce((sum, plan) => sum + (Number(plan.priceAmount) || 0), 0) * 100
     ) / 100;
@@ -1014,9 +1110,30 @@ class CRMService {
     let subscriptionId = null;
 
     try {
+      // Runs once the payment is in CRM and before the new services are created.
+      if (beforeActivation) await beforeActivation();
+
+      // Sale to one specific device: remember what the customer already has, so that only
+      // the services created now are enabled, and only on that device.
+      let existingServiceIds = null;
+      if (targetDeviceId) {
+        const current = await this.fetchContactServicesWithSubscription(contactId);
+        existingServiceIds = new Set((current.content || []).map((service) => service.id));
+      }
+
       const subscription = await this.createSubscription(contactId, accountId, plans);
       if (!subscription?.success) {
         throw new Error(`Subscription creation failed: ${subscription?.error || 'Unknown error'}`);
+      }
+
+      if (targetDeviceId) {
+        const enabled = await this.enableNewServicesOnDevice(contactId, targetDeviceId, plans, existingServiceIds);
+        return {
+          subscriptionId: enabled.subscriptionId,
+          paymentId,
+          paymentReference: totalAmount > 0 ? paymentReference : null,
+          deviceIds: [{ device_id: targetDeviceId }],
+        };
       }
 
       subscriptionId =
@@ -1139,10 +1256,17 @@ class CRMService {
     };
   }
 
-  async addSubscriptionForExisting(contactId, accountId, packageIds, { paymentReference } = {}) {
+  async addSubscriptionForExisting(
+    contactId,
+    accountId,
+    packageIds,
+    { paymentReference, beforeActivation = null, deviceId = null } = {}
+  ) {
     const plans = await this.resolvePlans(packageIds);
     const subscription = await this.setupSubscription(contactId, accountId, plans, null, {
       paymentReference,
+      beforeActivation,
+      targetDeviceId: deviceId,
     });
 
     return {
@@ -1161,11 +1285,14 @@ class CRMService {
     const tagConfig = getServiceTagConfig(normalizedTag);
     const normalizedPhone = normalizePhone(phoneNumber);
     const contactsData = await this.fetchContactsByPhone(normalizedPhone);
-    const contacts = contactsData.content || [];
+    // CRM search_value is a free-text search, so keep only contacts whose own phone number
+    // is the one that was asked for.
+    const contacts = (contactsData.content || []).filter((contact) =>
+      contactMatchesPhone(contact, normalizedPhone)
+    );
 
     const customers = (
-      await Promise.all(
-        contacts.map(async (contact) => {
+      await mapWithConcurrency(contacts, CONTACT_LOOKUP_CONCURRENCY, async (contact) => {
           try {
             const tagsData = await this.fetchContactTags(contact.id);
             if (!this.contactHasServiceTag(tagsData, tagConfig)) {
@@ -1176,9 +1303,12 @@ class CRMService {
               .map((tag) => tag.name)
               .filter(Boolean);
 
-            const deviceCodeMasked = await this.fetchMaskedDeviceCodeForContact(contact.id);
+            const [deviceCode, overview] = await Promise.all([
+              this.fetchDeviceCodeForContact(contact.id),
+              this.fetchCustomerOverview(contact.id),
+            ]);
 
-            return {
+            return this.expandCustomerByDevice({
               id: contact.id,
               code: contact.code || null,
               name: contact.name || 'Unknown',
@@ -1186,23 +1316,495 @@ class CRMService {
               phone: contact.phone?.number || normalizedPhone,
               serviceTag: normalizedTag,
               serviceTagLabel: tagConfig.label,
-              serviceTypeShort: normalizedTag === 'MEDIANET_TV' ? 'TV' : 'Mobile',
+              serviceTypeShort: tagConfig.shortLabel,
               crmTags,
-              deviceCodeMasked,
-            };
+              deviceCode,
+              account: overview.account,
+              services: overview.services,
+            }, tagConfig);
           } catch (err) {
             console.error(`[CRM] Tag lookup failed for contact ${contact.id}:`, err.message);
             return null;
           }
-        })
-      )
-    ).filter(Boolean);
+      })
+    ).filter(Boolean).flat();
 
     return {
       customers,
       paging: contactsData.paging || null,
       serviceTag: normalizedTag,
     };
+  }
+
+  /** Applies a lifecycle action (RENEW, CHANGE, CANCEL…) to one subscription service. */
+  async updateService(serviceId, body, context) {
+    const response = await this.crmFetch(`/services/${serviceId}`, {
+      method: 'PUT',
+      headers: this.headers,
+      body: JSON.stringify(body),
+    });
+    return this.handleResponse(response, context);
+  }
+
+  /**
+   * Shared shape of renew and upgrade: post the customer's payment (tagged with the wallet
+   * debit reference), then run the service action(s). Once the payment exists, any failure
+   * is reported as "paid but not finished" so the charge is kept and reconciled by staff.
+   */
+  async payThenUpdateService(contactId, chargeAmount, { paymentReference }, applyActions) {
+    this.assertConfigured();
+    const accountId = await this.ensureContactAccount(contactId);
+    const amount = Math.round((Number(chargeAmount) || 0) * 100) / 100;
+
+    let paymentId = null;
+    if (amount > 0) {
+      const payment = await this.createPayment(contactId, accountId, amount, { paymentReference });
+      paymentId = payment.paymentId;
+      // Same settle delay as new subscriptions: CRM needs the payment on the account first.
+      await delay(1500);
+    }
+
+    try {
+      const result = await applyActions();
+      return { contactId, accountId, paymentId, paymentReference: amount > 0 ? paymentReference : null, ...result };
+    } catch (err) {
+      if (amount <= 0) throw err;
+      throw new CrmBillableError(
+        `Payment was recorded in CRM but the service change did not finish: ${err.message}`,
+        { contactId, accountId, paymentId, paymentReference, totalAmount: amount }
+      );
+    }
+  }
+
+  /**
+   * Asks CRM what changing a service to another package would cost, without making the change.
+   * CRM keeps the current term, invoices the new package for the days that remain and credits
+   * the old one for the same days; the difference is what the customer has to pay.
+   * Returns { allowed, reason, amount, newCharge, credit }.
+   */
+  async estimateServiceChange(contactId, { serviceId, subscriptionId }, packageId) {
+    this.assertConfigured();
+    const plan = await this.resolvePlan(packageId);
+    const accountId = await this.ensureContactAccount(contactId);
+    const response = await this.crmFetch('/estimates/service_delivery', {
+      method: 'POST',
+      headers: this.headers,
+      body: JSON.stringify({
+        action: 'CHANGE',
+        contact_id: contactId,
+        account_id: accountId,
+        subscription_id: subscriptionId,
+        services_to_change: [
+          {
+            from_service_id: serviceId,
+            to_service_product_id: plan.product_id,
+            to_price_terms_id: plan.price_term_id,
+          },
+        ],
+      }),
+    });
+
+    const refused = (reason) => ({ allowed: false, reason, amount: null, newCharge: null, credit: null });
+    const text = await response.text();
+    let body = null;
+    try {
+      body = text ? JSON.parse(text) : null;
+    } catch {
+      body = null;
+    }
+
+    if (response.status >= 500 || (response.ok && !body)) {
+      throw new AppError('CRM could not price this upgrade. Please try again.', 502, 'CRM_ERROR');
+    }
+    if (!response.ok) {
+      // CRM explains a refusal in `parameters`, e.g. ["Change", "No valid tier path is configured"].
+      const detail = Array.isArray(body?.parameters) ? body.parameters[body.parameters.length - 1] : null;
+      console.error(`[CRM] Change estimate refused (${response.status}):`, text.slice(0, 300));
+      return refused(detail ? `CRM does not allow this upgrade: ${detail}` : 'CRM does not allow this upgrade');
+    }
+
+    const estimate = (body.service_delivery_estimate || [])[0];
+    if (!estimate || estimate.action_allowed === false) {
+      return refused('CRM does not allow this upgrade');
+    }
+    const invoicing = estimate.billing_estimate?.invoicing || [];
+    const sum = (rows) => Math.round(rows.reduce((total, row) => total + (Number(row.total_amount) || 0), 0) * 100) / 100;
+    const invoices = invoicing.filter((row) => !row.is_credit);
+    if (!invoices.length || estimate.billing_estimate?.failure_reason) {
+      // A credit with no new invoice means CRM would not bill the new package now; charging
+      // nothing (or guessing) would be wrong, so the upgrade is not offered.
+      return refused('CRM did not return a price for this upgrade');
+    }
+    const newCharge = sum(invoices);
+    const credit = sum(invoicing.filter((row) => row.is_credit));
+    const amount = Math.max(0, Math.round((newCharge - credit) * 100) / 100);
+    return { allowed: true, reason: null, amount, newCharge, credit };
+  }
+
+  /**
+   * Makes sure the contact's service for `plan` is enabled on a device. Does nothing when it
+   * already is; otherwise enables the devices CRM lists as available for that service.
+   */
+  async ensureServiceDevicesEnabled(contactId, plan, deviceId = null) {
+    const services = await this.resolveServicesForDeviceAssignment(contactId, [plan]);
+    const listDevices = async (service) => {
+      const response = await this.crmFetch(`/services/${service.id}/devices`, {
+        method: 'GET',
+        headers: this.headers,
+      });
+      const data = await this.handleResponse(response, `List devices of service ${service.id}`);
+      return (data.content || []).filter((item) => item?.device?.id);
+    };
+
+    if (deviceId) {
+      // The upgrade belongs to one device. The customer may hold the same package on another
+      // device too, so only a service that is on this device, or on none yet, is touched.
+      const unassigned = [];
+      for (const service of services) {
+        const devices = await listDevices(service);
+        const enabled = devices.filter((item) => item.state === 'ENABLED');
+        if (enabled.some((item) => item.device.id === deviceId)) return;
+        if (!enabled.length) unassigned.push(service);
+      }
+      if (!unassigned.length) {
+        throw new Error('The upgraded package was not found for this device');
+      }
+      await this.assignDevicesToService(unassigned[0].id, [{ device_id: deviceId }]);
+      return;
+    }
+
+    for (const service of services) {
+      const devices = await listDevices(service);
+      if (devices.some((item) => item.state === 'ENABLED')) continue;
+      if (!devices.length) {
+        throw new Error('The customer has no device to enable the new package on');
+      }
+      await this.assignDevicesToService(
+        service.id,
+        devices.map((item) => ({ device_id: item.device.id }))
+      );
+    }
+  }
+
+  /**
+   * Enables the services just created for `plans` on one device, and on no other. Services
+   * the customer already had (`existingServiceIds`) are left alone, even for the same product.
+   */
+  async enableNewServicesOnDevice(contactId, deviceId, plans, existingServiceIds) {
+    const productIds = new Set(plans.map((plan) => plan.product_id));
+    let created = [];
+    for (let attempt = 1; attempt <= 8; attempt += 1) {
+      const data = await this.fetchContactServicesWithSubscription(contactId);
+      created = (data.content || []).filter(
+        (service) => productIds.has(this.getServiceProductId(service)) && !existingServiceIds.has(service.id)
+      );
+      if (created.length >= plans.length) break;
+      await delay(350 * attempt);
+    }
+    if (!created.length) {
+      throw new Error('The new services were not found in CRM to enable on the device');
+    }
+
+    const subscriptionIds = [...new Set(created.map((service) => service.subscription?.id).filter(Boolean))];
+    for (const subscriptionId of subscriptionIds) {
+      const response = await this.crmFetch(`/subscriptions/${subscriptionId}/devices`, {
+        method: 'GET',
+        headers: this.headers,
+      });
+      const linked = await this.handleResponse(response, 'Get subscription devices');
+      if ((linked.content || []).some((item) => item?.device?.id === deviceId)) continue;
+      const addResponse = await this.crmFetch(`/subscriptions/${subscriptionId}/devices`, {
+        method: 'POST',
+        headers: this.headers,
+        body: JSON.stringify({ device_id: deviceId }),
+      });
+      await this.handleResponse(addResponse, 'Add subscription device');
+    }
+
+    for (const service of created) {
+      await this.assignDevicesToService(service.id, [{ device_id: deviceId }]);
+    }
+    return { subscriptionId: subscriptionIds[0] || null, serviceIds: created.map((service) => service.id) };
+  }
+
+  /**
+   * The contact's devices for one customer type, each with its service code and the ids of
+   * the services enabled on it. A sale is always made to one of these devices.
+   */
+  async fetchContactDevices(contactId, services = [], tagConfig = null) {
+    const devicesData = await this.fetchDevicesByContactId(contactId, { size: 50 });
+    let devices = (devicesData.content || []).filter((device) => device?.id);
+    // A customer can hold devices of more than one type (app and TV box); keep this type's.
+    if (tagConfig?.crmDeviceProductId) {
+      const sameType = devices.filter((device) => device.product?.id === tagConfig.crmDeviceProductId);
+      if (sameType.length) devices = sameType;
+    }
+
+    const serviceIdsByDevice = new Map();
+    const subscriptionIds = [...new Set(services.map((service) => service.subscriptionId).filter(Boolean))];
+    for (const subscriptionId of subscriptionIds) {
+      const response = await this.crmFetch(`/subscriptions/${subscriptionId}/devices`, {
+        method: 'GET',
+        headers: this.headers,
+      });
+      const data = await this.handleResponse(response, 'Get subscription devices');
+      for (const item of data.content || []) {
+        if (!item?.device?.id) continue;
+        const ids = serviceIdsByDevice.get(item.device.id) || new Set();
+        for (const service of item.services || []) ids.add(service.id);
+        serviceIdsByDevice.set(item.device.id, ids);
+      }
+    }
+
+    return {
+      devices: devices.map((device) => ({
+        id: device.id,
+        code: deviceServiceCode(device),
+        serviceIds: serviceIdsByDevice.get(device.id) || new Set(),
+      })),
+      // Every service that is on some device, including devices of another type.
+      assignedServiceIds: new Set([...serviceIdsByDevice.values()].flatMap((ids) => [...ids])),
+    };
+  }
+
+  /**
+   * One search result per device, because a package is sold to a device: each result carries
+   * that device's service code and only the services enabled on it. A service that is not on
+   * any device yet is shown on every device, so it is neither hidden nor sold twice.
+   */
+  async expandCustomerByDevice(customer, tagConfig, { onlyCode = null } = {}) {
+    const single = (extra = {}) => [{ ...customer, key: customer.id, deviceId: null, deviceCount: 0, ...extra }];
+    if (customer.services == null) {
+      return single();
+    }
+    let devices;
+    let assigned;
+    try {
+      ({ devices, assignedServiceIds: assigned } = await this.fetchContactDevices(
+        customer.id,
+        customer.services,
+        tagConfig
+      ));
+    } catch (err) {
+      console.error(`[CRM] Device lookup failed for contact ${customer.id}:`, err.message);
+      // Without the device picture it is not known what is on which device: nothing is offered.
+      return single({ services: null });
+    }
+    if (!devices.length) return single();
+
+    // Searched by service code: only that device, and only if it is a device of this type.
+    const wanted = onlyCode
+      ? devices.filter((device) => device.code && device.code.toLowerCase() === String(onlyCode).toLowerCase())
+      : devices;
+    return wanted.map((device) => ({
+      ...customer,
+      key: `${customer.id}:${device.id}`,
+      deviceId: device.id,
+      deviceCode: device.code,
+      deviceCount: devices.length,
+      services: customer.services.filter(
+        (service) => device.serviceIds.has(service.id) || !assigned.has(service.id)
+      ),
+    }));
+  }
+
+  /** Continue an existing package: renew the customer's current service for another period. */
+  async renewServiceForContact(contactId, serviceId, packageId, { paymentReference } = {}) {
+    const plan = await this.resolvePlan(packageId);
+    return this.payThenUpdateService(contactId, plan.priceAmount, { paymentReference }, async () => {
+      await this.updateService(serviceId, { action: 'RENEW' }, `Renew service ${serviceId}`);
+      return { subscriptionId: null, serviceId, message: 'Service renewed' };
+    });
+  }
+
+  /**
+   * Upgrade a base package in place. CRM refuses to change a base service while an add-on that
+   * is not valid with the new base is still attached, so those add-ons are cancelled first.
+   */
+  async upgradeServiceForContact(
+    contactId,
+    { serviceId, cancelServiceIds = [] },
+    packageId,
+    { paymentReference, amount, deviceId = null } = {}
+  ) {
+    const plan = await this.resolvePlan(packageId);
+    // `amount` is what CRM estimated for the change (new price less credit for unused days).
+    const chargeAmount = amount ?? plan.priceAmount;
+    return this.payThenUpdateService(contactId, chargeAmount, { paymentReference }, async () => {
+      for (const addonServiceId of cancelServiceIds) {
+        await this.updateService(addonServiceId, { action: 'CANCEL' }, `Cancel add-on ${addonServiceId}`);
+      }
+      await this.updateService(
+        serviceId,
+        {
+          action: 'CHANGE',
+          change_to_service: { product_id: plan.product_id, price_terms_id: plan.price_term_id },
+        },
+        `Change service ${serviceId}`
+      );
+      // The customer watches through their device, so the upgrade is only finished once the
+      // new package is enabled on it. CRM may or may not carry the device over on a change.
+      await this.ensureServiceDevicesEnabled(contactId, plan, deviceId);
+      return { subscriptionId: null, serviceId, cancelledServiceIds: cancelServiceIds, message: 'Service upgraded' };
+    });
+  }
+
+  /**
+   * Upgrade for when CRM will not change the service in place (no tier path, or it cannot price
+   * the change): take the full price, cancel the old base and the add-ons that do not go with
+   * the new one, then start the new package as a new subscription.
+   */
+  async replaceServiceForContact(
+    contactId,
+    { serviceId, cancelServiceIds = [] },
+    packageId,
+    { paymentReference, deviceId = null } = {}
+  ) {
+    const result = await this.activatePackagesForContact(contactId, [packageId], {
+      paymentReference,
+      deviceId,
+      beforeActivation: async () => {
+        for (const addonServiceId of cancelServiceIds) {
+          await this.updateService(addonServiceId, { action: 'CANCEL' }, `Cancel add-on ${addonServiceId}`);
+        }
+        await this.updateService(serviceId, { action: 'CANCEL' }, `Cancel replaced service ${serviceId}`);
+      },
+    });
+    return { ...result, replacedServiceId: serviceId, cancelledServiceIds: cancelServiceIds };
+  }
+
+  /** Active (non-removed) subscription services of a contact, with their billing terms. */
+  async fetchContactServicesWithSubscription(contactId) {
+    const queryParams = new URLSearchParams({ include_subscription: 'true', size: '50', page: '1' });
+    const response = await this.crmFetch(`/contacts/${contactId}/services?${queryParams}`, {
+      headers: this.headers,
+    });
+    return this.handleResponse(response, `Fetch services for contact ${contactId}`);
+  }
+
+  /**
+   * What an operator needs to see before topping up or subscribing a customer: the primary
+   * account's balance and the customer's current services. Each half is optional: a failed
+   * CRM call yields null for that half instead of hiding the customer.
+   */
+  async fetchCustomerOverview(contactId) {
+    const [accountsResult, servicesResult] = await Promise.allSettled([
+      this.fetchContactAccounts(contactId),
+      this.fetchContactServicesWithSubscription(contactId),
+    ]);
+
+    let account = null;
+    if (accountsResult.status === 'fulfilled') {
+      const accounts = accountsResult.value?.content || [];
+      const primary = accounts.find((item) => item.is_primary) || accounts[0];
+      if (primary) {
+        // CRM running balance: negative means the customer is in credit, positive is owed.
+        const balance = Math.round((Number(primary.balance) || 0) * 100) / 100;
+        account = {
+          state: primary.state || null,
+          currencyCode: primary.currency_code || this.currencyCode,
+          balance,
+          creditAmount: balance < 0 ? Math.abs(balance) : 0,
+          dueAmount: balance > 0 ? balance : 0,
+        };
+      }
+    } else {
+      console.error(`[CRM] Account lookup failed for contact ${contactId}:`, accountsResult.reason?.message);
+    }
+
+    let services = null;
+    if (servicesResult.status === 'fulfilled') {
+      services = (servicesResult.value?.content || []).map(mapCustomerService);
+    } else {
+      console.error(`[CRM] Services lookup failed for contact ${contactId}:`, servicesResult.reason?.message);
+    }
+
+    return { account, services };
+  }
+
+  /**
+   * Devices whose "code" custom field (the service code) equals `serviceCode`. CRM silently
+   * ignores a custom-field filter it does not recognise and returns unfiltered devices, so
+   * every result is checked again here.
+   */
+  async fetchDevicesByServiceCode(serviceCode) {
+    const queryParams = new URLSearchParams({
+      custom_fields: `${SERVICE_CODE_FIELD_KEY};${serviceCode}`,
+      include_custom_fields: 'true',
+      size: '10',
+      page: '1',
+    });
+    const response = await this.crmFetch(`/devices?${queryParams}`, { headers: this.headers });
+    const data = await this.handleResponse(response, 'Fetch devices by service code');
+    return (data.content || []).filter((device) =>
+      (device.custom_fields || []).some(
+        (field) =>
+          String(field?.key || '').toLowerCase() === SERVICE_CODE_FIELD_KEY &&
+          String(field?.value ?? '').trim() === serviceCode
+      )
+    );
+  }
+
+  async fetchContactById(contactId) {
+    const response = await this.crmFetch(`/contacts/${contactId}`, { headers: this.headers });
+    return this.handleResponse(response, `Fetch contact ${contactId}`);
+  }
+
+  /**
+   * Finds customers by the service code on their device instead of by phone number. Returns
+   * the same shape as searchCustomersByPhone, limited to contacts of the given customer type.
+   */
+  async searchCustomersByServiceCode(serviceCode, serviceTag = 'OTT') {
+    this.assertConfigured();
+    const normalizedTag = assertServiceTag(serviceTag);
+    const tagConfig = getServiceTagConfig(normalizedTag);
+    const code = normalizeServiceCode(serviceCode);
+
+    const devices = await this.fetchDevicesByServiceCode(code);
+    const contactIds = [
+      ...new Set(
+        devices
+          .filter((device) => String(device.owner?.type || '').toUpperCase() === 'CONTACT' && device.owner?.id)
+          .map((device) => device.owner.id)
+      ),
+    ];
+
+    const customers = (
+      await mapWithConcurrency(contactIds, CONTACT_LOOKUP_CONCURRENCY, async (contactId) => {
+        try {
+          const tagsData = await this.fetchContactTags(contactId);
+          if (!this.contactHasServiceTag(tagsData, tagConfig)) {
+            return null;
+          }
+          const [contact, overview] = await Promise.all([
+            this.fetchContactById(contactId),
+            this.fetchCustomerOverview(contactId),
+          ]);
+          const ownerName = devices.find((device) => device.owner?.id === contactId)?.owner?.name;
+          const fullName = [contact.first_name, contact.last_name].filter(Boolean).join(' ').trim();
+
+          return this.expandCustomerByDevice({
+            id: contactId,
+            code: contact.code || null,
+            name: contact.name || contact.company_name || fullName || ownerName || 'Unknown',
+            type: contact.type || null,
+            phone: contact.phone?.number || null,
+            serviceTag: normalizedTag,
+            serviceTagLabel: tagConfig.label,
+            serviceTypeShort: tagConfig.shortLabel,
+            crmTags: (tagsData.content || []).map((tag) => tag.name).filter(Boolean),
+            deviceCode: code,
+            account: overview.account,
+            services: overview.services,
+          }, tagConfig, { onlyCode: code });
+        } catch (err) {
+          console.error(`[CRM] Service code lookup failed for contact ${contactId}:`, err.message);
+          return null;
+        }
+      })
+    ).filter(Boolean).flat();
+
+    return { customers, paging: null, serviceTag: normalizedTag };
   }
 
   async postCustomerPayment(contactId, amount, { paymentReference } = {}) {
@@ -1226,7 +1828,11 @@ class CRMService {
     };
   }
 
-  async activatePackagesForContact(contactId, packageIds, { paymentReference } = {}) {
+  async activatePackagesForContact(
+    contactId,
+    packageIds,
+    { paymentReference, beforeActivation = null, deviceId = null } = {}
+  ) {
     this.assertConfigured();
     const serviceTag = await this.resolveServiceTagFromPackageIds(packageIds);
     const tagConfig = getServiceTagConfig(serviceTag);
@@ -1240,7 +1846,11 @@ class CRMService {
       // Tag may already exist on the contact
     }
 
-    return this.addSubscriptionForExisting(contactId, accountId, packageIds, { paymentReference });
+    return this.addSubscriptionForExisting(contactId, accountId, packageIds, {
+      paymentReference,
+      beforeActivation,
+      deviceId,
+    });
   }
 
   /**

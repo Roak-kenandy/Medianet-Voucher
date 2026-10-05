@@ -324,7 +324,7 @@ export default function CreateAccountPage() {
               footnote={
                 chargePreview.usesTrial
                   ? 'This account uses a free trial slot. Your wallet will not be charged.'
-                  : 'Your wallet is charged immediately when the account is created in the system.'
+                  : 'Your wallet is charged when you submit. If the account cannot be created, the amount is returned to your wallet.'
               }
             />
           </div>

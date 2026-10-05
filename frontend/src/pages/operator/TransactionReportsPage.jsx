@@ -11,6 +11,7 @@ import { getDefaultReportDateRange } from '../../utils/dates';
 import { downloadCsv } from '../../utils/reports';
 import TablePagination from '../../components/TablePagination';
 import '../admin/admin-shared.css';
+import { formatDateTime } from '../../constants/appSettings';
 
 const REPORT_PAGE_SIZE = 50;
 
@@ -174,7 +175,7 @@ export default function TransactionReportsPage() {
         <div className="card" style={{ marginBottom: 24 }}>
           <div className="card-header">
             <h3 className="card-title">Report Results</h3>
-            <p className="card-subtitle">Generated {new Date(report.generatedAt).toLocaleString()}</p>
+            <p className="card-subtitle">Generated {formatDateTime(report.generatedAt)}</p>
           </div>
           <div className="card-body" style={{ padding: 0 }}>
             {report.rows.length === 0 ? (
@@ -198,7 +199,7 @@ export default function TransactionReportsPage() {
                   <tbody>
                     {report.rows.map((row) => (
                       <tr key={row.id}>
-                        <td>{new Date(row.date).toLocaleString()}</td>
+                        <td>{formatDateTime(row.date)}</td>
                         <td>{row.activity}</td>
                         <td>{row.customerName || '—'}</td>
                         <td>{row.phoneNumber || '—'}</td>

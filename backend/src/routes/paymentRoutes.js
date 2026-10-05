@@ -4,12 +4,14 @@ import { getClientMeta } from '../services/auditService.js';
 import { processBmlWebhook } from '../services/bmlWebhookService.js';
 import { isBmlEnabled } from '../services/bmlPaymentService.js';
 import { webhookLimiter } from '../middleware/rateLimit.js';
+import { refreshAppSettings } from '../services/appSettingsService.js';
 
 const router = Router();
 
 router.post(
   '/bml/webhook',
   webhookLimiter,
+  refreshAppSettings,
   asyncHandler(async (req, res) => {
     if (!isBmlEnabled()) {
       throw new AppError('BML payment gateway is disabled', 503, 'BML_DISABLED');

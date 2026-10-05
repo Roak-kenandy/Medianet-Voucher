@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Plus, MoreVertical, Power, Shield } from 'lucide-react';
+import { Plus, MoreVertical, Power, Shield, KeyRound } from 'lucide-react';
 import Modal from '../../components/Modal';
 import ConfirmModal from '../../components/ConfirmModal';
 import ActionMenu from '../../components/ActionMenu';
@@ -11,6 +11,7 @@ import { useAuth } from '../../context/AuthContext';
 import { hasPermission, ROLE_LABELS } from '../../constants/permissions';
 import RoleSelector from '../../components/admin/RoleSelector';
 import './admin-shared.css';
+import { formatDate } from '../../constants/appSettings';
 
 function StatusBadge({ active }) {
   return (
@@ -21,7 +22,7 @@ function StatusBadge({ active }) {
 }
 
 export default function AdminsTab() {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const toast = useToast();
   const [admins, setAdmins] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 1 });
@@ -36,6 +37,11 @@ export default function AdminsTab() {
   const [submitting, setSubmitting] = useState(false);
   const [confirmTarget, setConfirmTarget] = useState(null);
   const [confirmLoading, setConfirmLoading] = useState(false);
+  // { mode: 'own' } or { mode: 'reset', admin }
+  const [passwordModal, setPasswordModal] = useState(null);
+  const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [passwordError, setPasswordError] = useState('');
+  const [passwordSubmitting, setPasswordSubmitting] = useState(false);
 
   const loadAdmins = () => {
     setLoading(true);
@@ -86,6 +92,44 @@ export default function AdminsTab() {
     }
   };
 
+  const openPasswordModal = (target) => {
+    setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+    setPasswordError('');
+    setPasswordModal(target);
+    setMenuOpen(null);
+  };
+
+  const handlePasswordSubmit = async (e) => {
+    e.preventDefault();
+    setPasswordError('');
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setPasswordError('The new passwords do not match');
+      return;
+    }
+    setPasswordSubmitting(true);
+    try {
+      if (passwordModal.mode === 'own') {
+        await adminApi.changeMyPassword({
+          currentPassword: passwordForm.currentPassword,
+          newPassword: passwordForm.newPassword,
+        });
+        setPasswordModal(null);
+        toast.success('Password changed. Please sign in again.');
+        await logout();
+      } else {
+        await adminApi.resetAdminPassword(passwordModal.admin.id, passwordForm.newPassword);
+        setPasswordModal(null);
+        toast.success(`Password reset for ${passwordModal.admin.name}. Their sessions were ended.`);
+      }
+    } catch (err) {
+      setPasswordError(
+        err.errors ? err.errors.map((item) => item.message).join('. ') : err.message || 'Failed to change password'
+      );
+    } finally {
+      setPasswordSubmitting(false);
+    }
+  };
+
   const handleToggleStatus = (admin) => {
     setConfirmTarget(admin);
     setMenuOpen(null);
@@ -113,6 +157,10 @@ export default function AdminsTab() {
   return (
     <>
       <div className="tab-toolbar">
+        <button className="btn btn-secondary" onClick={() => openPasswordModal({ mode: 'own' })}>
+          <KeyRound size={18} />
+          Change My Password
+        </button>
         {canCreateAdmin && (
           <button className="btn btn-primary" onClick={() => { resetForm(); setModalOpen(true); }}>
             <Plus size={18} />
@@ -179,9 +227,9 @@ export default function AdminsTab() {
                         </span>
                       </td>
                       <td><StatusBadge active={admin.is_active} /></td>
-                      <td>{new Date(admin.created_at).toLocaleDateString()}</td>
+                      <td>{formatDate(admin.created_at)}</td>
                       <td>
-                        {user?.id !== admin.id && canManageAdminStatus && (
+                        {user?.id !== admin.id && (canManageAdminStatus || canCreateAdmin) && (
                           <div>
                             <button
                               ref={menuOpen === admin.id ? menuAnchorRef : undefined}
@@ -195,13 +243,23 @@ export default function AdminsTab() {
                               onClose={() => setMenuOpen(null)}
                               anchorRef={menuAnchorRef}
                             >
-                              <button
-                                className="header-dropdown-item"
-                                onClick={() => handleToggleStatus(admin)}
-                              >
-                                <Power size={16} />
-                                {admin.is_active ? 'Deactivate' : 'Activate'}
-                              </button>
+                              {canCreateAdmin && (
+                                <button
+                                  className="header-dropdown-item"
+                                  onClick={() => openPasswordModal({ mode: 'reset', admin })}
+                                >
+                                  <KeyRound size={16} /> Reset Password
+                                </button>
+                              )}
+                              {canManageAdminStatus && (
+                                <button
+                                  className="header-dropdown-item"
+                                  onClick={() => handleToggleStatus(admin)}
+                                >
+                                  <Power size={16} />
+                                  {admin.is_active ? 'Deactivate' : 'Activate'}
+                                </button>
+                              )}
                             </ActionMenu>
                           </div>
                         )}
@@ -285,6 +343,73 @@ export default function AdminsTab() {
               />
               <p className="form-hint">
                 Must be at least 12 characters with uppercase, lowercase, number, and special character.
+              </p>
+            </div>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        open={!!passwordModal}
+        onClose={() => setPasswordModal(null)}
+        title={passwordModal?.mode === 'own' ? 'Change My Password' : `Reset Password — ${passwordModal?.admin?.name || ''}`}
+        footer={(
+          <>
+            <button type="button" className="btn btn-secondary" onClick={() => setPasswordModal(null)}>
+              Cancel
+            </button>
+            <button type="submit" form="staff-password-form" className="btn btn-primary" disabled={passwordSubmitting}>
+              {passwordSubmitting ? 'Saving...' : 'Save Password'}
+            </button>
+          </>
+        )}
+      >
+        {passwordError && <div className="alert alert-error">{passwordError}</div>}
+        <form id="staff-password-form" onSubmit={handlePasswordSubmit}>
+          <div className="form-grid">
+            {passwordModal?.mode === 'own' && (
+              <div className="form-group form-group-full">
+                <label className="form-label">Current Password</label>
+                <input
+                  type="password"
+                  className="form-input"
+                  autoComplete="current-password"
+                  value={passwordForm.currentPassword}
+                  onChange={(e) => setPasswordForm({ ...passwordForm, currentPassword: e.target.value })}
+                  required
+                />
+              </div>
+            )}
+            <div className="form-group form-group-full">
+              <label className="form-label">New Password</label>
+              <input
+                type="password"
+                className="form-input"
+                autoComplete="new-password"
+                value={passwordForm.newPassword}
+                onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })}
+                required
+                minLength={12}
+              />
+              <p className="form-hint">
+                At least 12 characters with uppercase, lowercase, number, and special character.
+              </p>
+            </div>
+            <div className="form-group form-group-full">
+              <label className="form-label">Confirm New Password</label>
+              <input
+                type="password"
+                className="form-input"
+                autoComplete="new-password"
+                value={passwordForm.confirmPassword}
+                onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })}
+                required
+                minLength={12}
+              />
+              <p className="form-hint">
+                {passwordModal?.mode === 'own'
+                  ? 'You will be signed out everywhere and asked to sign in again.'
+                  : 'This ends all of their sessions. Share the new password with them securely.'}
               </p>
             </div>
           </div>
