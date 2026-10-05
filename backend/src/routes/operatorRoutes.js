@@ -11,9 +11,13 @@ import {
   walletStatusLimiter,
   customerSearchLimiter,
   reportLimiter,
+  operatorReadLimiter,
+  limitConcurrentPerUser,
 } from '../middleware/rateLimit.js';
 import { asyncHandler, success } from '../utils/errors.js';
 import { parseIdParam } from '../utils/params.js';
+import { refreshServiceTypes } from '../constants/serviceTags.js';
+import { refreshAppSettings } from '../services/appSettingsService.js';
 import { getClientMeta } from '../services/auditService.js';
 import {
   getOperatorStats,
@@ -30,6 +34,7 @@ import {
   streamWalletTransactionReportCsv,
 } from '../services/walletTransactionReportService.js';
 import { runWithReportSlot } from '../utils/reportConcurrency.js';
+import { getDeveloperDocsForOperator } from '../services/developerDocsService.js';
 import { listLiveMarketingAdsForOperators } from '../services/marketingAdService.js';
 import {
   listActiveKnowledgeDocumentsForOperators,
@@ -66,7 +71,10 @@ import {
 
 const router = Router();
 
-router.use(authenticate, ensureActiveAccount, requireRole('operator'));
+router.use(authenticate, ensureActiveAccount, requireRole('operator'), refreshServiceTypes, refreshAppSettings);
+
+// Dashboard and history reads share the database pool with every tenant's money paths.
+const operatorReadGuards = [operatorReadLimiter, limitConcurrentPerUser(4, 'operator-read')];
 
 router.get(
   '/wallet',
@@ -80,6 +88,7 @@ router.get(
 router.get(
   '/wallet/transactions',
   requireOperatorPermission('transactions'),
+  operatorReadGuards,
   asyncHandler(async (req, res) => {
     const queryParams = walletTransactionQuerySchema.parse(req.query);
     const result = await listWalletTransactions(req.user.id, queryParams);
@@ -187,8 +196,8 @@ router.get(
   requireOperatorPermission('customers'),
   customerSearchLimiter,
   asyncHandler(async (req, res) => {
-    const { phone, serviceTag } = customerSearchQuerySchema.parse(req.query);
-    const result = await searchCustomers(req.user.id, phone, serviceTag);
+    const { phone, code, serviceTag } = customerSearchQuerySchema.parse(req.query);
+    const result = await searchCustomers(req.user.id, { phone, code }, serviceTag);
     success(res, result);
   })
 );
@@ -215,9 +224,20 @@ router.post(
   })
 );
 
+/** Operator API documentation: only for operators Medianet has enabled API access for. */
+router.get(
+  '/developer-docs',
+  operatorReadLimiter,
+  asyncHandler(async (req, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    success(res, await getDeveloperDocsForOperator(req.user.id));
+  })
+);
+
 router.get(
   '/stats',
   requireOperatorPermission('dashboard'),
+  operatorReadGuards,
   asyncHandler(async (req, res) => {
     const stats = await getOperatorStats(req.user.id);
     success(res, stats);
@@ -256,6 +276,7 @@ router.get(
 router.get(
   '/accounts',
   requireOperatorPermission('accounts'),
+  operatorReadGuards,
   asyncHandler(async (req, res) => {
     const queryParams = operatorAccountsQuerySchema.parse(req.query);
     const result = await listAccounts(req.user.id, queryParams);
@@ -266,12 +287,15 @@ router.get(
 router.get(
   '/accounts/export',
   requireOperatorPermission('accounts'),
+  reportLimiter,
   asyncHandler(async (req, res) => {
     const filters = operatorAccountsExportSchema.parse(req.query);
-    const csv = await exportAccountsCsv(req.user.id, filters);
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', 'attachment; filename="customer-history.csv"');
-    res.send(csv);
+    await runWithReportSlot(req, async () => {
+      const csv = await exportAccountsCsv(req.user.id, filters);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="customer-history.csv"');
+      res.send(csv);
+    });
   })
 );
 

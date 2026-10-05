@@ -17,6 +17,7 @@ import {
 } from '../../utils/reports';
 import { getDefaultReportDateRange } from '../../utils/dates';
 import '../admin/admin-shared.css';
+import { formatDateTime } from '../../constants/appSettings';
 
 const REPORT_PAGE_SIZE = 50;
 
@@ -184,7 +185,7 @@ export default function OperatorReportsPage() {
           <div className="card-header">
             <h3 className="card-title">Account Activity</h3>
             <p className="card-subtitle">
-              Generated {new Date(report.generatedAt).toLocaleString()}
+              Generated {formatDateTime(report.generatedAt)}
               {pagination.total != null && <> · {pagination.total.toLocaleString()} total rows</>}
             </p>
           </div>

@@ -17,6 +17,7 @@ import {
 import { formatMoney } from '../../utils/money';
 import { downloadCsv } from '../../utils/reports';
 import '../admin/admin-shared.css';
+import { formatDateTime } from '../../constants/appSettings';
 
 function StatusBadge({ status }) {
   const map = {
@@ -38,6 +39,8 @@ function ActivityBadge({ activity }) {
   const label = customerHistoryActivityLabel(activity);
   const map = {
     customer_subscribe: 'badge-info',
+    customer_renew: 'badge-info',
+    customer_upgrade: 'badge-info',
     bulk_create: 'badge-neutral',
     customer_crm_topup: 'badge-success',
     customer_topup: 'badge-success',
@@ -96,7 +99,7 @@ function AccountCard({ acc, packageLabel }) {
       )}
       <div className="data-card-row">
         <span className="data-card-label">Date</span>
-        <span className="data-card-value">{new Date(acc.created_at).toLocaleString()}</span>
+        <span className="data-card-value">{formatDateTime(acc.created_at)}</span>
       </div>
     </div>
   );
@@ -282,7 +285,7 @@ export default function AccountsPage() {
                       const packages = accountPackageLabel(acc);
                       return (
                         <tr key={acc.id}>
-                          <td>{new Date(acc.created_at).toLocaleString()}</td>
+                          <td>{formatDateTime(acc.created_at)}</td>
                           <td><ActivityBadge activity={acc.activity} /></td>
                           <td style={{ fontWeight: 500 }}>{acc.full_name}</td>
                           <td>{acc.phone_number}</td>

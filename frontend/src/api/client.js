@@ -134,15 +134,33 @@ export const adminApi = {
   getOperators: (params = {}) => apiRequest(`/admin/operators${buildQuery(params)}`),
   getPackages: () => apiRequest('/admin/packages/active').then((data) => data.packages),
   getPackagesList: (params = {}) => apiRequest(`/admin/packages${buildQuery(params)}`),
-  getCrmRecommendations: (serviceTag = 'OTT') =>
-    apiRequest(`/admin/packages/crm-recommendations${buildQuery({ serviceTag })}`).then(
+  getCrmRecommendations: (serviceTag, salesModelId) =>
+    apiRequest(`/admin/packages/crm-recommendations${buildQuery({ serviceTag, salesModelId })}`).then(
       (data) => data.recommendations
     ),
+  getAppSettings: () => apiRequest('/admin/settings'),
+  updateAppSettings: (payload) =>
+    apiRequest('/admin/settings', { method: 'PUT', body: JSON.stringify(payload) }),
+  getServiceTypes: () => apiRequest('/admin/service-types').then((data) => data.serviceTypes),
+  createServiceType: (payload) =>
+    apiRequest('/admin/service-types', { method: 'POST', body: JSON.stringify(payload) }),
+  updateServiceType: (key, payload) =>
+    apiRequest(`/admin/service-types/${encodeURIComponent(key)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  getSalesModels: () => apiRequest('/admin/sales-models').then((data) => data.salesModels),
+  createSalesModel: (payload) =>
+    apiRequest('/admin/sales-models', { method: 'POST', body: JSON.stringify(payload) }),
+  updateSalesModel: (id, payload) =>
+    apiRequest(`/admin/sales-models/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   createPackage: (payload) =>
     apiRequest('/admin/packages', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  updatePackage: (id, payload) =>
+    apiRequest(`/admin/packages/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   updatePackageStatus: (id, isActive) =>
     apiRequest(`/admin/packages/${id}/status`, {
       method: 'PATCH',
@@ -197,6 +215,62 @@ export const adminApi = {
   updateOperator: (id, payload) =>
     apiRequest(`/admin/operators/${id}`, {
       method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  updateOperatorPackages: (operatorId, assignment) =>
+    apiRequest(`/admin/operators/${operatorId}/packages`, {
+      method: 'PATCH',
+      body: JSON.stringify(assignment),
+    }),
+  getPackageGroups: () => apiRequest('/admin/package-groups').then((data) => data.groups),
+  createPackageGroup: (payload) =>
+    apiRequest('/admin/package-groups', { method: 'POST', body: JSON.stringify(payload) }),
+  updatePackageGroup: (id, payload) =>
+    apiRequest(`/admin/package-groups/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  deletePackageGroup: (id) => apiRequest(`/admin/package-groups/${id}`, { method: 'DELETE' }),
+  adjustOperatorTrialQuota: (operatorId, payload) =>
+    apiRequest(`/admin/operators/${operatorId}/trial-quota`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  getOperatorUsers: (operatorId) => apiRequest(`/admin/operators/${operatorId}/users`),
+  createOperatorUser: (operatorId, payload) =>
+    apiRequest(`/admin/operators/${operatorId}/users`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateOperatorUser: (operatorId, userId, payload) =>
+    apiRequest(`/admin/operators/${operatorId}/users/${userId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  resetOperatorUserPassword: (operatorId, userId, password) =>
+    apiRequest(`/admin/operators/${operatorId}/users/${userId}/password`, {
+      method: 'PATCH',
+      body: JSON.stringify({ password }),
+    }),
+  getOperatorApiKeys: (operatorId) => apiRequest(`/admin/operators/${operatorId}/api-keys`),
+  setOperatorApiAccess: (operatorId, enabled) =>
+    apiRequest(`/admin/operators/${operatorId}/api-access`, {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
+    }),
+  getDeveloperDocs: () => apiRequest('/admin/developer-docs'),
+  createOperatorApiKey: (operatorId, payload = {}) =>
+    apiRequest(`/admin/operators/${operatorId}/api-keys`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  revokeOperatorApiKey: (operatorId, keyId) =>
+    apiRequest(`/admin/operators/${operatorId}/api-keys/${keyId}`, { method: 'DELETE' }),
+  resetAdminPassword: (id, password) =>
+    apiRequest(`/admin/admins/${id}/password`, {
+      method: 'PATCH',
+      body: JSON.stringify({ password }),
+    }),
+  changeMyPassword: (payload) =>
+    apiRequest('/admin/me/password', {
+      method: 'POST',
       body: JSON.stringify(payload),
     }),
   generateReport: (params) => {
@@ -288,6 +362,7 @@ export const adminApi = {
 };
 
 export const operatorApi = {
+  getDeveloperDocs: () => apiRequest('/operator/developer-docs'),
   getStats: () => apiRequest('/operator/stats'),
   getMarketingAds: () => apiRequest('/operator/marketing-ads').then((data) => data.ads),
   getKnowledgeDocuments: () =>
@@ -336,8 +411,9 @@ export const operatorApi = {
     ),
   getWalletTopupBill: (reference) =>
     apiRequest(`/operator/wallet/topup/bill${buildQuery({ reference })}`),
-  searchCustomers: (phone, serviceTag) =>
-    apiRequest(`/operator/customers/search${buildQuery({ phone, serviceTag })}`),
+  /** `search` is `{ phone }` or `{ code }` (service code). */
+  searchCustomers: (search, serviceTag) =>
+    apiRequest(`/operator/customers/search${buildQuery({ ...search, serviceTag })}`),
   crmTopupCustomer: (payload) =>
     apiRequest('/operator/customers/crm-topup', {
       method: 'POST',

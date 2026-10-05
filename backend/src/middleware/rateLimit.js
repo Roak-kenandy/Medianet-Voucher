@@ -3,9 +3,31 @@ import rateLimit from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
 import { config } from '../config/index.js';
 
-/** Relies on `trust proxy` (TRUST_PROXY) so req.ip is the real client behind nginx. */
-function clientIpKey(req) {
-  return req.ip || req.socket?.remoteAddress || 'unknown';
+/**
+ * Relies on `trust proxy` (TRUST_PROXY) so req.ip is the real client behind nginx.
+ * IPv6 clients are keyed on their /64 network: one subscriber controls a whole /64, so
+ * keying on the full address would hand out a fresh budget per address.
+ */
+export function clientIpKey(req) {
+  const ip = String(req.ip || req.socket?.remoteAddress || 'unknown');
+  const mapped = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  if (mapped) return mapped[1];
+  if (!ip.includes(':')) return ip;
+  return `${ipv6Prefix64(ip)}::/64`;
+}
+
+function ipv6Prefix64(address) {
+  const [head, tail = ''] = address.split('%')[0].toLowerCase().split('::');
+  const headGroups = head ? head.split(':') : [];
+  const tailGroups = tail ? tail.split(':') : [];
+  const missing = Math.max(0, 8 - headGroups.length - tailGroups.length);
+  const groups = address.includes('::')
+    ? [...headGroups, ...Array(missing).fill('0'), ...tailGroups]
+    : headGroups;
+  return groups
+    .slice(0, 4)
+    .map((group) => group.replace(/^0+(?=.)/, ''))
+    .join(':');
 }
 
 function shortHash(value) {
@@ -52,7 +74,8 @@ export const globalLimiter = rateLimit({
 /**
  * Per source: caps password spraying across many accounts from one client.
  * Per account + source: keyed on both so an attacker cannot rate-limit a victim's email
- * from elsewhere (the per-account DB lockout still applies globally).
+ * from elsewhere. This is the hard block after repeated wrong passwords from one client;
+ * the account-wide DB lock is only a much higher ceiling against distributed guessing.
  */
 export const loginIpLimiter = rateLimit({
   ...rateLimitDefaults,
@@ -69,8 +92,8 @@ export const loginIpLimiter = rateLimit({
 
 export const loginLimiter = rateLimit({
   ...rateLimitDefaults,
-  windowMs: 15 * 60 * 1000,
-  max: 10,
+  windowMs: config.security.lockoutMinutes * 60 * 1000,
+  max: config.security.maxLoginAttempts,
   skipSuccessfulRequests: true,
   keyGenerator: (req) => {
     const email = req.body?.email?.toLowerCase?.()?.trim?.() || '';
@@ -171,3 +194,72 @@ export const customerSearchLimiter = rateLimit({
     message: 'Too many customer lookups. Please wait a moment.',
   },
 });
+
+/** Operator dashboard / history reads: plain list queries, but they share the DB pool. */
+export const operatorReadLimiter = rateLimit({
+  ...rateLimitDefaults,
+  windowMs: 60 * 1000,
+  max: 120,
+  keyGenerator: portalRateLimitKey,
+  message: {
+    success: false,
+    code: 'RATE_LIMIT',
+    message: 'Too many requests. Please wait a moment.',
+  },
+});
+
+export const staffDashboardLimiter = rateLimit({
+  ...rateLimitDefaults,
+  windowMs: 60 * 1000,
+  max: 30,
+  keyGenerator: portalRateLimitKey,
+  message: {
+    success: false,
+    code: 'RATE_LIMIT',
+    message: 'Too many dashboard refreshes. Please wait a moment.',
+  },
+});
+
+export const passwordChangeLimiter = rateLimit({
+  ...rateLimitDefaults,
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyGenerator: portalRateLimitKey,
+  message: {
+    success: false,
+    code: 'RATE_LIMIT',
+    message: 'Too many password change attempts. Please try again later.',
+  },
+});
+
+/**
+ * Caps how many requests one signed-in user may have in flight on the routes it guards.
+ * A rate limit alone does not stop a burst of slow queries from occupying the shared
+ * database pool; this does. Counters are per process.
+ */
+export function limitConcurrentPerUser(max, scope) {
+  const inFlight = new Map();
+  return (req, res, next) => {
+    const key = `${scope}:${req.user?.role || 'anon'}:${req.user?.id ?? clientIpKey(req)}`;
+    const active = inFlight.get(key) || 0;
+    if (active >= max) {
+      return res.status(429).json({
+        success: false,
+        code: 'TOO_MANY_CONCURRENT_REQUESTS',
+        message: 'Earlier requests are still loading. Please wait for them to finish.',
+      });
+    }
+    inFlight.set(key, active + 1);
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      const remaining = (inFlight.get(key) || 1) - 1;
+      if (remaining <= 0) inFlight.delete(key);
+      else inFlight.set(key, remaining);
+    };
+    res.once('finish', release);
+    res.once('close', release);
+    next();
+  };
+}

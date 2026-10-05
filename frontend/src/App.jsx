@@ -9,6 +9,7 @@ import AdminDashboard from './pages/admin/AdminDashboard';
 import OperatorsPage from './pages/admin/OperatorsPage';
 import AdminsPage from './pages/admin/AdminsPage';
 import ReportsPage from './pages/admin/ReportsPage';
+import CrmSettingsPage from './pages/admin/CrmSettingsPage';
 import HelpCenterPage from './pages/shared/HelpCenterPage';
 import SettingsPage from './pages/shared/SettingsPage';
 import OperatorDashboard from './pages/operator/OperatorDashboard';
@@ -24,6 +25,7 @@ import PackagesPage from './pages/admin/PackagesPage';
 import OperatorTopupPage from './pages/admin/OperatorTopupPage';
 import MarketingAdsPage from './pages/admin/MarketingAdsPage';
 import KnowledgeBasePage from './pages/admin/KnowledgeBasePage';
+import DeveloperDocsPage from './pages/shared/DeveloperDocsPage';
 import { STAFF_ROLES } from './constants/permissions';
 
 const staffRoute = (element) => (
@@ -48,6 +50,8 @@ export default function App() {
           <Route path="/admin/operator-topup" element={staffRoute(<OperatorTopupPage />)} />
           <Route path="/admin/marketing-ads" element={staffRoute(<MarketingAdsPage />)} />
           <Route path="/admin/knowledge-base" element={staffRoute(<KnowledgeBasePage />)} />
+          <Route path="/admin/crm-settings" element={staffRoute(<CrmSettingsPage />)} />
+          <Route path="/admin/developer" element={staffRoute(<DeveloperDocsPage />)} />
           <Route path="/admin/help" element={staffRoute(<HelpCenterPage />)} />
           <Route path="/admin/settings" element={staffRoute(<SettingsPage />)} />
           <Route path="/admin/users" element={<Navigate to="/admin/operators" replace />} />
@@ -65,6 +69,7 @@ export default function App() {
           <Route path="/operator/wallet" element={<ProtectedRoute allowedRoles={['operator']}><WalletPage /></ProtectedRoute>} />
           <Route path="/operator/wallet/payment/return" element={<ProtectedRoute allowedRoles={['operator']}><WalletPaymentReturnPage /></ProtectedRoute>} />
           <Route path="/operator/reports" element={<ProtectedRoute allowedRoles={['operator']}><OperatorReportsPage /></ProtectedRoute>} />
+          <Route path="/operator/developer" element={<ProtectedRoute allowedRoles={['operator']}><DeveloperDocsPage /></ProtectedRoute>} />
           <Route path="/operator/help" element={<ProtectedRoute allowedRoles={['operator']}><HelpCenterPage /></ProtectedRoute>} />
           <Route path="/operator/settings" element={<ProtectedRoute allowedRoles={['operator']}><SettingsPage /></ProtectedRoute>} />
 

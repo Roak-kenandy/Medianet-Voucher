@@ -19,6 +19,7 @@ export const ROLE_PERMISSIONS = {
     adjustWallet: true,
     manageMarketingAds: true,
     manageKnowledgeBase: true,
+    manageCrmSettings: true,
   },
   sales: {
     createAdmin: false,
@@ -29,6 +30,7 @@ export const ROLE_PERMISSIONS = {
     adjustWallet: true,
     manageMarketingAds: true,
     manageKnowledgeBase: true,
+    manageCrmSettings: false,
   },
   finance: {
     createAdmin: true,
@@ -39,6 +41,7 @@ export const ROLE_PERMISSIONS = {
     adjustWallet: true,
     manageMarketingAds: false,
     manageKnowledgeBase: false,
+    manageCrmSettings: false,
   },
 };
 

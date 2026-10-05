@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react';
-import { Plus, Package, RefreshCw, Power } from 'lucide-react';
+import { Plus, Package, RefreshCw, Power, Layers, Pencil } from 'lucide-react';
 import Modal from '../../components/Modal';
+import PackageGroupsModal from '../../components/admin/PackageGroupsModal';
 import TableToolbar from '../../components/TableToolbar';
 import TablePagination from '../../components/TablePagination';
 import { adminApi } from '../../api/client';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import { hasPermission } from '../../constants/permissions';
-import { SERVICE_TAGS, getServiceTagLabel } from '../../constants/serviceTags';
+import { getServiceTypes, getServiceTagLabel } from '../../constants/serviceTags';
 import './admin-shared.css';
 
 function StatusBadge({ active }) {
@@ -18,15 +19,159 @@ function StatusBadge({ active }) {
   );
 }
 
+const emptyEligibility = () => ({
+  packageRole: 'standalone',
+  upgradeFamily: '',
+  upgradeTier: '',
+  requiredPackageIds: [],
+});
+
+/** Only the fields that belong to the chosen role are sent. */
+function eligibilityPayload(form) {
+  return {
+    packageRole: form.packageRole,
+    upgradeFamily: form.packageRole === 'base' ? form.upgradeFamily.trim() : null,
+    upgradeTier: form.packageRole === 'base' ? Number(form.upgradeTier) : null,
+    requiredPackageIds: form.packageRole === 'addon' ? form.requiredPackageIds : [],
+  };
+}
+
+function RoleSummary({ pkg }) {
+  const role = pkg.package_role || 'standalone';
+  if (role === 'base') {
+    return (
+      <>
+        <span className="badge badge-info">Base</span>
+        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+          {pkg.upgrade_family} · tier {pkg.upgrade_tier}
+        </div>
+      </>
+    );
+  }
+  if (role === 'addon') {
+    const count = (pkg.required_package_ids || []).length;
+    return (
+      <>
+        <span className="badge badge-warning">Add-on</span>
+        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+          with {count} base {count === 1 ? 'package' : 'packages'}
+        </div>
+      </>
+    );
+  }
+  return <span className="badge">Standalone</span>;
+}
+
+/**
+ * Selling rules for a package: whether it is a main plan that customers upgrade through,
+ * an add-on that needs a main plan, or something sold on its own.
+ */
+function EligibilityFields({ form, onChange, basePackages, families, packageId }) {
+  const set = (patch) => onChange({ ...form, ...patch });
+  const choices = basePackages.filter(
+    (pkg) => pkg.id !== packageId && pkg.serviceTag === form.serviceTag
+  );
+  const toggleRequired = (id) =>
+    set({
+      requiredPackageIds: form.requiredPackageIds.includes(id)
+        ? form.requiredPackageIds.filter((item) => item !== id)
+        : [...form.requiredPackageIds, id],
+    });
+
+  return (
+    <>
+      <div className="form-group form-group-full">
+        <label className="form-label">Package Role</label>
+        <select
+          className="form-input"
+          value={form.packageRole}
+          onChange={(e) => set({ packageRole: e.target.value })}
+        >
+          <option value="standalone">Standalone — can always be sold</option>
+          <option value="base">Base — a main plan customers can upgrade from</option>
+          <option value="addon">Add-on — only with certain base packages</option>
+        </select>
+      </div>
+      {form.packageRole === 'base' && (
+        <>
+          <div className="form-group">
+            <label className="form-label">Upgrade Family</label>
+            <input
+              className="form-input"
+              list="package-upgrade-families"
+              value={form.upgradeFamily}
+              onChange={(e) => set({ upgradeFamily: e.target.value })}
+              placeholder="e.g. OTT plans"
+              maxLength={60}
+              required
+            />
+            <datalist id="package-upgrade-families">
+              {families.map((family) => (
+                <option key={family} value={family} />
+              ))}
+            </datalist>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Tier</label>
+            <input
+              type="number"
+              className="form-input"
+              value={form.upgradeTier}
+              onChange={(e) => set({ upgradeTier: e.target.value })}
+              min={1}
+              step={1}
+              placeholder="1 = lowest"
+              required
+            />
+          </div>
+          <p className="form-hint form-group-full">
+            Customers on a base package can only move to a higher tier in the same family. Lower tiers
+            and other families are not offered.
+          </p>
+        </>
+      )}
+      {form.packageRole === 'addon' && (
+        <div className="form-group form-group-full">
+          <label className="form-label">Can be sold with</label>
+          {choices.length === 0 ? (
+            <p className="form-hint">
+              No base packages for this customer type yet. Set a package to Base first.
+            </p>
+          ) : (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 18px' }}>
+              {choices.map((pkg) => (
+                <label key={pkg.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={form.requiredPackageIds.includes(pkg.id)}
+                    onChange={() => toggleRequired(pkg.id)}
+                  />
+                  {pkg.name}
+                </label>
+              ))}
+            </div>
+          )}
+          <p className="form-hint">
+            The customer must have one of these (or buy it at the same time). On an upgrade to a base
+            package that is not ticked here, this add-on is cancelled.
+          </p>
+        </div>
+      )}
+    </>
+  );
+}
+
 const emptyForm = () => ({
   name: '',
   serviceTag: 'OTT',
+  salesModelId: '',
   sku: '',
   productId: '',
   priceTermId: '',
   priceAmount: '',
   currencyCode: 'MVR',
   description: '',
+  ...emptyEligibility(),
 });
 
 export default function PackagesTab() {
@@ -44,6 +189,90 @@ export default function PackagesTab() {
   const [form, setForm] = useState(emptyForm());
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [groupsOpen, setGroupsOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState(null);
+  const [editForm, setEditForm] = useState({
+    name: '',
+    serviceTag: 'OTT',
+    salesModelId: '',
+    sku: '',
+    description: '',
+    productId: '',
+    priceTermId: '',
+    priceAmount: '',
+    currencyCode: 'MVR',
+    ...emptyEligibility(),
+  });
+  const [editError, setEditError] = useState('');
+  const [basePackages, setBasePackages] = useState([]);
+  const [families, setFamilies] = useState([]);
+
+  // Base packages (for the add-on picker) and the family names already in use.
+  const loadEligibilityChoices = () =>
+    adminApi
+      .getPackages()
+      .then((all) => {
+        const bases = all.filter((pkg) => pkg.packageRole === 'base');
+        setBasePackages(bases);
+        setFamilies([...new Set(bases.map((pkg) => pkg.upgradeFamily).filter(Boolean))].sort());
+      })
+      .catch(() => {});
+
+  const openEdit = (pkg) => {
+    setEditForm({
+      name: pkg.name,
+      serviceTag: pkg.service_tag || 'OTT',
+      salesModelId: pkg.sales_model_id ?? '',
+      sku: pkg.sku || '',
+      description: pkg.description || '',
+      productId: pkg.product_id || '',
+      priceTermId: pkg.price_term_id || '',
+      priceAmount: pkg.price_amount ?? '',
+      currencyCode: pkg.currency_code || 'MVR',
+      packageRole: pkg.package_role || 'standalone',
+      upgradeFamily: pkg.upgrade_family || '',
+      upgradeTier: pkg.upgrade_tier ?? '',
+      requiredPackageIds: pkg.required_package_ids || [],
+    });
+    setEditError('');
+    setEditTarget(pkg);
+  };
+
+  const handleEdit = async (e) => {
+    e.preventDefault();
+    setEditError('');
+    setSubmitting(true);
+    try {
+      await adminApi.updatePackage(editTarget.id, {
+        ...editForm,
+        salesModelId: Number(editForm.salesModelId),
+        priceAmount: Number(editForm.priceAmount),
+        ...eligibilityPayload(editForm),
+      });
+      setEditTarget(null);
+      toast.success('Package updated');
+      loadPackages();
+      loadEligibilityChoices();
+    } catch (err) {
+      setEditError(err.errors ? err.errors.map((item) => item.message).join('. ') : err.message || 'Failed to update package');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+  const [salesModels, setSalesModels] = useState([]);
+  const [catalogSalesModelId, setCatalogSalesModelId] = useState('');
+  const serviceTypeOptions = getServiceTypes({ activeOnly: true });
+
+  useEffect(() => {
+    adminApi
+      .getSalesModels()
+      .then((models) => {
+        const active = models.filter((model) => model.isActive);
+        setSalesModels(active);
+        setCatalogSalesModelId((current) => current || (active[0]?.id ?? ''));
+      })
+      .catch(() => setSalesModels([]));
+  }, []);
 
   const loadPackages = () => {
     setLoading(true);
@@ -60,6 +289,10 @@ export default function PackagesTab() {
     loadPackages();
   }, [page, search]);
 
+  useEffect(() => {
+    loadEligibilityChoices();
+  }, []);
+
   const handleSearchChange = (value) => {
     setSearch(value);
     setPage(1);
@@ -72,12 +305,23 @@ export default function PackagesTab() {
   };
 
   const loadCrmCatalog = async (serviceTag = catalogServiceTag) => {
+    if (!catalogSalesModelId) {
+      setError('Select a sales model first');
+      return;
+    }
     setCrmLoading(true);
     setError('');
     try {
-      const items = await adminApi.getCrmRecommendations(serviceTag);
+      const items = await adminApi.getCrmRecommendations(serviceTag, catalogSalesModelId);
       setRecommendations(items);
-      setForm((prev) => ({ ...prev, serviceTag, productId: '', priceTermId: '', priceAmount: '' }));
+      setForm((prev) => ({
+        ...prev,
+        serviceTag,
+        salesModelId: Number(catalogSalesModelId),
+        productId: '',
+        priceTermId: '',
+        priceAmount: '',
+      }));
       if (!items.length) {
         toast.warning(`No packages returned for ${getServiceTagLabel(serviceTag)}`);
       }
@@ -131,11 +375,13 @@ export default function PackagesTab() {
       await adminApi.createPackage({
         ...form,
         priceAmount: Number(form.priceAmount),
+        ...eligibilityPayload(form),
       });
       setModalOpen(false);
       resetForm();
       toast.success('Package created successfully');
       loadPackages();
+      loadEligibilityChoices();
     } catch (err) {
       setError(err.message || 'Failed to create package');
       if (err.errors) {
@@ -167,8 +413,12 @@ export default function PackagesTab() {
           You have view-only access to packages. Creating or changing packages requires Admin or Sales role.
         </div>
       )}
-      {canCreatePackage && (
       <div className="tab-toolbar">
+        <button className="btn btn-secondary" onClick={() => setGroupsOpen(true)}>
+          <Layers size={18} />
+          Package Groups
+        </button>
+        {canCreatePackage && (
         <button
           className="btn btn-primary"
           onClick={() => {
@@ -179,8 +429,139 @@ export default function PackagesTab() {
           <Plus size={18} />
           Create Package
         </button>
+        )}
       </div>
-      )}
+
+      <Modal
+        open={!!editTarget}
+        onClose={() => setEditTarget(null)}
+        title={`Edit Package — ${editTarget?.name || ''}`}
+        wide
+        footer={(
+          <>
+            <button type="button" className="btn btn-secondary" onClick={() => setEditTarget(null)}>
+              Cancel
+            </button>
+            <button type="submit" form="edit-package-form" className="btn btn-primary" disabled={submitting}>
+              {submitting ? 'Saving...' : 'Save Changes'}
+            </button>
+          </>
+        )}
+      >
+        {editError && <div className="alert alert-error">{editError}</div>}
+        <form id="edit-package-form" onSubmit={handleEdit}>
+          <div className="form-grid">
+            <div className="form-group form-group-full">
+              <label className="form-label">Package Name</label>
+              <input
+                className="form-input"
+                value={editForm.name}
+                onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                required
+                minLength={2}
+                maxLength={200}
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Customer Type</label>
+              <select
+                className="form-input"
+                value={editForm.serviceTag}
+                onChange={(e) => setEditForm({ ...editForm, serviceTag: e.target.value })}
+              >
+                {!serviceTypeOptions.some((type) => type.key === editForm.serviceTag) && (
+                  <option value={editForm.serviceTag}>{getServiceTagLabel(editForm.serviceTag)} (inactive)</option>
+                )}
+                {serviceTypeOptions.map((type) => (
+                  <option key={type.key} value={type.key}>{type.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Sales Model</label>
+              <select
+                className="form-input"
+                value={editForm.salesModelId}
+                onChange={(e) => setEditForm({ ...editForm, salesModelId: e.target.value })}
+                required
+              >
+                <option value="">Select a sales model</option>
+                {editTarget?.sales_model_id != null &&
+                  !salesModels.some((model) => model.id === editTarget.sales_model_id) && (
+                    <option value={editTarget.sales_model_id}>{editTarget.sales_model_name} (inactive)</option>
+                  )}
+                {salesModels.map((model) => (
+                  <option key={model.id} value={model.id}>{model.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">SKU (optional)</label>
+              <input
+                className="form-input"
+                value={editForm.sku}
+                onChange={(e) => setEditForm({ ...editForm, sku: e.target.value })}
+                maxLength={100}
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Price ({editForm.currencyCode})</label>
+              <input
+                type="number"
+                className="form-input"
+                value={editForm.priceAmount}
+                onChange={(e) => setEditForm({ ...editForm, priceAmount: e.target.value })}
+                min={0}
+                step="0.01"
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label">CRM Product ID</label>
+              <input
+                className="form-input"
+                value={editForm.productId}
+                onChange={(e) => setEditForm({ ...editForm, productId: e.target.value.trim() })}
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label">CRM Price Term ID</label>
+              <input
+                className="form-input"
+                value={editForm.priceTermId}
+                onChange={(e) => setEditForm({ ...editForm, priceTermId: e.target.value.trim() })}
+                required
+              />
+            </div>
+            <EligibilityFields
+              form={editForm}
+              onChange={setEditForm}
+              basePackages={basePackages}
+              families={families}
+              packageId={editTarget?.id}
+            />
+            <div className="form-group form-group-full">
+              <label className="form-label">Description (optional)</label>
+              <textarea
+                className="form-input"
+                rows={2}
+                value={editForm.description}
+                onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+                maxLength={1000}
+              />
+            </div>
+          </div>
+          <p className="form-hint">
+            The price is what operators are charged and what is posted to CRM as the payment, and the
+            product and price term are what CRM subscribes the customer to. Keep all three in line with
+            CRM; changes apply to sales made from now on. Changing the customer type or sales model changes
+            which operators can sell this package: it disappears for operators not allowed the new one.
+          </p>
+        </form>
+      </Modal>
+
+      <PackageGroupsModal open={groupsOpen} canManage={canCreatePackage} onClose={() => setGroupsOpen(false)} />
 
       <div className="card">
         <TableToolbar
@@ -217,12 +598,14 @@ export default function PackagesTab() {
                     <tr>
                       <th>Name</th>
                       <th>Service</th>
+                      <th>Sales model</th>
+                      <th>Role</th>
                       <th>SKU</th>
                       <th>Price</th>
                       <th>Product ID</th>
                       <th>Price Term ID</th>
                       <th>Status</th>
-                      {canManagePackageStatus && <th>Actions</th>}
+                      {(canManagePackageStatus || canCreatePackage) && <th>Actions</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -230,20 +613,32 @@ export default function PackagesTab() {
                       <tr key={pkg.id}>
                         <td style={{ fontWeight: 500 }}>{pkg.name}</td>
                         <td><span className="badge badge-info">{getServiceTagLabel(pkg.service_tag || 'OTT')}</span></td>
+                        <td>{pkg.sales_model_name || '—'}</td>
+                        <td><RoleSummary pkg={pkg} /></td>
                         <td>{pkg.sku || '—'}</td>
                         <td>{Number(pkg.price_amount).toLocaleString()} {pkg.currency_code}</td>
                         <td style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{pkg.product_id}</td>
                         <td style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{pkg.price_term_id}</td>
                         <td><StatusBadge active={pkg.is_active} /></td>
-                        {canManagePackageStatus && (
+                        {(canManagePackageStatus || canCreatePackage) && (
                         <td>
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => toggleStatus(pkg)}
-                          >
-                            <Power size={14} />
-                            {pkg.is_active ? 'Deactivate' : 'Activate'}
-                          </button>
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {canCreatePackage && (
+                              <button className="btn btn-secondary btn-sm" onClick={() => openEdit(pkg)}>
+                                <Pencil size={14} />
+                                Edit
+                              </button>
+                            )}
+                            {canManagePackageStatus && (
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => toggleStatus(pkg)}
+                              >
+                                <Power size={14} />
+                                {pkg.is_active ? 'Deactivate' : 'Activate'}
+                              </button>
+                            )}
+                          </div>
                         </td>
                         )}
                       </tr>
@@ -300,8 +695,25 @@ export default function PackagesTab() {
                 setForm((prev) => ({ ...prev, serviceTag: e.target.value, productId: '', priceTermId: '' }));
               }}
             >
-              {SERVICE_TAGS.map((tag) => (
+              {serviceTypeOptions.map((tag) => (
                 <option key={tag.key} value={tag.key}>{tag.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Sales Model</label>
+            <select
+              className="form-input"
+              value={catalogSalesModelId}
+              onChange={(e) => {
+                setCatalogSalesModelId(e.target.value);
+                setRecommendations([]);
+                setForm((prev) => ({ ...prev, salesModelId: '', productId: '', priceTermId: '' }));
+              }}
+            >
+              {!salesModels.length && <option value="">No sales models configured</option>}
+              {salesModels.map((model) => (
+                <option key={model.id} value={model.id}>{model.name}</option>
               ))}
             </select>
           </div>
@@ -315,10 +727,9 @@ export default function PackagesTab() {
             {crmLoading ? 'Loading catalog...' : 'Load catalog'}
           </button>
           <p className="form-hint" style={{ marginTop: 8 }}>
-            Loads {SERVICE_TAGS.find((t) => t.key === catalogServiceTag)?.label} products
-            {catalogServiceTag === 'OTT'
-              ? ' with OTT pricing and Retail sales model.'
-              : ' with Retail pricing.'}
+            Loads {getServiceTagLabel(catalogServiceTag)} products with prices from the{' '}
+            {salesModels.find((model) => String(model.id) === String(catalogSalesModelId))?.name || 'selected'}{' '}
+            sales model. The package is saved under that customer type and sales model.
           </p>
         </div>
 
@@ -410,6 +821,8 @@ export default function PackagesTab() {
                 required
               />
             </div>
+
+            <EligibilityFields form={form} onChange={setForm} basePackages={basePackages} families={families} />
 
             <div className="form-group form-group-full">
               <label className="form-label">Notes / Description</label>

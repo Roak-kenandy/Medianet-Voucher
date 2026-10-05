@@ -16,6 +16,11 @@ import '../admin/admin-shared.css';
 import './operator-workflow.css';
 
 function commissionHint(wallet) {
+  if (wallet?.walletCommissionType === 'percent') {
+    const percent = Number(wallet.walletCommissionValue) || 0;
+    if (percent <= 0) return null;
+    return `A ${percent}% bonus is added to the payment total before GST is calculated.`;
+  }
   if (!wallet || wallet.walletCommissionType !== 'multiplier') return null;
   const multiplier = Number(wallet.walletCommissionValue) || 1;
   if (multiplier <= 1) return null;

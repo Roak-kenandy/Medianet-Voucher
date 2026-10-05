@@ -25,6 +25,8 @@ function formatActivityLabel(metadata = {}) {
   if (metadata.activity === 'create_account') return 'Create Account';
   if (metadata.activity === 'customer_crm_topup') return 'Customer Top-up';
   if (metadata.activity === 'customer_subscribe') return 'Customer Subscribe';
+  if (metadata.activity === 'customer_renew') return 'Customer Renewal';
+  if (metadata.activity === 'customer_upgrade') return 'Customer Upgrade';
   if (metadata.activity === 'customer_topup') return 'Customer Top-up';
   if (metadata.activity === 'bulk_create') return 'Bulk Create';
   if (metadata.activity === 'admin_adjustment') return 'Adjustment';

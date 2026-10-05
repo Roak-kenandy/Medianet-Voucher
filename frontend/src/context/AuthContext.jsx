@@ -1,5 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { authApi, setAccessToken, clearAccessToken, refreshAccessToken } from '../api/client';
+import { setServiceTypes } from '../constants/serviceTags';
+import { setAppSettings } from '../constants/appSettings';
 
 const AuthContext = createContext(null);
 
@@ -19,6 +21,8 @@ export function AuthProvider({ children }) {
         return;
       }
       const data = await authApi.me();
+      setServiceTypes(data.serviceTypes);
+    setAppSettings(data.settings);
       setUser(data.user);
     } catch {
       clearAccessToken();
@@ -36,6 +40,8 @@ export function AuthProvider({ children }) {
     setError(null);
     const data = await authApi.login({ email, password });
     setAccessToken(data.accessToken);
+    setServiceTypes(data.serviceTypes);
+    setAppSettings(data.settings);
     setUser(data.user);
     return data.user;
   };

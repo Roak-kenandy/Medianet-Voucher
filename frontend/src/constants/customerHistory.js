@@ -1,3 +1,5 @@
+import { getServiceTagShortLabel } from './serviceTags';
+
 export const CUSTOMER_HISTORY_ACTIVITY_FILTERS = [
   { value: 'all', label: 'All activities' },
   { value: 'new_account', label: 'New account' },
@@ -9,6 +11,10 @@ export function customerHistoryActivityLabel(activity) {
   switch (activity) {
     case 'customer_subscribe':
       return 'Subscribe';
+    case 'customer_renew':
+      return 'Renewal';
+    case 'customer_upgrade':
+      return 'Upgrade';
     case 'bulk_create':
       return 'New account (bulk)';
     case 'customer_crm_topup':
@@ -22,7 +28,5 @@ export function customerHistoryActivityLabel(activity) {
 }
 
 export function customerHistoryServiceLabel(serviceTag) {
-  if (serviceTag === 'MEDIANET_TV') return 'Medianet TV';
-  if (serviceTag === 'OTT') return 'Mobile';
-  return serviceTag || '—';
+  return serviceTag ? getServiceTagShortLabel(serviceTag) : '—';
 }

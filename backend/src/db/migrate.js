@@ -144,6 +144,10 @@ async function migrate() {
       console.log(`Applied: ${file}`);
     }
 
+    // Fills the configurable CRM tables from .env defaults (idempotent).
+    const { bootstrapCrmConfig } = await import('../services/crmConfigService.js');
+    await bootstrapCrmConfig();
+
     console.log('Database migration completed successfully.');
   } finally {
     await releaseMigrationLock(connection);

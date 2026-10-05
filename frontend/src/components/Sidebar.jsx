@@ -15,6 +15,8 @@ import {
   CircleDollarSign,
   Megaphone,
   BookMarked,
+  SlidersHorizontal,
+  Code2,
 } from 'lucide-react';
 import { isStaffRole, hasPermission } from '../constants/permissions';
 import { useAuth } from '../context/AuthContext';
@@ -27,10 +29,12 @@ const adminNav = [
   { to: '/admin/operators', label: 'Operators', icon: Users },
   { to: '/admin/operator-topup', label: 'Operator Topup', icon: Wallet },
   { to: '/admin/packages', label: 'Packages', icon: Package },
+  { to: '/admin/crm-settings', label: 'System Settings', icon: SlidersHorizontal, permission: 'manageCrmSettings' },
   { to: '/admin/admins', label: 'Staff', icon: Shield },
   { to: '/admin/reports', label: 'Reports', icon: FileBarChart },
   { to: '/admin/marketing-ads', label: 'Marketing Ads', icon: Megaphone, permission: 'manageMarketingAds' },
   { to: '/admin/knowledge-base', label: 'Knowledge Base', icon: BookMarked, permission: 'manageKnowledgeBase' },
+  { to: '/admin/developer', label: 'Developer API', icon: Code2 },
 ];
 
 const operatorNav = [
@@ -61,7 +65,11 @@ export default function Sidebar({ role, onNavigate }) {
   const { user } = useAuth();
   const navItems = isStaffRole(role)
     ? adminNav.filter((item) => !item.permission || hasPermission(user?.role, item.permission))
-    : operatorNav.filter((item) => operatorHasPermission(user, item.permission));
+    : [
+        ...operatorNav.filter((item) => operatorHasPermission(user, item.permission)),
+        // Only operators Medianet has turned API access on for.
+        ...(user?.apiAccessEnabled ? [{ to: '/operator/developer', label: 'Developer API', icon: Code2 }] : []),
+      ];
 
   return (
     <nav className="sidebar">

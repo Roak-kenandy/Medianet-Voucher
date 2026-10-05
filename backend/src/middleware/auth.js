@@ -17,6 +17,20 @@ import {
   operatorHasPermission,
 } from '../constants/operatorPermissions.js';
 import { getClientMeta } from '../services/auditService.js';
+import { ensureServiceTypesLoaded, listServiceTypesPublic } from '../constants/serviceTags.js';
+import { ensureAppSettingsLoaded, getPublicAppSettings } from '../services/appSettingsService.js';
+
+/** Customer type labels the app needs to render type names (no CRM ids). */
+async function serviceTypesForClient() {
+  await ensureServiceTypesLoaded();
+  return listServiceTypesPublic();
+}
+
+/** Time zone, currency, GST rate and TIN for formatting in the browser. */
+async function appSettingsForClient() {
+  await ensureAppSettingsLoaded();
+  return getPublicAppSettings();
+}
 
 function applyAccessTokenToRequest(req, token) {
   const payload = verifyAccessToken(token);
@@ -27,6 +41,11 @@ function applyAccessTokenToRequest(req, token) {
     clientName: payload.clientName,
     credentialsVersion: Number(payload.cv) || 0,
   };
+  if (payload.role === 'operator') {
+    // `id` is the operator (tenant); the login is one of its users. Tokens issued before
+    // operator users existed carry no uid, and that first user has the operator's id.
+    req.user.operatorUserId = payload.uid ?? payload.sub;
+  }
 }
 
 export function authenticate(req, _res, next) {
@@ -65,11 +84,12 @@ export function ensureActiveAccount(req, _res, next) {
     return next(new AppError('Authentication required', 401, 'UNAUTHORIZED'));
   }
 
-  const lookupRole = req.user.role === 'operator' ? 'operator' : 'admin';
+  const isOperator = req.user.role === 'operator';
 
-  findUserById(lookupRole, req.user.id)
+  findUserById(isOperator ? 'operator' : 'admin', isOperator ? req.user.operatorUserId : req.user.id)
     .then((user) => {
-      if (!user || !user.is_active) {
+      // For operators `user.id` is the operator the login belongs to; it must match the token.
+      if (!user || !user.is_active || (isOperator && Number(user.id) !== Number(req.user.id))) {
         return next(new AppError('Account is inactive or not found', 401, 'UNAUTHORIZED'));
       }
       if ((Number(user.credentials_version) || 0) !== req.user.credentialsVersion) {
@@ -157,6 +177,8 @@ export const authController = {
         data: {
           accessToken: result.accessToken,
           user: result.user,
+          serviceTypes: await serviceTypesForClient(),
+          settings: await appSettingsForClient(),
         },
       });
     } catch (err) {
@@ -175,6 +197,8 @@ export const authController = {
         data: {
           accessToken: result.accessToken,
           user: result.user,
+          serviceTypes: await serviceTypesForClient(),
+          settings: await appSettingsForClient(),
         },
       });
     } catch (err) {
@@ -197,9 +221,12 @@ export const authController = {
 
   async me(req, res, next) {
     try {
-      const lookupRole = req.user.role === 'operator' ? 'operator' : 'admin';
-      const user = await findUserById(lookupRole, req.user.id);
-      if (!user || !user.is_active) {
+      const isOperator = req.user.role === 'operator';
+      const user = await findUserById(
+        isOperator ? 'operator' : 'admin',
+        isOperator ? req.user.operatorUserId : req.user.id
+      );
+      if (!user || !user.is_active || (isOperator && Number(user.id) !== Number(req.user.id))) {
         throw new AppError('User not found', 401, 'UNAUTHORIZED');
       }
       if ((Number(user.credentials_version) || 0) !== req.user.credentialsVersion) {
@@ -209,7 +236,11 @@ export const authController = {
         req.user.role === 'operator' ? 'operator' : user.role || 'admin';
       return res.json({
         success: true,
-        data: { user: sanitizeUser(user, role) },
+        data: {
+          user: sanitizeUser(user, role),
+          serviceTypes: await serviceTypesForClient(),
+          settings: await appSettingsForClient(),
+        },
       });
     } catch (err) {
       next(err);

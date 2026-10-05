@@ -12,23 +12,66 @@ import {
   getOperatorPackagesByOperatorIds,
   syncOperatorPackages,
 } from './packageService.js';
+import { assertPackagesMatchServiceTypes, legacyServiceScope } from '../constants/serviceTags.js';
 import {
-  assertPackagesMatchServiceScope,
-} from '../constants/serviceTags.js';
+  assertPackagesMatchSalesModels,
+  getOperatorServiceTypeKeys,
+  getSalesModelIdsByOperatorIds,
+  getServiceTypeKeysByOperatorIds,
+  resolveSalesModelIds,
+  resolveServiceTypeKeys,
+  syncOperatorSalesModels,
+  syncOperatorServiceTypes,
+} from './crmConfigService.js';
 import {
   normalizePortalRole,
   parseOperatorPermissions,
 } from '../constants/operatorPermissions.js';
 import { getSalesDashboardStats } from './salesReportService.js';
+import { createOperatorApiKey } from './operatorApiKeyService.js';
+import {
+  assertPackageGroupsExist,
+  getPackageGroupsByOperatorIds,
+  syncOperatorPackageGroups,
+} from './packageGroupService.js';
+import {
+  endAllOperatorSessions,
+  insertOperatorUser,
+  loginEmailExists,
+  serializePortalPermissions,
+} from './operatorUserService.js';
 
-function serializePortalPermissions(portalRole, portalPermissions) {
-  const role = normalizePortalRole(portalRole);
-  if (role === 'supervisor') return null;
-  return JSON.stringify(parseOperatorPermissions('user', portalPermissions));
-}
+/**
+ * Validates what an operator is being given: individually assigned packages and/or package
+ * groups. At least one of the two is required. Individual packages must match the operator's
+ * customer types and sales models; group packages outside them are simply not offered to
+ * that operator.
+ */
+async function resolvePackageAssignment(
+  packageIds = [],
+  packageGroupIds = [],
+  { serviceTypeKeys = [], salesModelIds = [] } = {}
+) {
+  const groups = await assertPackageGroupsExist(packageGroupIds);
+  const hasDirect = (packageIds || []).some((id) => Number(id));
+  if (!hasDirect && !groups.length) {
+    throw new AppError('Select at least one package or package group', 400, 'PACKAGE_REQUIRED');
+  }
 
-function formatPackageSummary(plans = []) {
-  return plans.map((plan) => plan.name).join(', ');
+  const plans = hasDirect ? await assertPackagesAssignable(packageIds) : [];
+  assertPackagesMatchServiceTypes(plans, serviceTypeKeys);
+  assertPackagesMatchSalesModels(plans, salesModelIds);
+
+  const labels = [...plans.map((plan) => plan.name), ...groups.map((group) => `Group: ${group.name}`)];
+  return {
+    plans,
+    groups,
+    packageIds: plans.map((plan) => plan.id),
+    groupIds: groups.map((group) => group.id),
+    // Legacy display columns on operators; the live list always comes from the join tables.
+    packageSummary: labels.join(', ').slice(0, 100),
+    primaryPackageId: plans[0]?.id ?? null,
+  };
 }
 
 export async function getAdminStats() {
@@ -137,19 +180,67 @@ export async function listAdmins({ page = 1, limit = 20, search = '' } = {}) {
   };
 }
 
-async function emailExistsInSystem(email, excludeOperatorId = null) {
+/** operators.email is the company contact address; it is unique among operators. */
+async function operatorContactEmailExists(email, excludeOperatorId = null) {
   const normalized = email.toLowerCase().trim();
-  const admins = await query('SELECT id FROM admins WHERE email = ? LIMIT 1', [normalized]);
-  if (admins.length) return true;
-
-  const operatorSql =
+  const rows =
     excludeOperatorId != null
-      ? 'SELECT id FROM operators WHERE email = ? AND id != ? LIMIT 1'
-      : 'SELECT id FROM operators WHERE email = ? LIMIT 1';
-  const operatorParams =
-    excludeOperatorId != null ? [normalized, excludeOperatorId] : [normalized];
-  const operators = await query(operatorSql, operatorParams);
-  return operators.length > 0;
+      ? await query('SELECT id FROM operators WHERE email = ? AND id != ? LIMIT 1', [normalized, excludeOperatorId])
+      : await query('SELECT id FROM operators WHERE email = ? LIMIT 1', [normalized]);
+  return rows.length > 0;
+}
+
+/**
+ * Ends every session of a staff account inside the caller's transaction: live refresh tokens
+ * are revoked, older rotated tokens can no longer trigger reuse detection, and the credentials
+ * version bump rejects outstanding access tokens on their next request.
+ */
+async function endAdminSessions(connection, adminId, reason) {
+  await connection.execute(
+    `UPDATE refresh_tokens SET revoked_at = NOW(), revoked_reason = ?
+     WHERE user_type = 'admin' AND user_id = ? AND revoked_at IS NULL`,
+    [reason, adminId]
+  );
+  await connection.execute(
+    `UPDATE refresh_tokens SET revoked_reason = 'superseded'
+     WHERE user_type = 'admin' AND user_id = ? AND revoked_reason = 'rotated'`,
+    [adminId]
+  );
+  await connection.execute(
+    `UPDATE admins SET credentials_version = credentials_version + 1 WHERE id = ?`,
+    [adminId]
+  );
+}
+
+/**
+ * Activation state change. Deactivating a staff account ends its sessions; deactivating an
+ * operator ends the sessions of every one of its users. Reactivating staff clears a login lock.
+ */
+async function setAccountActive(userType, targetId, isActive) {
+  const connection = await getConnection();
+  try {
+    await connection.beginTransaction();
+    if (userType === 'operator') {
+      await connection.execute(`UPDATE operators SET is_active = ? WHERE id = ?`, [isActive ? 1 : 0, targetId]);
+      if (!isActive) await endAllOperatorSessions(connection, targetId, 'deactivated');
+    } else if (isActive) {
+      await connection.execute(
+        `UPDATE admins
+         SET is_active = 1, failed_login_attempts = 0, locked_until = NULL, failed_login_window_start = NULL
+         WHERE id = ?`,
+        [targetId]
+      );
+    } else {
+      await connection.execute(`UPDATE admins SET is_active = 0 WHERE id = ?`, [targetId]);
+      await endAdminSessions(connection, targetId, 'deactivated');
+    }
+    await connection.commit();
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
 }
 
 export async function createAdmin(actorAdminId, actorRole, data, reqMeta = {}) {
@@ -157,7 +248,7 @@ export async function createAdmin(actorAdminId, actorRole, data, reqMeta = {}) {
     throw new AppError('Access denied', 403, 'FORBIDDEN');
   }
 
-  if (await emailExistsInSystem(data.email)) {
+  if (await loginEmailExists(data.email)) {
     throw new AppError('An account with this email already exists', 409, 'EMAIL_EXISTS');
   }
 
@@ -199,7 +290,7 @@ export async function updateAdminStatus(actorAdminId, targetAdminId, isActive, r
     throw new AppError('Admin not found', 404, 'NOT_FOUND');
   }
 
-  await query('UPDATE admins SET is_active = ? WHERE id = ?', [isActive ? 1 : 0, targetAdminId]);
+  await setAccountActive('admin', targetAdminId, Boolean(isActive));
 
   await logAudit({
     actorType: 'admin',
@@ -212,6 +303,88 @@ export async function updateAdminStatus(actorAdminId, targetAdminId, isActive, r
   });
 
   return { id: targetAdminId, isActive };
+}
+
+/** Staff reset of another staff member's password (ends that member's sessions). */
+export async function resetAdminPassword(actorAdminId, targetAdminId, newPassword, reqMeta = {}) {
+  const [admin] = await query('SELECT id FROM admins WHERE id = ? LIMIT 1', [targetAdminId]);
+  if (!admin) {
+    throw new AppError('Admin not found', 404, 'NOT_FOUND');
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, config.security.bcryptRounds);
+  const connection = await getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.execute(
+      `UPDATE admins
+       SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL, failed_login_window_start = NULL
+       WHERE id = ?`,
+      [passwordHash, targetAdminId]
+    );
+    await endAdminSessions(connection, targetAdminId, 'password_reset');
+    await connection.commit();
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
+
+  await logAudit({
+    actorType: 'admin',
+    actorId: actorAdminId,
+    action: 'ADMIN_PASSWORD_RESET',
+    resourceType: 'admin',
+    resourceId: targetAdminId,
+    ipAddress: reqMeta.ipAddress,
+    userAgent: reqMeta.userAgent,
+  });
+
+  return { id: targetAdminId };
+}
+
+/** Staff member changes their own password after proving the current one. */
+export async function changeOwnAdminPassword(adminId, currentPassword, newPassword, reqMeta = {}) {
+  const [admin] = await query(
+    'SELECT id, password_hash FROM admins WHERE id = ? AND is_active = 1 LIMIT 1',
+    [adminId]
+  );
+  if (!admin) {
+    throw new AppError('Admin not found', 404, 'NOT_FOUND');
+  }
+  if (!(await bcrypt.compare(currentPassword, admin.password_hash))) {
+    throw new AppError('Current password is incorrect', 400, 'INVALID_CREDENTIALS');
+  }
+  if (currentPassword === newPassword) {
+    throw new AppError('New password must be different from the current password', 400, 'VALIDATION_ERROR');
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, config.security.bcryptRounds);
+  const connection = await getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.execute(`UPDATE admins SET password_hash = ? WHERE id = ?`, [passwordHash, adminId]);
+    await endAdminSessions(connection, adminId, 'password_reset');
+    await connection.commit();
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
+
+  await logAudit({
+    actorType: 'admin',
+    actorId: adminId,
+    action: 'ADMIN_PASSWORD_CHANGED',
+    resourceType: 'admin',
+    resourceId: adminId,
+    ipAddress: reqMeta.ipAddress,
+    userAgent: reqMeta.userAgent,
+  });
+
+  return { id: adminId, reauthRequired: true };
 }
 
 export async function listOperators({ page = 1, limit = 20, search = '' } = {}) {
@@ -231,7 +404,8 @@ export async function listOperators({ page = 1, limit = 20, search = '' } = {}) 
     `SELECT DISTINCT
        o.id, o.client_name, o.package_id, o.package_type, o.service_scope, o.notes, o.email, o.wallet_balance,
        o.wallet_commission_type, o.wallet_commission_value, o.wallet_self_topup_enabled,
-       o.portal_role, o.portal_permissions,
+       (SELECT COUNT(*) FROM operator_users u WHERE u.operator_id = o.id) AS user_count,
+       (SELECT COUNT(*) FROM operator_users u WHERE u.operator_id = o.id AND u.is_active = 1) AS active_user_count,
        o.trial_account_limit, o.trial_accounts_used, o.accounts_created,
        o.is_active, o.created_at, o.updated_at,
        a.name AS created_by_name
@@ -256,13 +430,28 @@ export async function listOperators({ page = 1, limit = 20, search = '' } = {}) 
   );
 
   const total = Number(countRow.total) || 0;
-  const packagesMap = await getOperatorPackagesByOperatorIds(operators.map((op) => op.id));
+  const operatorIds = operators.map((op) => op.id);
+  const packagesMap = await getOperatorPackagesByOperatorIds(operatorIds);
+  const groupsMap = await getPackageGroupsByOperatorIds(operatorIds);
+  const serviceTypesMap = await getServiceTypeKeysByOperatorIds(operatorIds);
+  const salesModelsMap = await getSalesModelIdsByOperatorIds(operatorIds);
 
   const enrichedOperators = operators.map((operator) => {
+    // `packages` is everything the operator can sell; `direct` marks individual assignments.
     const packages = packagesMap.get(operator.id) || [];
+    const packageGroups = groupsMap.get(operator.id) || [];
+    const serviceTypes = serviceTypesMap.get(operator.id) || { keys: [], defaultKey: null };
+    const salesModels = salesModelsMap.get(operator.id) || [];
     return {
       ...operator,
+      service_type_keys: serviceTypes.keys,
+      default_service_type_key: serviceTypes.defaultKey,
+      sales_models: salesModels,
+      sales_model_ids: salesModels.map((model) => model.id),
       packages,
+      package_groups: packageGroups,
+      package_group_ids: packageGroups.map((group) => group.id),
+      direct_package_ids: packages.filter((pkg) => pkg.direct).map((pkg) => pkg.id),
       package_ids: packages.map((pkg) => pkg.id),
       package_names: packages.map((pkg) => pkg.name),
       package_name: packages.map((pkg) => pkg.name).join(', ') || operator.package_type,
@@ -280,16 +469,24 @@ export async function listOperators({ page = 1, limit = 20, search = '' } = {}) 
   };
 }
 
+/**
+ * Creates the operator (company) and its first portal user. The email and password given
+ * here are that first user's login; further users are added from Manage Users.
+ */
 export async function createOperator(adminId, data, reqMeta = {}) {
-  if (await emailExistsInSystem(data.email)) {
+  if ((await loginEmailExists(data.email)) || (await operatorContactEmailExists(data.email))) {
     throw new AppError('An account with this email already exists', 409, 'EMAIL_EXISTS');
   }
 
-  const plans = await assertPackagesAssignable(data.packageIds);
-  assertPackagesMatchServiceScope(plans, data.serviceScope || 'BOTH');
+  const serviceTypes = await resolveServiceTypeKeys(data.serviceTypeKeys, data.defaultServiceTypeKey);
+  const salesModelIds = await resolveSalesModelIds(data.salesModelIds);
+  const serviceScope = legacyServiceScope(serviceTypes.keys);
+  const assignment = await resolvePackageAssignment(data.packageIds, data.packageGroupIds, {
+    serviceTypeKeys: serviceTypes.keys,
+    salesModelIds,
+  });
+  const { plans, packageSummary, primaryPackageId } = assignment;
   const passwordHash = await bcrypt.hash(data.password, config.security.bcryptRounds);
-  const packageSummary = formatPackageSummary(plans);
-  const primaryPackageId = plans[0].id;
 
   const connection = await getConnection();
 
@@ -306,7 +503,7 @@ export async function createOperator(adminId, data, reqMeta = {}) {
         adminId,
         data.clientName.trim(),
         packageSummary,
-        data.serviceScope || 'BOTH',
+        serviceScope,
         primaryPackageId,
         data.notes?.trim() || null,
         data.email.toLowerCase().trim(),
@@ -320,7 +517,26 @@ export async function createOperator(adminId, data, reqMeta = {}) {
     );
 
     const operatorId = result.insertId;
-    await syncOperatorPackages(operatorId, data.packageIds, connection);
+    await syncOperatorServiceTypes(connection, operatorId, serviceTypes.keys, serviceTypes.defaultKey);
+    await syncOperatorSalesModels(connection, operatorId, salesModelIds);
+    await syncOperatorPackages(operatorId, assignment.packageIds, connection);
+    await syncOperatorPackageGroups(operatorId, assignment.groupIds, connection);
+
+    const firstUserId = await insertOperatorUser(
+      connection,
+      operatorId,
+      {
+        name: data.userName?.trim() || data.clientName,
+        email: data.email,
+        portalRole: data.portalRole,
+        portalPermissions: data.portalPermissions,
+      },
+      { passwordHash, adminId }
+    );
+
+    const apiKey = data.generateApiKey
+      ? await createOperatorApiKey(adminId, operatorId, { name: 'Initial key' }, reqMeta, connection)
+      : null;
 
     await connection.commit();
 
@@ -334,20 +550,26 @@ export async function createOperator(adminId, data, reqMeta = {}) {
       userAgent: reqMeta.userAgent,
       metadata: {
         clientName: data.clientName,
-        packageIds: data.packageIds,
+        packageIds: assignment.packageIds,
+        packageGroupIds: assignment.groupIds,
         packageNames: plans.map((plan) => plan.name),
         walletCommissionType: data.walletCommissionType,
         walletCommissionValue: data.walletCommissionValue,
         canSelfTopup: data.canSelfTopup !== false,
-        serviceScope: data.serviceScope || 'BOTH',
+        serviceTypeKeys: serviceTypes.keys,
+        salesModelIds,
+        firstUserId,
+        apiKeyIssued: apiKey ? { apiKeyId: apiKey.id, keyPrefix: apiKey.keyPrefix } : null,
       },
     });
 
     return {
       id: operatorId,
       clientName: data.clientName,
-      serviceScope: data.serviceScope || 'BOTH',
-      packageIds: data.packageIds,
+      serviceTypeKeys: serviceTypes.keys,
+      salesModelIds,
+      packageIds: assignment.packageIds,
+        packageGroupIds: assignment.groupIds,
       packageType: packageSummary,
       packages: plans.map((plan) => ({ id: plan.id, name: plan.name })),
       notes: data.notes?.trim() || null,
@@ -363,6 +585,9 @@ export async function createOperator(adminId, data, reqMeta = {}) {
       ),
       accountsCreated: 0,
       isActive: true,
+      firstUserId,
+      // Present only when a key was requested; this is the one time the full key is returned.
+      apiKey,
     };
   } catch (err) {
     await connection.rollback();
@@ -378,7 +603,7 @@ export async function updateOperatorStatus(adminId, operatorId, isActive, reqMet
     throw new AppError('Operator not found', 404, 'NOT_FOUND');
   }
 
-  await query('UPDATE operators SET is_active = ? WHERE id = ?', [isActive ? 1 : 0, operatorId]);
+  await setAccountActive('operator', operatorId, Boolean(isActive));
 
   await logAudit({
     actorType: 'admin',
@@ -427,11 +652,71 @@ export async function updateOperatorQuota(adminId, operatorId, accountQuota, req
   return { id: operatorId, accountQuota };
 }
 
+/**
+ * Replaces what an operator may sell: its individual packages and the package groups it
+ * belongs to. The rest of the operator record is left alone.
+ */
+export async function updateOperatorPackages(adminId, operatorId, { packageIds, packageGroupIds }, reqMeta = {}) {
+  const [operator] = await query(`SELECT id FROM operators WHERE id = ? LIMIT 1`, [operatorId]);
+  if (!operator) {
+    throw new AppError('Operator not found', 404, 'NOT_FOUND');
+  }
+
+  const assignment = await resolvePackageAssignment(packageIds, packageGroupIds, {
+    serviceTypeKeys: await getOperatorServiceTypeKeys(operatorId),
+    salesModelIds: ((await getSalesModelIdsByOperatorIds([operatorId])).get(operatorId) || []).map((m) => m.id),
+  });
+
+  const connection = await getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.execute(
+      `UPDATE operators SET package_type = ?, package_id = ? WHERE id = ?`,
+      [assignment.packageSummary, assignment.primaryPackageId, operatorId]
+    );
+    await syncOperatorPackages(operatorId, assignment.packageIds, connection);
+    await syncOperatorPackageGroups(operatorId, assignment.groupIds, connection);
+    await connection.commit();
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
+
+  await logAudit({
+    actorType: 'admin',
+    actorId: adminId,
+    action: 'OPERATOR_PACKAGES_UPDATED',
+    resourceType: 'operator',
+    resourceId: operatorId,
+    ipAddress: reqMeta.ipAddress,
+    userAgent: reqMeta.userAgent,
+    metadata: {
+      packageIds: assignment.packageIds,
+      packageNames: assignment.plans.map((plan) => plan.name),
+      packageGroupIds: assignment.groupIds,
+      packageGroupNames: assignment.groups.map((group) => group.name),
+    },
+  });
+
+  return {
+    id: operatorId,
+    packageIds: assignment.packageIds,
+    packageGroupIds: assignment.groupIds,
+    packageType: assignment.packageSummary,
+    packages: assignment.plans.map((plan) => ({ id: plan.id, name: plan.name })),
+    packageGroups: assignment.groups,
+  };
+}
+
+/**
+ * Updates the operator (company) record. Logins, passwords, roles and permissions belong to
+ * the operator's users and are managed in operatorUserService.
+ */
 export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
   const [operator] = await query(
-    `SELECT id, client_name, package_type, package_id, email, accounts_created, is_active,
-            portal_role, portal_permissions
-     FROM operators WHERE id = ? LIMIT 1`,
+    `SELECT id, client_name, email, accounts_created, is_active FROM operators WHERE id = ? LIMIT 1`,
     [operatorId]
   );
 
@@ -439,83 +724,66 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
     throw new AppError('Operator not found', 404, 'NOT_FOUND');
   }
 
-  const plans = await assertPackagesAssignable(data.packageIds);
-  assertPackagesMatchServiceScope(plans, data.serviceScope || 'BOTH');
-  const packageSummary = formatPackageSummary(plans);
-  const primaryPackageId = plans[0].id;
+  // Omitting packageGroupIds keeps the operator's current groups.
+  const currentGroupIds = (await getPackageGroupsByOperatorIds([operatorId])).get(operatorId)?.map((g) => g.id) || [];
+  // Omitting the customer types or sales models keeps the operator's current ones.
+  const currentTypes = (await getServiceTypeKeysByOperatorIds([operatorId])).get(operatorId) || { keys: [], defaultKey: null };
+  const serviceTypes = await resolveServiceTypeKeys(
+    data.serviceTypeKeys ?? currentTypes.keys,
+    data.defaultServiceTypeKey ?? currentTypes.defaultKey
+  );
+  const salesModelIds = await resolveSalesModelIds(
+    data.salesModelIds ??
+      ((await getSalesModelIdsByOperatorIds([operatorId])).get(operatorId) || []).map((model) => model.id)
+  );
+  const serviceScope = legacyServiceScope(serviceTypes.keys);
+  const assignment = await resolvePackageAssignment(
+    data.packageIds,
+    data.packageGroupIds ?? currentGroupIds,
+    { serviceTypeKeys: serviceTypes.keys, salesModelIds }
+  );
+  const { plans, packageSummary, primaryPackageId } = assignment;
   const normalizedEmail = data.email.toLowerCase().trim();
 
-  if (normalizedEmail !== operator.email && (await emailExistsInSystem(normalizedEmail, operatorId))) {
-    throw new AppError('An account with this email already exists', 409, 'EMAIL_EXISTS');
+  if (normalizedEmail !== operator.email && (await operatorContactEmailExists(normalizedEmail, operatorId))) {
+    throw new AppError('Another operator already uses this contact email', 409, 'EMAIL_EXISTS');
   }
 
-  const portalRoleProvided = data.portalRole !== undefined;
-  const portalRole = portalRoleProvided ? data.portalRole : operator.portal_role;
-  const portalPermissionsValue =
-    portalRoleProvided || data.portalPermissions !== undefined
-      ? serializePortalPermissions(portalRole, data.portalPermissions)
-      : operator.portal_permissions ?? null;
-  const emailChanged = normalizedEmail !== operator.email;
-  const passwordChanged = Boolean(data.password?.trim());
-  const credentialsChanged = emailChanged || passwordChanged;
+  const deactivated = Boolean(operator.is_active) && !data.isActive;
 
   const connection = await getConnection();
 
   try {
     await connection.beginTransaction();
 
-    const fields = [
-      data.clientName.trim(),
-      packageSummary,
-      data.serviceScope || 'BOTH',
-      primaryPackageId,
-      data.notes?.trim() || null,
-      normalizedEmail,
-      data.walletCommissionType,
-      data.walletCommissionValue,
-      data.canSelfTopup === false ? 0 : 1,
-      normalizePortalRole(portalRole),
-      typeof portalPermissionsValue === 'object' && portalPermissionsValue !== null
-        ? JSON.stringify(portalPermissionsValue)
-        : portalPermissionsValue,
-      data.isActive ? 1 : 0,
-      operatorId,
-    ];
+    await connection.execute(
+      `UPDATE operators
+       SET client_name = ?, package_type = ?, service_scope = ?, package_id = ?, notes = ?, email = ?,
+           wallet_commission_type = ?, wallet_commission_value = ?, wallet_self_topup_enabled = ?,
+           is_active = ?
+       WHERE id = ?`,
+      [
+        data.clientName.trim(),
+        packageSummary,
+        serviceScope,
+        primaryPackageId,
+        data.notes?.trim() || null,
+        normalizedEmail,
+        data.walletCommissionType,
+        data.walletCommissionValue,
+        data.canSelfTopup === false ? 0 : 1,
+        data.isActive ? 1 : 0,
+        operatorId,
+      ]
+    );
+    await syncOperatorServiceTypes(connection, operatorId, serviceTypes.keys, serviceTypes.defaultKey);
+    await syncOperatorSalesModels(connection, operatorId, salesModelIds);
+    await syncOperatorPackages(operatorId, assignment.packageIds, connection);
+    await syncOperatorPackageGroups(operatorId, assignment.groupIds, connection);
 
-    let sql = `
-      UPDATE operators
-      SET client_name = ?, package_type = ?, service_scope = ?, package_id = ?, notes = ?, email = ?,
-          wallet_commission_type = ?, wallet_commission_value = ?, wallet_self_topup_enabled = ?,
-          portal_role = ?, portal_permissions = ?, is_active = ?
-      WHERE id = ?
-    `;
-
-    if (data.password?.trim()) {
-      const passwordHash = await bcrypt.hash(data.password, config.security.bcryptRounds);
-      sql = `
-        UPDATE operators
-        SET client_name = ?, package_type = ?, service_scope = ?, package_id = ?, notes = ?, email = ?,
-            wallet_commission_type = ?, wallet_commission_value = ?, wallet_self_topup_enabled = ?,
-            portal_role = ?, portal_permissions = ?, is_active = ?, password_hash = ?
-        WHERE id = ?
-      `;
-      fields.splice(12, 0, passwordHash);
-    }
-
-    await connection.execute(sql, fields);
-    await syncOperatorPackages(operatorId, data.packageIds, connection);
-
-    if (credentialsChanged) {
-      // Kill refresh sessions and invalidate outstanding access tokens immediately.
-      await connection.execute(
-        `UPDATE refresh_tokens SET revoked_at = NOW(), revoked_reason = ?
-         WHERE user_type = 'operator' AND user_id = ? AND revoked_at IS NULL`,
-        [passwordChanged ? 'password_reset' : 'email_change', operatorId]
-      );
-      await connection.execute(
-        `UPDATE operators SET credentials_version = credentials_version + 1 WHERE id = ?`,
-        [operatorId]
-      );
+    if (deactivated) {
+      // Every user of this operator is signed out and their access tokens stop working.
+      await endAllOperatorSessions(connection, operatorId, 'deactivated');
     }
 
     await connection.commit();
@@ -530,15 +798,16 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
       userAgent: reqMeta.userAgent,
       metadata: {
         clientName: data.clientName.trim(),
-        packageIds: data.packageIds,
+        packageIds: assignment.packageIds,
+        packageGroupIds: assignment.groupIds,
         packageNames: plans.map((plan) => plan.name),
         walletCommissionType: data.walletCommissionType,
         walletCommissionValue: data.walletCommissionValue,
         canSelfTopup: data.canSelfTopup !== false,
-        serviceScope: data.serviceScope || 'BOTH',
+        serviceTypeKeys: serviceTypes.keys,
+        salesModelIds,
         isActive: data.isActive,
-        passwordChanged,
-        emailChanged,
+        contactEmailChanged: normalizedEmail !== operator.email,
       },
     });
 
@@ -550,7 +819,8 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
     return {
       id: operatorId,
       clientName: data.clientName.trim(),
-      packageIds: data.packageIds,
+      packageIds: assignment.packageIds,
+        packageGroupIds: assignment.groupIds,
       packageType: packageSummary,
       packages: plans.map((plan) => ({ id: plan.id, name: plan.name })),
       notes: data.notes?.trim() || null,
@@ -559,11 +829,6 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
       walletCommissionType: data.walletCommissionType,
       walletCommissionValue: data.walletCommissionValue,
       canSelfTopup: data.canSelfTopup !== false,
-      portalRole: normalizePortalRole(data.portalRole),
-      portalPermissions: parseOperatorPermissions(
-        normalizePortalRole(data.portalRole),
-        data.portalPermissions
-      ),
       accountsCreated: operator.accounts_created,
       isActive: data.isActive,
     };

@@ -35,6 +35,8 @@ export function sanitizeUser(user, role) {
     const packageNames = packages.map((pkg) => pkg.name);
     return {
       ...base,
+      // `id` is the operator (company); `userId` is the person signed in.
+      userId: user.operator_user_id,
       clientName: user.client_name,
       packageType: user.package_name || user.package_type,
       packageNames,
@@ -46,6 +48,7 @@ export function sanitizeUser(user, role) {
       accountsCreated: user.accounts_created,
       canSelfTopup: user.wallet_self_topup_enabled !== 0,
       operatorPortalRole: normalizePortalRole(user.portal_role),
+      apiAccessEnabled: Boolean(user.api_access_enabled),
       operatorPermissions: parseOperatorPermissions(
         normalizePortalRole(user.portal_role),
         user.portal_permissions

@@ -114,7 +114,7 @@ const CUSTOMER_SUMMARY_SELECT = `SELECT
        o.id AS operatorId,
        o.client_name AS operatorName,
        o.email AS operatorEmail,
-       GROUP_CONCAT(DISTINCT p.name ORDER BY p.name SEPARATOR ', ') AS packages`;
+       GROUP_CONCAT(DISTINCT COALESCE(vap.package_name, p.name) ORDER BY COALESCE(vap.package_name, p.name) SEPARATOR ', ') AS packages`;
 
 const CUSTOMER_SUMMARY_FROM = `FROM voucher_accounts va
      JOIN operators o ON o.id = va.operator_id
