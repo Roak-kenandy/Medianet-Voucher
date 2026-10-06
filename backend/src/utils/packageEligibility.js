@@ -141,8 +141,8 @@ export function evaluatePackageOptions({ catalog = [], services = [], offered = 
 }
 
 /**
- * Checks one purchase request. A request is either one renewal, one upgrade, or one or more
- * new subscriptions; the kinds cannot be mixed because each is a different CRM operation.
+ * Checks one purchase request. A request is one or more renewals, one or more new
+ * subscriptions, or one upgrade; the kinds cannot be mixed because each is a different CRM operation.
  * Returns { action, options } or throws via `fail(message)`.
  */
 export function resolvePurchase({ catalog, services, offered, packageIds }, fail) {
@@ -164,8 +164,9 @@ export function resolvePurchase({ catalog, services, offered, packageIds }, fail
     return fail('Renewals, upgrades and new packages must be done one at a time');
   }
   const action = chosen[0].action;
-  if (action !== 'subscribe' && chosen.length > 1) {
-    return fail(action === 'renew' ? 'Renew one package at a time' : 'Upgrade one package at a time');
+  // Several packages can be added or renewed together; a base package is upgraded on its own.
+  if (action === 'upgrade' && chosen.length > 1) {
+    return fail('Upgrade one package at a time');
   }
 
   return { action, options: chosen };

@@ -706,17 +706,31 @@ export const partnerSubscribeSchema = z
   .strict()
   .superRefine(requireOneCustomerRef);
 
+/** Renew the listed packages, or everything renewable on the device with `all: true`. */
 export const partnerRenewSchema = z
   .object({
     ...partnerCustomerRef,
     deviceId: partnerDeviceIdSchema.optional(),
-    packageId: packageIdSchema,
+    packageIds: packageIdsSchema.optional(),
+    all: z.literal(true).optional(),
     amount: customerAmountSchema.optional(),
   })
   .strict()
-  .superRefine(requireOneCustomerRef);
+  .superRefine(requireOneCustomerRef)
+  .superRefine((data, ctx) => {
+    if (!data.packageIds === !data.all) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Send either packageIds or "all": true',
+        path: ['packageIds'],
+      });
+    }
+  });
 
-/** The upgrade price comes from CRM and moves daily, so the caller states what it agreed to. */
+/**
+ * `amount` is optional: without it the current CRM price is charged. Callers that quoted a
+ * price send it, and the upgrade is refused if the price has moved.
+ */
 export const partnerUpgradeSchema = z
   .object({
     ...partnerCustomerRef,
@@ -728,7 +742,8 @@ export const partnerUpgradeSchema = z
       .finite('Amount must be a valid number')
       .min(0, 'Amount cannot be negative')
       .max(100_000, 'Amount cannot exceed 100000 MVR')
-      .refine((value) => Math.abs(Math.round(value * 100) - value * 100) < 1e-6, 'Amount can have at most 2 decimal places'),
+      .refine((value) => Math.abs(Math.round(value * 100) - value * 100) < 1e-6, 'Amount can have at most 2 decimal places')
+      .optional(),
   })
   .strict()
   .superRefine(requireOneCustomerRef);

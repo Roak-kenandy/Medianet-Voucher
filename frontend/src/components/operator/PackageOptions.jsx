@@ -74,6 +74,15 @@ export default function PackageOptions({ options, packages, currencyCode, select
 
   const isSelected = (action, id) => selection?.action === action && selectedIds.includes(id);
   const pickOne = (action, id) => onSelect(isSelected(action, id) ? null : { action, packageIds: [id] });
+  // Several packages can be renewed in one go.
+  const toggleRenewal = (id) => {
+    const current = selection?.action === 'renew' ? selectedIds : [];
+    const next = current.includes(id) ? current.filter((item) => item !== id) : [...current, id];
+    onSelect(next.length ? { action: 'renew', packageIds: next } : null);
+  };
+  const allRenewalIds = renewals.map((option) => option.packageId);
+  const allRenewalsSelected =
+    selection?.action === 'renew' && allRenewalIds.every((id) => selectedIds.includes(id));
 
   const toggleAddition = (id) => {
     let next = addIds.includes(id) ? addIds.filter((item) => item !== id) : [...addIds, id];
@@ -89,7 +98,19 @@ export default function PackageOptions({ options, packages, currencyCode, select
     <div className="package-options">
       {renewals.length > 0 && (
         <section>
-          <h6 className="package-options-title"><RefreshCw size={14} /> Continue current package</h6>
+          <h6 className="package-options-title">
+            <RefreshCw size={14} /> Continue current {renewals.length > 1 ? 'packages' : 'package'}
+            {renewals.length > 1 && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm package-options-all"
+                disabled={disabled}
+                onClick={() => onSelect(allRenewalsSelected ? null : { action: 'renew', packageIds: allRenewalIds })}
+              >
+                {allRenewalsSelected ? 'Clear' : 'Select all'}
+              </button>
+            )}
+          </h6>
           {renewals.map((option) => (
             <OptionRow
               key={option.packageId}
@@ -98,7 +119,8 @@ export default function PackageOptions({ options, packages, currencyCode, select
               currencyCode={currencyCode}
               selected={isSelected('renew', option.packageId)}
               disabled={disabled}
-              onSelect={() => pickOne('renew', option.packageId)}
+              onSelect={() => toggleRenewal(option.packageId)}
+              multi
               note="Renews the service the customer already has"
             />
           ))}

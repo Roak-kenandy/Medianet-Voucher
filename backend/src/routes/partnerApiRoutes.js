@@ -17,7 +17,8 @@ import {
   findCustomers,
   getCustomerBalance,
   getCustomerSubscriptions,
-  getCustomerOffers,
+  getPackageEligibility,
+  getAllowedPackages,
   topUpCustomer,
   purchase,
   listTransactions,
@@ -124,11 +125,20 @@ router.post(
   )
 );
 
+// "Offers" is kept free for promotional offers; this is the plain can-it-be-sold answer.
 router.post(
-  '/customers/offers',
+  '/customers/package-eligibility',
   apiCustomerLimiter,
   readRoute(partnerCustomerDeviceSchema, (req, { customerId, ...ref }) =>
-    getCustomerOffers(req.apiClient, customerId, ref)
+    getPackageEligibility(req.apiClient, customerId, ref)
+  )
+);
+
+router.post(
+  '/customers/allowed-packages',
+  apiCustomerLimiter,
+  readRoute(partnerCustomerDeviceSchema, (req, { customerId, ...ref }) =>
+    getAllowedPackages(req.apiClient, customerId, ref)
   )
 );
 
