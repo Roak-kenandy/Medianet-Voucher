@@ -116,7 +116,7 @@ function mapSubscription(service) {
   };
 }
 
-function mapOffers(customer, packagesById) {
+function mapEligibility(customer, packagesById) {
   if (customer.packageOptions == null) return null;
   return customer.packageOptions
     .filter((option) => packagesById.has(option.packageId))
@@ -165,7 +165,7 @@ function mapCustomer(customer, packagesById) {
     deviceCount: customer.deviceCount || 0,
     balance: mapBalance(customer.account),
     subscriptions: customer.services == null ? null : customer.services.map(mapSubscription),
-    offers: mapOffers(customer, packagesById),
+    eligibility: mapEligibility(customer, packagesById),
   };
 }
 
@@ -236,12 +236,42 @@ export async function getCustomerSubscriptions(apiClient, customerId, { deviceId
   };
 }
 
-export async function getCustomerOffers(apiClient, customerId, { deviceId, ...ref }) {
+export async function getPackageEligibility(apiClient, customerId, { deviceId, ...ref }) {
   const entry = pickDevice(await getCustomerEntries(apiClient, customerId, ref), deviceId);
-  if (entry.offers == null) {
-    throw new AppError('Offers need the customer subscriptions, which could not be read from CRM. Try again.', 502, 'CRM_ERROR');
+  if (entry.eligibility == null) {
+    throw new AppError('Eligibility needs the customer subscriptions, which could not be read from CRM. Try again.', 502, 'CRM_ERROR');
   }
-  return { customerId, deviceId: entry.deviceId, serviceCode: entry.serviceCode, offers: entry.offers };
+  return { customerId, deviceId: entry.deviceId, serviceCode: entry.serviceCode, packages: entry.eligibility };
+}
+
+/**
+ * Only what can be sold to this device right now, ready to show as a list: packages to renew,
+ * the upgrades open from the current base package, and anything that can be added. A device
+ * with nothing active gets the whole catalogue. Package eligibility is the same data including
+ * what is not available and why.
+ */
+export async function getAllowedPackages(apiClient, customerId, { deviceId, ...ref }) {
+  const entry = pickDevice(await getCustomerEntries(apiClient, customerId, ref), deviceId);
+  if (entry.eligibility == null) {
+    throw new AppError('Packages need the customer subscriptions, which could not be read from CRM. Try again.', 502, 'CRM_ERROR');
+  }
+  const packages = entry.eligibility
+    // An add-on that only needs its base bought in the same request still counts as sellable.
+    .filter((item) => item.available || item.requiresOneOf.length)
+    .map(({ available, reason, requiresOneOf, ...item }) => ({
+      ...item,
+      action: item.action || 'subscribe',
+      price: item.price ?? item.listPrice,
+      // Not empty: sell it together with one of these base packages.
+      requiresOneOf,
+    }));
+  return {
+    customerId,
+    deviceId: entry.deviceId,
+    serviceCode: entry.serviceCode,
+    hasActivePackages: entry.subscriptions.length > 0,
+    packages,
+  };
 }
 
 /* ------------------------------------------------------------------ money */
@@ -285,7 +315,8 @@ export async function purchase(apiClient, customerId, body, expectedAction, reqM
     {
       ...customerRefForService(customerId, body),
       ...(body.deviceId ? { deviceId: body.deviceId } : {}),
-      packageIds: body.packageIds || [body.packageId],
+      packageIds: body.packageIds || (body.packageId ? [body.packageId] : []),
+      renewAll: body.all === true,
       amount: body.amount,
       expectedAction,
     },

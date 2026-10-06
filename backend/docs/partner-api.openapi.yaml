@@ -160,10 +160,10 @@ paths:
                             type: array
                             items: { $ref: "#/components/schemas/Subscription" }
         default: { $ref: "#/components/responses/Error" }
-  /customers/offers:
+  /customers/allowed-packages:
     post:
       tags: [Customers]
-      summary: What can be sold to a device, with prices
+      summary: Only the packages that can be sold to a device now
       requestBody:
         required: true
         content:
@@ -184,9 +184,38 @@ paths:
                           customerId: { type: string, format: uuid }
                           deviceId: { type: string, format: uuid, nullable: true }
                           serviceCode: { type: string, nullable: true }
-                          offers:
+                          hasActivePackages: { type: boolean }
+                          packages:
                             type: array
-                            items: { $ref: "#/components/schemas/Offer" }
+                            items: { $ref: "#/components/schemas/AllowedPackage" }
+        default: { $ref: "#/components/responses/Error" }
+  /customers/package-eligibility:
+    post:
+      tags: [Customers]
+      summary: Every package for a device, including those not available and why
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CustomerDeviceRef" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - properties:
+                      data:
+                        type: object
+                        properties:
+                          customerId: { type: string, format: uuid }
+                          deviceId: { type: string, format: uuid, nullable: true }
+                          serviceCode: { type: string, nullable: true }
+                          packages:
+                            type: array
+                            items: { $ref: "#/components/schemas/PackageEligibility" }
         default: { $ref: "#/components/responses/Error" }
   /customers/topup:
     post:
@@ -248,7 +277,7 @@ paths:
   /customers/renew:
     post:
       tags: [Sales]
-      summary: Renew a package the device already has
+      summary: Renew one, several or all packages the device has
       parameters:
         - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
@@ -258,10 +287,11 @@ paths:
             schema:
               allOf:
                 - $ref: "#/components/schemas/CustomerDeviceRef"
-                - required: [packageId]
+                - description: Send either packageIds or all.
                   properties:
-                    packageId: { type: integer }
-                    amount: { type: number, description: Optional. Must equal the package price if sent. }
+                    all: { type: boolean, enum: [true], description: Renew every package on the device. }
+                    packageIds: { type: array, minItems: 1, maxItems: 20, items: { type: integer } }
+                    amount: { type: number, description: Optional. Must equal the total if sent. }
       responses:
         "201":
           description: Renewed
@@ -286,10 +316,10 @@ paths:
             schema:
               allOf:
                 - $ref: "#/components/schemas/CustomerDeviceRef"
-                - required: [packageId, amount]
+                - required: [packageId]
                   properties:
                     packageId: { type: integer }
-                    amount: { type: number, minimum: 0, description: The offer price. Refused with AMOUNT_MISMATCH if the price has changed. }
+                    amount: { type: number, minimum: 0, description: Optional. The price you quoted; refused with AMOUNT_MISMATCH if it has changed. Without it the current price is charged. }
       responses:
         "201":
           description: Upgraded
@@ -501,7 +531,7 @@ components:
         inTrial: { type: boolean }
         activatedOn: { type: string, format: date-time, nullable: true }
         dueDate: { type: string, format: date-time, nullable: true }
-    Offer:
+    PackageEligibility:
       type: object
       properties:
         packageId: { type: integer }
@@ -529,6 +559,19 @@ components:
                 type: object
                 properties: { packageId: { type: integer }, name: { type: string } }
         requiresOneOf: { type: array, items: { type: integer } }
+    AllowedPackage:
+      description: A PackageEligibility entry that can be sold now. Same fields, without available and reason.
+      type: object
+      properties:
+        packageId: { type: integer }
+        name: { type: string }
+        role: { type: string, enum: [base, addon, standalone] }
+        action: { type: string, enum: [subscribe, renew, upgrade] }
+        price: { type: number, description: What the operator wallet is charged now. }
+        listPrice: { type: number }
+        currency: { type: string }
+        upgrade: { type: object, nullable: true, description: Same shape as PackageEligibility.upgrade. }
+        requiresOneOf: { type: array, items: { type: integer }, description: Not empty for an add-on that must be bought with one of these base packages. }
     Customer:
       type: object
       properties:
@@ -547,10 +590,10 @@ components:
           type: array
           nullable: true
           items: { $ref: "#/components/schemas/Subscription" }
-        offers:
+        eligibility:
           type: array
           nullable: true
-          items: { $ref: "#/components/schemas/Offer" }
+          items: { $ref: "#/components/schemas/PackageEligibility" }
     WalletMove:
       type: object
       properties:

@@ -1608,12 +1608,25 @@ class CRMService {
     }));
   }
 
-  /** Continue an existing package: renew the customer's current service for another period. */
-  async renewServiceForContact(contactId, serviceId, packageId, { paymentReference } = {}) {
-    const plan = await this.resolvePlan(packageId);
-    return this.payThenUpdateService(contactId, plan.priceAmount, { paymentReference }, async () => {
-      await this.updateService(serviceId, { action: 'RENEW' }, `Renew service ${serviceId}`);
-      return { subscriptionId: null, serviceId, message: 'Service renewed' };
+  /**
+   * Continue existing packages: one payment for the total, then each of the customer's
+   * current services is renewed for another period. `renewals` is [{ serviceId, packageId }].
+   */
+  async renewServicesForContact(contactId, renewals, { paymentReference } = {}) {
+    const plans = await this.resolvePlans(renewals.map((item) => item.packageId));
+    const total = plans.reduce((sum, plan) => sum + (Number(plan.priceAmount) || 0), 0);
+    return this.payThenUpdateService(contactId, total, { paymentReference }, async () => {
+      const renewed = [];
+      for (const { serviceId } of renewals) {
+        try {
+          await this.updateService(serviceId, { action: 'RENEW' }, `Renew service ${serviceId}`);
+        } catch (err) {
+          // Say how far it got: staff reconcile from this.
+          throw new Error(`${err.message} (renewed ${renewed.length} of ${renewals.length} services)`);
+        }
+        renewed.push(serviceId);
+      }
+      return { subscriptionId: null, serviceIds: renewed, message: 'Services renewed' };
     });
   }
 

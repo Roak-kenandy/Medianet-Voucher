@@ -87,13 +87,13 @@ type you are not enabled for is not visible to you.
 
 **One result per device.** A package is always sold to one device. A search therefore returns
 one entry per device, each with a `customerId`, a `deviceId` and that device's `serviceCode`,
-subscriptions and offers. Searching by `serviceCode` returns only that device. Searching by
+subscriptions and package eligibility. Searching by `serviceCode` returns only that device. Searching by
 `phone` returns every device of the customer for that type, usually one.
 
 **Every later call repeats how you found them.** Requests about a customer send the
 `customerId` **and** the same `serviceType` plus `serviceCode` or `phone` in the body. An id on
 its own is never enough. If the customer has more than one device and you used `phone`, also
-send `deviceId` where a device matters (subscriptions, offers, purchases); otherwise the
+send `deviceId` where a device matters (subscriptions, packages, purchases); otherwise the
 request is refused with `DEVICE_REQUIRED`.
 
 ## Safe retries: the Idempotency-Key
@@ -144,10 +144,11 @@ Keys are remembered for 30 days.
 | POST | `/customers/search` | Find customers by service code or phone | |
 | POST | `/customers/balance` | Customer account balance only | |
 | POST | `/customers/subscriptions` | Current subscriptions on a device | |
-| POST | `/customers/offers` | What can be sold to a device, with prices | |
+| POST | `/customers/allowed-packages` | Only the packages that can be sold to a device now | |
+| POST | `/customers/package-eligibility` | Every package, including those not available and why | |
 | POST | `/customers/topup` | Add credit to the customer's account | required |
 | POST | `/customers/subscribe` | Sell one or more new packages | required |
-| POST | `/customers/renew` | Renew a package the customer has | required |
+| POST | `/customers/renew` | Renew one, several or all of the customer's packages | required |
 | POST | `/customers/upgrade` | Upgrade the customer's base package | required |
 | POST | `/transactions/list` | Your wallet transactions | |
 | GET | `/transactions/{reference}` | One transaction | |
@@ -219,7 +220,7 @@ Response:
 | `standalone` | Can always be sold. |
 
 This list is your catalogue. What a **particular** customer can buy right now, and at what
-price, comes from `POST /customers/offers`.
+price, comes from `POST /customers/allowed-packages`.
 
 ### POST /customers/search
 
@@ -251,7 +252,7 @@ Response:
         "deviceCount": 1,
         "balance": { "balance": -50, "credit": 50, "due": 0, "currency": "MVR", "accountState": "ACTIVE" },
         "subscriptions": [ ],
-        "offers": [ ]
+        "eligibility": [ ]
       }
     ]
   }
@@ -259,7 +260,8 @@ Response:
 ```
 
 - An empty `customers` array means no customer of that type matches.
-- `balance`, `subscriptions` and `offers` have the same shape as the dedicated endpoints below.
+- `balance`, `subscriptions` and `eligibility` have the same shape as the dedicated endpoints
+  below (`eligibility` is the `packages` list of `/customers/package-eligibility`).
   Each is `null` if that part could not be read from the billing system; nothing can be sold
   to a device while `subscriptions` is `null`.
 
@@ -323,17 +325,55 @@ Response:
 `state` is one of `EFFECTIVE` (active), `NOT_EFFECTIVE` (not active, for example unpaid),
 `PAUSED`, `PENDING_VERIFICATION`. `dueDate` is the date the customer is paid up to.
 
-### POST /customers/offers
+### POST /customers/allowed-packages
 
-Same body as subscriptions. Returns every package you may sell for that type, with what it
-would be for this device.
+Same body as subscriptions. Returns **only what can be sold to this device right now**, based
+on what it already has. This is the list to show a customer.
+
+- A device with active packages gets: its own packages to renew, the upgrades open from its
+  current base package, and anything that can be added.
+- A device with nothing active gets your whole catalogue for that customer type.
 
 ```json
 {
   "success": true,
   "data": {
     "customerId": "2b1f6c0a-…", "deviceId": "8a4d2f10-…", "serviceCode": "483920",
-    "offers": [
+    "hasActivePackages": true,
+    "packages": [
+      { "packageId": 4, "name": "FAMILY", "role": "base", "action": "renew",
+        "price": 200, "listPrice": 200, "currency": "MVR", "upgrade": null, "requiresOneOf": [] },
+      { "packageId": 9, "name": "SPORTS", "role": "addon", "action": "renew",
+        "price": 50, "listPrice": 50, "currency": "MVR", "upgrade": null, "requiresOneOf": [] },
+      { "packageId": 5, "name": "WANTITALL", "role": "base", "action": "upgrade",
+        "price": 96.4, "listPrice": 300, "currency": "MVR",
+        "upgrade": { "mode": "change", "replaces": { "packageId": 4, "name": "FAMILY" },
+                     "credit": 187.2, "cancelsAddons": [ { "packageId": 9, "name": "SPORTS" } ] },
+        "requiresOneOf": [] }
+    ]
+  }
+}
+```
+
+Each entry's `action` tells you which endpoint sells it: `renew` → `/customers/renew`,
+`upgrade` → `/customers/upgrade`, `subscribe` → `/customers/subscribe`. `price` is what your
+wallet is charged. If `requiresOneOf` is not empty, the package is an add-on that must be
+bought in the same `subscribe` request as one of those base packages.
+
+The fields are explained under package eligibility below.
+
+### POST /customers/package-eligibility
+
+Same body. Returns **every** package you may sell for that type, including the ones that
+cannot be sold to this device and the reason. Use it when you want to explain why something
+is unavailable; otherwise `allowed-packages` is simpler.
+
+```json
+{
+  "success": true,
+  "data": {
+    "customerId": "2b1f6c0a-…", "deviceId": "8a4d2f10-…", "serviceCode": "483920",
+    "packages": [
       { "packageId": 4, "name": "FAMILY", "role": "base", "action": "renew", "available": true,
         "reason": null, "price": 200, "listPrice": 200, "currency": "MVR",
         "upgrade": null, "requiresOneOf": [] },
@@ -361,7 +401,9 @@ would be for this device.
 | `requiresOneOf` | For an unavailable add-on: base packages that make it available when bought in the same `subscribe` request. |
 
 Upgrade prices depend on the days left in the term, so they can change from one day to the
-next. Fetch offers shortly before you sell.
+next. Fetch the packages shortly before you sell.
+
+The name "offers" is deliberately not used here: it is reserved for promotional offers.
 
 ### POST /customers/topup
 
@@ -403,7 +445,7 @@ Sells one or more **new** packages to a device. Requires `Idempotency-Key`.
 |---|---|
 | `customerId`, `serviceType`, `serviceCode` or `phone` | Required, as everywhere. |
 | `deviceId` | Required only when the customer has several devices and you used `phone`. |
-| `packageIds` | 1 to 20 package ids. Each must be an offer with `action: "subscribe"`, except an add-on bought together with a base it needs. |
+| `packageIds` | 1 to 20 package ids. Each must have `action: "subscribe"` in `allowed-packages`, except an add-on bought together with a base it needs. |
 | `amount` | Optional. If sent, it must equal the total price or the request is refused with `AMOUNT_MISMATCH`. Send it to be sure you charge what you showed your customer. |
 
 Response `201`:
@@ -430,30 +472,51 @@ If `usedFreeAccount` is `true`, a free-account slot paid for the sale and `amoun
 
 ### POST /customers/renew
 
-Renews one package the device already has, for another period at the package price.
-Requires `Idempotency-Key`.
+Renews packages the device already has, each for another period at its package price.
+One request, one charge for the total. Requires `Idempotency-Key`.
+
+Renew everything on the device:
 
 ```json
-{ "customerId": "2b1f6c0a-5a0e-4f0b-9a57-0d7c0a1e3f11", "serviceType": "OTT", "serviceCode": "483920", "packageId": 4 }
+{ "customerId": "2b1f6c0a-5a0e-4f0b-9a57-0d7c0a1e3f11", "serviceType": "OTT", "serviceCode": "483920", "all": true }
 ```
 
-`amount` is optional and checked the same way as for subscribe. The response has the same
-shape, with `"action": "renew"`.
+Or only some packages:
+
+```json
+{ "customerId": "2b1f6c0a-5a0e-4f0b-9a57-0d7c0a1e3f11", "serviceType": "OTT", "serviceCode": "483920", "packageIds": [4, 9] }
+```
+
+| Field | |
+|---|---|
+| `all` | `true` renews every package on the device that you sell. Send this **or** `packageIds`. |
+| `packageIds` | The packages to renew. Each must be one the device has (`action: "renew"`). |
+| `amount` | Optional. If sent, it must equal the total or the request is refused with `AMOUNT_MISMATCH`. |
+
+The response has the same shape as subscribe, with `"action": "renew"` and every renewed
+package listed in `packages`. With `all`, a device that has nothing to renew gets
+`400 NOTHING_TO_RENEW`.
 
 ### POST /customers/upgrade
 
 Upgrades the device's base package to a higher tier. Requires `Idempotency-Key`.
 
+The simplest call is the package to upgrade to and nothing else:
+
 ```json
-{ "customerId": "2b1f6c0a-5a0e-4f0b-9a57-0d7c0a1e3f11", "serviceType": "OTT", "serviceCode": "483920", "packageId": 5, "amount": 96.4 }
+{ "customerId": "2b1f6c0a-5a0e-4f0b-9a57-0d7c0a1e3f11", "serviceType": "OTT", "serviceCode": "483920", "packageId": 5 }
 ```
 
-`amount` is **required** here and must equal the `price` from the offer. Because the price
-moves with the days left, this protects you from charging a different amount than you quoted.
-If it no longer matches you get `AMOUNT_MISMATCH` with the current price in the message; fetch
-the offers again and retry (the same idempotency key is fine).
+Everything else is worked out for you: which package it replaces, the credit for the unused
+days, any add-on that has to be cancelled, and the amount. The response tells you what was
+done and what was charged.
 
-Response `201` has the same shape, with:
+`amount` is optional. The upgrade price depends on the days left, so it can differ from what
+you saw earlier. If you quoted a price to your customer, send it as `amount` and the upgrade is
+refused with `AMOUNT_MISMATCH` (nothing charged) when the price has moved; fetch the packages
+again and retry with the same idempotency key. Without `amount`, the current price is charged.
+
+Response `201` has the same shape as subscribe, with:
 
 ```json
 "action": "upgrade",
@@ -462,9 +525,10 @@ Response `201` has the same shape, with:
 "upgrade": { "mode": "change", "replaced": "FAMILY", "credit": 187.2, "cancelledAddons": ["SPORTS"] }
 ```
 
-**One kind of purchase per request.** If you call an endpoint that does not match what the
-purchase is for that device (for example `/customers/upgrade` for a package the customer already has),
-nothing is charged and you get `409 ACTION_MISMATCH`. Use the `action` from the offers.
+**One kind of purchase per request.** Renewals, upgrades and new packages are separate
+requests. If you call an endpoint that does not match what the purchase is for that device
+(for example `/customers/upgrade` for a package the customer already has), nothing is charged
+and you get `409 ACTION_MISMATCH`. Use the `action` from `allowed-packages`.
 
 ### POST /transactions/list
 
@@ -557,13 +621,14 @@ What happened to a money request you sent.
 | 400 | `PACKAGE_NOT_ELIGIBLE` | The package cannot be sold to this device. The message says why. |
 | 400 | `PACKAGE_NOT_ALLOWED`, `PACKAGE_NOT_ASSIGNED` | The package is not one of yours. |
 | 400 | `AMOUNT_MISMATCH` | `amount` differs from the current price. |
+| 400 | `NOTHING_TO_RENEW` | `all: true` was sent but the device has no package to renew. |
 | 401 | `UNAUTHORIZED` | Missing, wrong or revoked API key. |
 | 403 | `OPERATOR_INACTIVE` | The operator account is disabled. |
 | 403 | `API_ACCESS_DISABLED` | Medianet has turned API access off for the operator. |
 | 403 | `SERVICE_NOT_ALLOWED` | That customer type is not enabled for you. |
 | 403 | `INSUFFICIENT_WALLET_BALANCE` | Your wallet cannot cover the charge. |
 | 404 | `CUSTOMER_NOT_FOUND`, `DEVICE_NOT_FOUND`, `NOT_FOUND` | No such customer, device, transaction or request for you. |
-| 409 | `ACTION_MISMATCH` | Wrong endpoint for this purchase (see offers `action`). |
+| 409 | `ACTION_MISMATCH` | Wrong endpoint for this purchase (see the package's `action`). |
 | 409 | `IDEMPOTENCY_IN_PROGRESS` | The same request is still running. |
 | 422 | `IDEMPOTENCY_KEY_REUSED` | The key was used for a different request. |
 | 429 | `RATE_LIMIT` | Slow down and retry after a short wait. |
@@ -580,12 +645,12 @@ Limits are per API key, per minute:
 | Requests | Limit |
 |---|---|
 | `/account`, `/wallet`, `/packages/list`, `/transactions/…`, `/requests/…` | 300 |
-| `/customers` lookups (search, balance, subscriptions, offers) | 120 |
+| `/customers` lookups (search, balance, subscriptions, allowed packages, eligibility) | 120 |
 | Money requests (top-up, subscribe, renew, upgrade) | 60 |
 
 A `429` response carries the standard `RateLimit-*` headers. Customer lookups are the
 expensive ones: each reads live data from the billing system and typically takes one to three
-seconds. `POST /customers/search` already returns balance, subscriptions and offers, so one search is
+seconds. `POST /customers/search` already returns balance, subscriptions and package eligibility, so one search is
 usually all you need before a sale.
 
 Requests for one operator are processed a few at a time; under a burst you may see
@@ -600,14 +665,20 @@ Requests for one operator are processed a few at a time; under a burst you may s
 2. `POST /customers/topup` with a new `Idempotency-Key`.
 3. On a timeout, repeat step 2 with the same key.
 
-**Renew, upgrade or add a package**
+**Renew everything a customer has**
 
-1. `POST /customers/search` → take `customerId`, `deviceId` and `offers`.
-2. Show the offers where `available` is `true`, with `price`.
-3. Call the endpoint matching the chosen offer's `action`:
-   `subscribe` → `/customers/subscribe`, `renew` → `/customers/renew`,
-   `upgrade` → `/customers/upgrade`, sending the offer `price` as `amount`.
-4. On `AMOUNT_MISMATCH`, fetch the offers again and confirm the new price.
+1. `POST /customers/search` → take `customerId`.
+2. `POST /customers/renew` with `"all": true`.
+
+**Upgrade, or add a package**
+
+1. `POST /customers/search`, then `POST /customers/allowed-packages` (or read from
+   the search result's `eligibility`).
+2. Show the list with `price`.
+3. Call the endpoint matching the chosen package's `action`:
+   `subscribe` → `/customers/subscribe` with `packageIds`,
+   `upgrade` → `/customers/upgrade` with `packageId`.
+   Send the `price` you showed as `amount` if you want the sale refused when it has changed.
 
 **Reconcile at end of day**
 

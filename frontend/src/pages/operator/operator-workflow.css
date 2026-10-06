@@ -1644,3 +1644,7 @@
   white-space: normal;
   color: var(--color-text-secondary);
 }
+
+.package-options-all {
+  margin-left: auto;
+}

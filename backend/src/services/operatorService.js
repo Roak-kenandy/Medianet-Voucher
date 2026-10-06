@@ -1270,6 +1270,15 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
     );
   }
   const eligibility = await loadEligibilityContext(operatorId, data.serviceTag);
+  // "Renew everything": every package on this device that this operator sells.
+  if (data.renewAll) {
+    data.packageIds = evaluatePackageOptions({ ...eligibility, services: binding.customer.services })
+      .filter((item) => item.action === 'renew')
+      .map((item) => item.packageId);
+    if (!data.packageIds.length) {
+      throw new AppError('This device has no package that can be renewed', 400, 'NOTHING_TO_RENEW');
+    }
+  }
   const purchase = resolvePurchase(
     { ...eligibility, services: binding.customer.services, packageIds: data.packageIds },
     (message) => {
@@ -1354,7 +1363,7 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
         ...(purchase.action === 'subscribe'
           ? {}
           : {
-              crmServiceId: option.serviceId,
+              crmServiceIds: purchase.options.map((item) => item.serviceId),
               replacedPackage: option.replaces?.name || null,
               cancelledAddons: option.cancels.map((item) => item.name),
             }),
@@ -1377,9 +1386,11 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
     reservation,
     (paymentReference) => {
       if (purchase.action === 'renew') {
-        return crmService.renewServiceForContact(data.crmContactId, option.serviceId, option.packageId, {
-          paymentReference,
-        });
+        return crmService.renewServicesForContact(
+          data.crmContactId,
+          purchase.options.map((item) => ({ serviceId: item.serviceId, packageId: item.packageId })),
+          { paymentReference }
+        );
       }
       if (upgradeMode === 'replace') {
         return crmService.replaceServiceForContact(
@@ -1427,7 +1438,7 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
       paymentReference: reservation.paymentReference,
       ...channelMetadata(reqMeta),
       purchaseAction: purchase.action,
-      crmServiceId: option.serviceId,
+      crmServiceIds: purchase.options.map((item) => item.serviceId).filter(Boolean),
       replacedPackage: option.replaces?.name || null,
       cancelledAddons: option.cancels.map((item) => item.name),
     },
