@@ -367,6 +367,11 @@ export const trialQuotaAdjustSchema = z
     }
   });
 
+// Only base packages use the upgrade family and tier; other roles send them as null or blank.
+const blankToUndefined = (value) => (value === null || value === '' ? undefined : value);
+const upgradeFamilySchema = z.preprocess(blankToUndefined, z.string().trim().max(60).optional().default(''));
+const upgradeTierSchema = z.preprocess(blankToUndefined, z.coerce.number().int().min(1).max(999).optional());
+
 /** Every package field is editable; the CRM product and price term must stay a unique pair. */
 export const updatePackageSchema = z.object({
   name: z.string().trim().min(2, 'Package name is required').max(200),
@@ -385,8 +390,8 @@ export const updatePackageSchema = z.object({
   currencyCode: z.string().trim().toUpperCase().length(3).optional().default('MVR'),
   // Eligibility: base (upgrade family + tier), addon (needs one of the listed base packages) or standalone.
   packageRole: z.enum(['base', 'addon', 'standalone']).optional().default('standalone'),
-  upgradeFamily: z.string().trim().max(60).optional().default(''),
-  upgradeTier: z.coerce.number().int().min(1).max(999).optional(),
+  upgradeFamily: upgradeFamilySchema,
+  upgradeTier: upgradeTierSchema,
   requiredPackageIds: z.array(packageIdSchema).max(50).optional().default([]),
 });
 
@@ -397,8 +402,8 @@ export const createPackageSchema = z.object({
   salesModelId: salesModelIdSchema,
   // Eligibility: base (upgrade family + tier), addon (needs one of the listed base packages) or standalone.
   packageRole: z.enum(['base', 'addon', 'standalone']).optional().default('standalone'),
-  upgradeFamily: z.string().trim().max(60).optional().default(''),
-  upgradeTier: z.coerce.number().int().min(1).max(999).optional(),
+  upgradeFamily: upgradeFamilySchema,
+  upgradeTier: upgradeTierSchema,
   requiredPackageIds: z.array(packageIdSchema).max(50).optional().default([]),
   sku: z.string().trim().max(100).optional(),
   productId: z.string().uuid('Invalid product ID'),
