@@ -25,6 +25,11 @@ export function getServiceTagLabel(key) {
   return serviceTypes.find((type) => type.key === key)?.label || key;
 }
 
+/** Which CRM a type's ids belong to: 'live' or 'sandbox'. */
+export function getServiceTagEnvironment(key) {
+  return serviceTypes.find((type) => type.key === key)?.environment || 'live';
+}
+
 export function getServiceTagShortLabel(key) {
   return serviceTypes.find((type) => type.key === key)?.shortLabel || key;
 }

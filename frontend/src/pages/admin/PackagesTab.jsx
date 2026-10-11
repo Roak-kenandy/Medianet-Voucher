@@ -8,7 +8,7 @@ import { adminApi } from '../../api/client';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import { hasPermission } from '../../constants/permissions';
-import { getServiceTypes, getServiceTagLabel } from '../../constants/serviceTags';
+import { getServiceTypes, getServiceTagLabel, getServiceTagEnvironment } from '../../constants/serviceTags';
 import './admin-shared.css';
 
 function StatusBadge({ active }) {
@@ -262,6 +262,17 @@ export default function PackagesTab() {
   const [salesModels, setSalesModels] = useState([]);
   const [catalogSalesModelId, setCatalogSalesModelId] = useState('');
   const serviceTypeOptions = getServiceTypes({ activeOnly: true });
+  // A package belongs to the CRM of its customer type, so the environment only narrows the type list.
+  const typesInEnvironment = (environment) =>
+    serviceTypeOptions.filter((type) => (type.environment || 'live') === environment);
+  const hasSandboxTypes = typesInEnvironment('sandbox').length > 0;
+  const catalogEnvironment = getServiceTagEnvironment(catalogServiceTag);
+  const editEnvironment = getServiceTagEnvironment(editForm.serviceTag);
+  const selectCatalogServiceTag = (serviceTag) => {
+    setCatalogServiceTag(serviceTag);
+    setRecommendations([]);
+    setForm((prev) => ({ ...prev, serviceTag, productId: '', priceTermId: '' }));
+  };
 
   useEffect(() => {
     adminApi
@@ -472,10 +483,13 @@ export default function PackagesTab() {
                 {!serviceTypeOptions.some((type) => type.key === editForm.serviceTag) && (
                   <option value={editForm.serviceTag}>{getServiceTagLabel(editForm.serviceTag)} (inactive)</option>
                 )}
-                {serviceTypeOptions.map((type) => (
+                {typesInEnvironment(editEnvironment).map((type) => (
                   <option key={type.key} value={type.key}>{type.label}</option>
                 ))}
               </select>
+              {editEnvironment === 'sandbox' && (
+                <p className="form-hint">Sandbox package. Its CRM ids belong to the sandbox, so it stays on sandbox customer types.</p>
+              )}
             </div>
             <div className="form-group">
               <label className="form-label">Sales Model</label>
@@ -612,7 +626,12 @@ export default function PackagesTab() {
                     {packages.map((pkg) => (
                       <tr key={pkg.id}>
                         <td style={{ fontWeight: 500 }}>{pkg.name}</td>
-                        <td><span className="badge badge-info">{getServiceTagLabel(pkg.service_tag || 'OTT')}</span></td>
+                        <td>
+                          <span className="badge badge-info">{getServiceTagLabel(pkg.service_tag || 'OTT')}</span>
+                          {getServiceTagEnvironment(pkg.service_tag || 'OTT') === 'sandbox' && (
+                            <span className="badge badge-warning" style={{ marginLeft: 6 }}>Sandbox</span>
+                          )}
+                        </td>
                         <td>{pkg.sales_model_name || '—'}</td>
                         <td><RoleSummary pkg={pkg} /></td>
                         <td>{pkg.sku || '—'}</td>
@@ -684,18 +703,32 @@ export default function PackagesTab() {
         {error && <div className="alert alert-error">{error}</div>}
 
         <div style={{ marginBottom: 20 }}>
+          {hasSandboxTypes && (
+            <div className="form-group">
+              <label className="form-label">Environment</label>
+              <select
+                className="form-input"
+                value={catalogEnvironment}
+                onChange={(e) => selectCatalogServiceTag(typesInEnvironment(e.target.value)[0]?.key || catalogServiceTag)}
+              >
+                <option value="live">Live</option>
+                <option value="sandbox">Sandbox (testing)</option>
+              </select>
+              <p className="form-hint">
+                {catalogEnvironment === 'sandbox'
+                  ? 'The catalog is loaded from the sandbox CRM. Only sandbox operators can sell this package.'
+                  : 'The catalog is loaded from the live CRM.'}
+              </p>
+            </div>
+          )}
           <div className="form-group">
             <label className="form-label">Package Tag</label>
             <select
               className="form-input"
               value={catalogServiceTag}
-              onChange={(e) => {
-                setCatalogServiceTag(e.target.value);
-                setRecommendations([]);
-                setForm((prev) => ({ ...prev, serviceTag: e.target.value, productId: '', priceTermId: '' }));
-              }}
+              onChange={(e) => selectCatalogServiceTag(e.target.value)}
             >
-              {serviceTypeOptions.map((tag) => (
+              {typesInEnvironment(catalogEnvironment).map((tag) => (
                 <option key={tag.key} value={tag.key}>{tag.label}</option>
               ))}
             </select>
