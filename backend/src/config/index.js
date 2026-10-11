@@ -83,6 +83,15 @@ export const config = {
     paymentTermsId: process.env.PAYMENT_TERMS_ID || '',
     paymentTypeId: process.env.PAYMENT_TYPE_ID || '199f072f-977d-4056-8262-d7e467bbccbb7',
     salesModelName: process.env.CRM_SALES_MODEL_NAME || 'Retail',
+    // CRM sandbox (UAT) used by operators marked `sandbox`. Its ids are its own; nothing here
+    // falls back to the live values.
+    sandbox: {
+      apiKey: process.env.CRM_SANDBOX_API_KEY || '',
+      baseUrl: process.env.CRM_SANDBOX_BASE_URL || 'https://sandboxapi.crm.com/backoffice/v2',
+      classificationId: process.env.CRM_SANDBOX_CLASSIFICATION_ID || '',
+      paymentTermsId: process.env.CRM_SANDBOX_PAYMENT_TERMS_ID || '',
+      paymentTypeId: process.env.CRM_SANDBOX_PAYMENT_TYPE_ID || '',
+    },
     requestTimeoutMs: boundedInt(process.env.CRM_REQUEST_TIMEOUT_MS, 60000, 1000, 120000),
     maxConcurrentPerOperator: boundedInt(process.env.CRM_MAX_CONCURRENT_PER_OPERATOR, 2, 1, 10),
     maxConcurrentGlobal: boundedInt(process.env.CRM_MAX_CONCURRENT_GLOBAL, 8, 1, 50),

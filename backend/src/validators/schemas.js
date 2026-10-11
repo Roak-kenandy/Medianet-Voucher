@@ -56,6 +56,8 @@ const salesModelIdSchema = z.coerce.number().int().positive('Invalid sales model
 const salesModelIdsSchema = z.array(salesModelIdSchema).min(1, 'Select at least one sales model').max(30);
 
 const crmIdSchema = z.string().trim().uuid('Must be a CRM id (UUID)');
+/** Which CRM a record belongs to. Fixed when the record is created. */
+const crmEnvironmentSchema = z.enum(['live', 'sandbox']).optional().default('live');
 /** An operator's payment type; null means the default CRM payment type from .env. */
 const operatorPaymentTypeIdSchema = z.union([
   z.coerce.number().int().positive('Invalid payment type'),
@@ -77,6 +79,7 @@ export const createServiceTypeSchema = z.object({
   ...serviceTypeFields,
   crmTagId: crmIdSchema,
   crmDeviceProductId: crmIdSchema,
+  environment: crmEnvironmentSchema,
 });
 
 /** The two built-in types may leave the CRM ids empty to keep using the .env values. */
@@ -110,6 +113,8 @@ export const paymentTypeSchema = z.object({
   crmTypeId: crmIdSchema,
   description: z.string().trim().max(500).optional().default(''),
   isActive: z.boolean().optional().default(true),
+  // Used when the payment type is created; ignored on update.
+  environment: crmEnvironmentSchema,
 });
 
 export const salesModelSchema = z.object({
@@ -257,6 +262,8 @@ export const operatorApiKeySchema = z.object({
 export const createOperatorSchema = z
   .object({
     clientName: z.string().trim().min(2, 'Client name is required').max(200),
+    // `sandbox` operators use the CRM sandbox. Cannot be changed after the operator is created.
+    environment: crmEnvironmentSchema,
     // Customer types the operator may serve and the sales models it may sell from.
     serviceTypeKeys: serviceTypeKeysSchema,
     defaultServiceTypeKey: serviceTypeKeySchema.optional(),

@@ -3,6 +3,7 @@ import { config } from '../config/index.js';
 import { AppError, CrmBillableError, CrmPaymentError } from '../utils/errors.js';
 import { getPlanByPackageId } from './packageService.js';
 import { getServiceTagConfig, assertServiceTag } from '../constants/serviceTags.js';
+import { currentCrmEnvironment } from '../utils/crmEnvironment.js';
 
 const UNDELIVERED_ERROR_CODES = new Set([
   'ECONNREFUSED',
@@ -188,15 +189,48 @@ function isRetryableSubscriptionError(status, data = {}) {
   );
 }
 
+/** A customer type's CRM ids only exist in its own CRM, so it must match the one in use. */
+function tagConfigFor(serviceTag) {
+  const tagConfig = getServiceTagConfig(serviceTag);
+  if (tagConfig.environment !== currentCrmEnvironment()) {
+    throw new AppError(
+      `${tagConfig.label} customers are not available in the ${currentCrmEnvironment()} CRM`,
+      400,
+      'CRM_ENVIRONMENT_MISMATCH'
+    );
+  }
+  return tagConfig;
+}
+
 class CRMService {
   constructor() {
-    this.apiKey = config.crm.apiKey;
-    this.baseUrl = config.crm.baseUrl;
     this.defaultTagId = config.crm.defaultTagId;
-    this.classificationId = config.crm.classificationId;
     this.currencyCode = config.crm.currencyCode;
-    this.paymentTermsId = config.crm.paymentTermsId;
-    this.paymentTypeId = config.crm.paymentTypeId;
+  }
+
+  /** Connection settings and account ids of the CRM this operation runs against. */
+  get environmentConfig() {
+    return currentCrmEnvironment() === 'sandbox' ? config.crm.sandbox : config.crm;
+  }
+
+  get apiKey() {
+    return this.environmentConfig.apiKey;
+  }
+
+  get baseUrl() {
+    return this.environmentConfig.baseUrl;
+  }
+
+  get classificationId() {
+    return this.environmentConfig.classificationId;
+  }
+
+  get paymentTermsId() {
+    return this.environmentConfig.paymentTermsId;
+  }
+
+  get paymentTypeId() {
+    return this.environmentConfig.paymentTypeId;
   }
 
   async resolveServiceTagFromPackageIds(packageIds = []) {
@@ -232,7 +266,7 @@ class CRMService {
   /** `salesModelName` picks which CRM price tier is offered (defaults to the .env model). */
   async fetchProductCatalog(serviceTag = 'OTT', salesModelName = config.crm.salesModelName) {
     this.assertConfigured();
-    const tagConfig = getServiceTagConfig(assertServiceTag(serviceTag));
+    const tagConfig = tagConfigFor(assertServiceTag(serviceTag));
     const products = await this.fetchAllProductsByTag(tagConfig.crmTagName);
 
     const entries = await Promise.all(
@@ -421,7 +455,9 @@ class CRMService {
   assertConfigured() {
     if (!this.apiKey || !this.baseUrl) {
       throw new AppError(
-        'CRM integration is not configured. Set CRM_API_KEY and CRM_BASE_URL.',
+        currentCrmEnvironment() === 'sandbox'
+          ? 'The CRM sandbox is not configured. Set CRM_SANDBOX_API_KEY and CRM_SANDBOX_BASE_URL.'
+          : 'CRM integration is not configured. Set CRM_API_KEY and CRM_BASE_URL.',
         503,
         'CRM_NOT_CONFIGURED'
       );
@@ -460,7 +496,7 @@ class CRMService {
   }
 
   contactHasOttTag(tagsData) {
-    return this.contactHasServiceTag(tagsData, getServiceTagConfig('OTT'));
+    return this.contactHasServiceTag(tagsData, tagConfigFor('OTT'));
   }
 
   isActiveSubscriptionState(state = '') {
@@ -536,7 +572,7 @@ class CRMService {
   }
 
   async createContact(firstName, lastName, phoneNumber, serviceTag = 'OTT') {
-    const tagConfig = getServiceTagConfig(assertServiceTag(serviceTag));
+    const tagConfig = tagConfigFor(assertServiceTag(serviceTag));
     const payload = {
       type: 'PERSON',
       person_name: {
@@ -607,7 +643,7 @@ class CRMService {
   }
 
   async createDevice(contactId, serviceTag = 'OTT') {
-    const tagConfig = getServiceTagConfig(assertServiceTag(serviceTag));
+    const tagConfig = tagConfigFor(assertServiceTag(serviceTag));
     const payload = {
       serial_number: uuidv4(),
       electronic_id: null,
@@ -1191,7 +1227,7 @@ class CRMService {
   async registerCustomer(phoneNumber, fullName, serviceTag = 'OTT', { forceNew = false } = {}) {
     this.assertConfigured();
     const normalizedTag = assertServiceTag(serviceTag);
-    const tagConfig = getServiceTagConfig(normalizedTag);
+    const tagConfig = tagConfigFor(normalizedTag);
     const normalizedPhone = normalizePhone(phoneNumber);
     const { firstName, lastName } = splitFullName(fullName);
 
@@ -1287,7 +1323,7 @@ class CRMService {
   async searchCustomersByPhone(phoneNumber, serviceTag = 'OTT') {
     this.assertConfigured();
     const normalizedTag = assertServiceTag(serviceTag);
-    const tagConfig = getServiceTagConfig(normalizedTag);
+    const tagConfig = tagConfigFor(normalizedTag);
     const normalizedPhone = normalizePhone(phoneNumber);
     const contactsData = await this.fetchContactsByPhone(normalizedPhone);
     // CRM search_value is a free-text search, so keep only contacts whose own phone number
@@ -1776,7 +1812,7 @@ class CRMService {
   async searchCustomersByServiceCode(serviceCode, serviceTag = 'OTT') {
     this.assertConfigured();
     const normalizedTag = assertServiceTag(serviceTag);
-    const tagConfig = getServiceTagConfig(normalizedTag);
+    const tagConfig = tagConfigFor(normalizedTag);
     const code = normalizeServiceCode(serviceCode);
 
     const devices = await this.fetchDevicesByServiceCode(code);
@@ -1855,7 +1891,7 @@ class CRMService {
   ) {
     this.assertConfigured();
     const serviceTag = await this.resolveServiceTagFromPackageIds(packageIds);
-    const tagConfig = getServiceTagConfig(serviceTag);
+    const tagConfig = tagConfigFor(serviceTag);
     await this.resolvePlans(packageIds);
 
     const accountId = await this.ensureContactAccount(contactId);

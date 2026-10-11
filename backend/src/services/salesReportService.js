@@ -6,7 +6,7 @@ import {
   forEachDealerTopupBatch,
 } from './dealerTopupReportService.js';
 import { csvEscape } from '../utils/csv.js';
-import { operatorSpendDebitSql } from '../utils/walletSql.js';
+import { operatorSpendDebitSql, liveOperatorSql } from '../utils/walletSql.js';
 
 function roundMoney(value) {
   return Math.round(Number(value) * 100) / 100;
@@ -18,7 +18,7 @@ function toDateKey(value) {
 }
 
 function buildWalletDateFilters({ startDate, endDate }, params, operatorId) {
-  const filters = [`wt.status = 'completed'`];
+  const filters = [`wt.status = 'completed'`, liveOperatorSql('wt.operator_id')];
   if (operatorId) {
     filters.push('wt.operator_id = ?');
     params.push(operatorId);
@@ -35,7 +35,7 @@ function buildWalletDateFilters({ startDate, endDate }, params, operatorId) {
 }
 
 function buildAccountDateFilters({ startDate, endDate }, params, operatorId) {
-  const filters = [`va.status = 'created'`];
+  const filters = [`va.status = 'created'`, liveOperatorSql('va.operator_id')];
   if (operatorId) {
     filters.push('va.operator_id = ?');
     params.push(operatorId);

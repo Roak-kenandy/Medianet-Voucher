@@ -1,4 +1,5 @@
 import { config } from '../config/index.js';
+import { liveOperatorSql } from '../utils/walletSql.js';
 import { query } from '../db/pool.js';
 import { calculateGstFromTotal } from './walletService.js';
 import { REPORT_SCAN_BATCH_SIZE } from '../constants/reportLimits.js';
@@ -118,6 +119,7 @@ const TOPUP_ORDER = `ORDER BY COALESCE(wt.completed_at, wt.created_at) DESC, wt.
 
 export function buildDealerTopupBaseFilters({ operatorId, startDate, endDate } = {}) {
   const filters = [
+    liveOperatorSql('wt.operator_id'),
     `wt.status = 'completed'`,
     `(
       wt.type = 'topup'

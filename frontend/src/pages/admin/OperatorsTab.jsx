@@ -34,6 +34,7 @@ import { formatDateTime, formatDate } from '../../constants/appSettings';
 
 const emptyForm = () => ({
   clientName: '',
+  environment: 'live',
   serviceTypeKeys: [],
   defaultServiceTypeKey: '',
   salesModelIds: [],
@@ -137,6 +138,10 @@ export default function OperatorsTab() {
   const [packageGroups, setPackageGroups] = useState([]);
   const [salesModels, setSalesModels] = useState([]);
   const [paymentTypes, setPaymentTypes] = useState([]);
+  const [sandboxConfigured, setSandboxConfigured] = useState(false);
+  /** Customer types of one CRM environment; an operator can only be given its own. */
+  const serviceTypesFor = (environment) =>
+    serviceTypeOptions.filter((type) => (type.environment || 'live') === environment);
   const serviceTypeOptions = getServiceTypes({ activeOnly: true });
 
   /** Packages an operator with these customer types and sales models may be given. */
@@ -191,7 +196,10 @@ export default function OperatorsTab() {
       .catch(() => setSalesModels([]));
     adminApi
       .getPaymentTypes()
-      .then((data) => setPaymentTypes(data.paymentTypes.filter((paymentType) => paymentType.isActive)))
+      .then((data) => {
+        setPaymentTypes(data.paymentTypes.filter((paymentType) => paymentType.isActive));
+        setSandboxConfigured(Boolean(data.sandbox?.configured));
+      })
       .catch(() => setPaymentTypes([]));
   }, [page, search]);
 
@@ -202,7 +210,7 @@ export default function OperatorsTab() {
 
   const resetCreateForm = () => {
     // New operators start with every customer type and, when there is only one, that sales model.
-    const typeKeys = serviceTypeOptions.map((type) => type.key);
+    const typeKeys = serviceTypesFor('live').map((type) => type.key);
     setCreateForm({
       ...emptyForm(),
       serviceTypeKeys: typeKeys,
@@ -218,6 +226,7 @@ export default function OperatorsTab() {
 
     setEditForm({
       clientName: operator.client_name,
+      environment: operator.environment || 'live',
       serviceTypeKeys: operator.service_type_keys || [],
       defaultServiceTypeKey: operator.default_service_type_key || operator.service_type_keys?.[0] || '',
       salesModelIds: operator.sales_model_ids || [],
@@ -421,6 +430,21 @@ export default function OperatorsTab() {
     setForm(next);
   };
 
+  /** Live and sandbox ids never mix, so switching clears everything tied to the other CRM. */
+  const handleEnvironmentChange = (form, setForm, environment) => {
+    const typeKeys = serviceTypesFor(environment).map((type) => type.key);
+    setForm({
+      ...form,
+      environment,
+      serviceTypeKeys: typeKeys,
+      defaultServiceTypeKey: typeKeys[0] || '',
+      paymentTypeId: null,
+      packageIds: [],
+      packageGroupIds: [],
+      canSelfTopup: environment === 'sandbox' ? false : form.canSelfTopup,
+    });
+  };
+
   const toggleInList = (list, value) =>
     list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
 
@@ -439,10 +463,34 @@ export default function OperatorsTab() {
           required
         />
       </div>
+      <div className="form-group">
+        <label className="form-label">Environment</label>
+        <select
+          className="form-input"
+          value={form.environment}
+          onChange={(e) => handleEnvironmentChange(form, setForm, e.target.value)}
+          disabled={isEdit}
+        >
+          <option value="live">Live</option>
+          <option value="sandbox" disabled={!isEdit && !sandboxConfigured}>
+            Sandbox (testing){!isEdit && !sandboxConfigured ? ' — not configured' : ''}
+          </option>
+        </select>
+        <p className="form-hint">
+          {isEdit
+            ? 'Set when the operator was created and cannot be changed.'
+            : 'A sandbox operator works against the CRM sandbox for testing: no live customers, no bank top-ups. This cannot be changed later.'}
+        </p>
+      </div>
       <div className="form-group form-group-full">
         <label className="form-label">Customer Types</label>
+        {serviceTypesFor(form.environment).length === 0 && (
+          <p className="form-hint">
+            No {form.environment} customer types configured. Add one under CRM Settings first.
+          </p>
+        )}
         <div className="operator-permissions-grid">
-          {serviceTypeOptions.map((type) => {
+          {serviceTypesFor(form.environment).map((type) => {
             const checked = form.serviceTypeKeys.includes(type.key);
             return (
               <div key={type.key}>
@@ -514,7 +562,9 @@ export default function OperatorsTab() {
           }
         >
           <option value="">Default</option>
-          {paymentTypes.map((paymentType) => (
+          {paymentTypes
+            .filter((paymentType) => (paymentType.environment || 'live') === form.environment)
+            .map((paymentType) => (
             <option key={paymentType.id} value={paymentType.id}>{paymentType.name}</option>
           ))}
         </select>
@@ -943,7 +993,12 @@ export default function OperatorsTab() {
                 <tbody>
                   {operators.map((op) => (
                     <tr key={op.id}>
-                      <td style={{ fontWeight: 500 }}>{op.client_name}</td>
+                      <td style={{ fontWeight: 500 }}>
+                        {op.client_name}
+                        {op.environment === 'sandbox' && (
+                          <span className="badge badge-warning" style={{ marginLeft: 8 }}>Sandbox</span>
+                        )}
+                      </td>
                       <td><span className="badge badge-neutral">{getServiceScopeLabel(op.service_type_keys || [])}</span></td>
                       <td className="operators-packages-cell">
                         <button

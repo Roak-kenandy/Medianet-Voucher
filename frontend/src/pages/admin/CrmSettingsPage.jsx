@@ -22,11 +22,36 @@ const emptyTypeForm = () => ({
   crmDeviceProductId: '',
   crmPriceSegmentName: '',
   isActive: true,
+  environment: 'live',
 });
 
 const emptyModelForm = () => ({ name: '', description: '', isActive: true });
 
-const emptyPaymentTypeForm = () => ({ name: '', crmTypeId: '', description: '', isActive: true });
+const emptyPaymentTypeForm = () => ({ name: '', crmTypeId: '', description: '', isActive: true, environment: 'live' });
+
+function EnvironmentBadge({ environment }) {
+  return environment === 'sandbox' ? (
+    <span className="badge badge-warning" style={{ marginLeft: 8 }}>Sandbox</span>
+  ) : null;
+}
+
+/** Which CRM a record's ids belong to. Chosen once, when the record is created. */
+function EnvironmentField({ value, onChange, locked }) {
+  return (
+    <div className="form-group">
+      <label className="form-label">Environment</label>
+      <select className="form-input" value={value} onChange={(e) => onChange(e.target.value)} disabled={locked}>
+        <option value="live">Live</option>
+        <option value="sandbox">Sandbox (testing)</option>
+      </select>
+      <p className="form-hint">
+        {locked
+          ? 'Set when this was created and cannot be changed.'
+          : 'The CRM these ids come from. Sandbox ones can only be given to sandbox operators. This cannot be changed later.'}
+      </p>
+    </div>
+  );
+}
 
 /** Every IANA time zone the browser knows, with a short fallback list for older browsers. */
 function listTimeZones(current) {
@@ -61,6 +86,7 @@ export default function CrmSettingsPage() {
   const [loading, setLoading] = useState(true);
   const [paymentTypes, setPaymentTypes] = useState([]);
   const [defaultCrmPaymentTypeId, setDefaultCrmPaymentTypeId] = useState('');
+  const [sandbox, setSandbox] = useState({ configured: false, defaultCrmTypeId: null });
   const [paymentTypeForm, setPaymentTypeForm] = useState(emptyPaymentTypeForm());
   // { kind: 'type' | 'model' | 'paymentType', target: row | null }
   const [modal, setModal] = useState(null);
@@ -114,6 +140,7 @@ export default function CrmSettingsPage() {
         setModels(modelList);
         setPaymentTypes(paymentTypeData.paymentTypes);
         setDefaultCrmPaymentTypeId(paymentTypeData.defaultCrmTypeId || '');
+        setSandbox(paymentTypeData.sandbox || { configured: false, defaultCrmTypeId: null });
         setServiceTypes(typeList);
       })
       .catch((err) => toast.error(err.message || 'Failed to load CRM settings'))
@@ -140,6 +167,7 @@ export default function CrmSettingsPage() {
             crmDeviceProductId: target.crmDeviceProductId || '',
             crmPriceSegmentName: target.crmPriceSegmentName || '',
             isActive: target.isActive,
+            environment: target.environment || 'live',
           }
         : emptyTypeForm()
     );
@@ -165,6 +193,7 @@ export default function CrmSettingsPage() {
             crmTypeId: target.crmTypeId,
             description: target.description || '',
             isActive: target.isActive,
+            environment: target.environment || 'live',
           }
         : emptyPaymentTypeForm()
     );
@@ -183,7 +212,7 @@ export default function CrmSettingsPage() {
         toast.success('Payment type saved');
       } else if (modal.kind === 'type') {
         if (modal.target) {
-          const { key: _key, ...payload } = typeForm;
+          const { key: _key, environment: _environment, ...payload } = typeForm;
           await adminApi.updateServiceType(modal.target.key, payload);
         } else {
           await adminApi.createServiceType(typeForm);
@@ -326,6 +355,7 @@ export default function CrmSettingsPage() {
                     <tr key={type.key}>
                       <td style={{ fontWeight: 500 }}>
                         {type.label}
+                        <EnvironmentBadge environment={type.environment} />
                         <span className="form-hint" style={{ display: 'block', margin: 0 }}>{type.shortLabel}</span>
                       </td>
                       <td><code>{type.key}</code></td>
@@ -415,6 +445,10 @@ export default function CrmSettingsPage() {
                 The CRM payment type recorded on the payments posted for an operator's sales. Give an
                 operator one from the Operators page; operators without one use the default
                 {defaultCrmPaymentTypeId ? ` (${defaultCrmPaymentTypeId}, from .env)` : ' from .env'}.
+                {' '}
+                {sandbox.configured
+                  ? `Sandbox operators default to ${sandbox.defaultCrmTypeId || 'no payment type (CRM_SANDBOX_PAYMENT_TYPE_ID is not set)'}.`
+                  : 'The CRM sandbox is not configured yet, so sandbox operators cannot be created.'}
               </p>
             </div>
             <div className="page-header-actions">
@@ -446,7 +480,10 @@ export default function CrmSettingsPage() {
                   )}
                   {paymentTypes.map((paymentType) => (
                     <tr key={paymentType.id}>
-                      <td style={{ fontWeight: 500 }}>{paymentType.name}</td>
+                      <td style={{ fontWeight: 500 }}>
+                        {paymentType.name}
+                        <EnvironmentBadge environment={paymentType.environment} />
+                      </td>
                       <td style={{ fontSize: 12 }}>{paymentType.crmTypeId}</td>
                       <td>{paymentType.description || '—'}</td>
                       <td>{paymentType.operatorCount} operator(s)</td>
@@ -532,6 +569,11 @@ export default function CrmSettingsPage() {
                   Internal identifier stored on packages and accounts. It cannot be changed later.
                 </p>
               </div>
+              <EnvironmentField
+                value={typeForm.environment}
+                onChange={(environment) => setTypeForm({ ...typeForm, environment })}
+                locked={!!editingType}
+              />
               <div className="form-group">
                 <label className="form-label">CRM tag name</label>
                 <input
@@ -654,6 +696,11 @@ export default function CrmSettingsPage() {
                 />
                 <p className="form-hint">Shown when choosing an operator's payment type.</p>
               </div>
+              <EnvironmentField
+                value={paymentTypeForm.environment}
+                onChange={(environment) => setPaymentTypeForm({ ...paymentTypeForm, environment })}
+                locked={!!modal.target}
+              />
               <div className="form-group">
                 <label className="form-label">CRM payment type id</label>
                 <input

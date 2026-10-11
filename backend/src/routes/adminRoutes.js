@@ -3,7 +3,8 @@ import { authenticate, ensureActiveAccount, requireStaffRole, requirePermission 
 import { AppError, asyncHandler, success } from '../utils/errors.js';
 import { validateIdParam } from '../utils/params.js';
 import { hasPermission } from '../constants/permissions.js';
-import { refreshServiceTypes, listServiceTypesPublic } from '../constants/serviceTags.js';
+import { refreshServiceTypes, listServiceTypesPublic, getServiceTagConfig } from '../constants/serviceTags.js';
+import { runInCrmEnvironment } from '../utils/crmEnvironment.js';
 import {
   refreshAppSettings,
   getAppSettingsForStaff,
@@ -19,6 +20,7 @@ import {
   updateSalesModel,
   listPaymentTypes,
   getDefaultCrmPaymentTypeId,
+  isCrmSandboxConfigured,
   createPaymentType,
   updatePaymentType,
 } from '../services/crmConfigService.js';
@@ -177,7 +179,10 @@ router.get(
   asyncHandler(async (req, res) => {
     const { serviceTag, salesModelId } = crmCatalogQuerySchema.parse(req.query);
     const salesModel = await getSalesModelOrThrow(salesModelId, { activeOnly: true });
-    const recommendations = await crmService.fetchProductCatalog(serviceTag, salesModel.name);
+    // The catalog comes from the CRM the customer type belongs to (live or sandbox).
+    const recommendations = await runInCrmEnvironment(getServiceTagConfig(serviceTag).environment, () =>
+      crmService.fetchProductCatalog(serviceTag, salesModel.name)
+    );
     success(res, { recommendations, serviceTag, salesModel: { id: salesModel.id, name: salesModel.name } });
   })
 );
@@ -307,7 +312,14 @@ router.get(
   '/payment-types',
   asyncHandler(async (_req, res) => {
     const paymentTypes = await listPaymentTypes();
-    success(res, { paymentTypes, defaultCrmTypeId: getDefaultCrmPaymentTypeId() });
+    success(res, {
+      paymentTypes,
+      defaultCrmTypeId: getDefaultCrmPaymentTypeId('live'),
+      sandbox: {
+        configured: isCrmSandboxConfigured(),
+        defaultCrmTypeId: getDefaultCrmPaymentTypeId('sandbox'),
+      },
+    });
   })
 );
 

@@ -60,6 +60,9 @@ export function validateSecurityConfig() {
     if (config.crm.baseUrl && !config.crm.baseUrl.startsWith('https://')) {
       errors.push('CRM_BASE_URL must use HTTPS in production (the CRM API key is sent on every request)');
     }
+    if (config.crm.sandbox.apiKey && !config.crm.sandbox.baseUrl.startsWith('https://')) {
+      errors.push('CRM_SANDBOX_BASE_URL must use HTTPS in production (the CRM API key is sent on every request)');
+    }
     if (config.bml.enabled && !config.bml.apiBaseUrl.startsWith('https://')) {
       errors.push('BML_API_BASE_URL must use HTTPS in production');
     }

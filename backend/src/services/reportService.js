@@ -1,4 +1,5 @@
 import { query } from '../db/pool.js';
+import { liveOperatorSql } from '../utils/walletSql.js';
 import {
   getDealerTopupReportPaginated,
   dealerTopupReportToCsv,
@@ -55,7 +56,7 @@ export async function generateReport({
 }
 
 function buildCustomerSummaryFilters({ operatorId, packageType, startDate, endDate }, search) {
-  const filters = ['1=1'];
+  const filters = [liveOperatorSql('va.operator_id')];
   const params = [];
 
   if (startDate) {
@@ -191,7 +192,7 @@ async function customerSummaryReport(filters, { page, limit, search, includeSumm
 }
 
 async function clientSummaryReport({ operatorId, packageType, startDate, endDate }) {
-  const filters = [];
+  const filters = [liveOperatorSql('o.id')];
   const params = [];
 
   if (operatorId) {
@@ -239,7 +240,7 @@ async function clientSummaryReport({ operatorId, packageType, startDate, endDate
 }
 
 async function accountsByPeriodReport({ operatorId, packageType, startDate, endDate }) {
-  const filters = ['1=1'];
+  const filters = [liveOperatorSql('o.id')];
   const params = [];
 
   if (startDate) {
@@ -309,6 +310,7 @@ async function packageBreakdownReport({ startDate, endDate }) {
        SUM(o.accounts_created) AS lifetimeAccountsCreated
      FROM operators o
      ${vaJoin}
+     WHERE ${liveOperatorSql('o.id')}
      GROUP BY o.package_type
      ORDER BY totalAccounts DESC`,
     params

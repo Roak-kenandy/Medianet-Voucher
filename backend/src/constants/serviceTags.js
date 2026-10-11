@@ -20,8 +20,8 @@ const BUILT_IN_FALLBACKS = {
 
 // Used only until the first database load (and by tooling that runs without a database).
 let serviceTypes = new Map([
-  ['OTT', { key: 'OTT', label: 'Mobile (OTT)', shortLabel: 'Mobile', crmTagName: 'OTT', crmPriceSegmentName: 'OTT', isActive: true, sortOrder: 1 }],
-  ['MEDIANET_TV', { key: 'MEDIANET_TV', label: 'TV (Medianet TV)', shortLabel: 'TV', crmTagName: 'Medianet TV', crmPriceSegmentName: null, isActive: true, sortOrder: 2 }],
+  ['OTT', { key: 'OTT', label: 'Mobile (OTT)', shortLabel: 'Mobile', crmTagName: 'OTT', crmPriceSegmentName: 'OTT', isActive: true, sortOrder: 1, environment: 'live' }],
+  ['MEDIANET_TV', { key: 'MEDIANET_TV', label: 'TV (Medianet TV)', shortLabel: 'TV', crmTagName: 'Medianet TV', crmPriceSegmentName: null, isActive: true, sortOrder: 2, environment: 'live' }],
 ]);
 let loadedAt = 0;
 let loading = null;
@@ -38,13 +38,15 @@ function mapRow(row) {
     crmPriceSegmentName: row.crm_price_segment_name || null,
     isActive: Boolean(row.is_active),
     sortOrder: Number(row.sort_order) || 0,
+    // Which CRM this type's ids belong to: `live` or `sandbox`.
+    environment: row.environment || 'live',
   };
 }
 
 export async function reloadServiceTypes() {
   const rows = await query(
     `SELECT id, type_key, label, short_label, crm_tag_id, crm_tag_name, crm_device_product_id,
-            crm_price_segment_name, is_active, sort_order
+            crm_price_segment_name, is_active, sort_order, environment
      FROM service_types
      ORDER BY sort_order ASC, label ASC`
   );
@@ -75,7 +77,13 @@ export function listServiceTypes({ activeOnly = false } = {}) {
 
 /** Labels only: safe to send to any signed-in user. */
 export function listServiceTypesPublic() {
-  return listServiceTypes().map(({ key, label, shortLabel, isActive }) => ({ key, label, shortLabel, isActive }));
+  return listServiceTypes().map(({ key, label, shortLabel, isActive, environment }) => ({
+    key,
+    label,
+    shortLabel,
+    isActive,
+    environment,
+  }));
 }
 
 export function getServiceTypeLabel(serviceTag) {
