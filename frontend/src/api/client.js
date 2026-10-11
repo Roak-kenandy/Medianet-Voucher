@@ -154,6 +154,11 @@ export const adminApi = {
     apiRequest('/admin/sales-models', { method: 'POST', body: JSON.stringify(payload) }),
   updateSalesModel: (id, payload) =>
     apiRequest(`/admin/sales-models/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  getPaymentTypes: () => apiRequest('/admin/payment-types'),
+  createPaymentType: (payload) =>
+    apiRequest('/admin/payment-types', { method: 'POST', body: JSON.stringify(payload) }),
+  updatePaymentType: (id, payload) =>
+    apiRequest(`/admin/payment-types/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   createPackage: (payload) =>
     apiRequest('/admin/packages', {
       method: 'POST',

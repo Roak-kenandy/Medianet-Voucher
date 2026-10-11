@@ -55,7 +55,10 @@ export default function ReportsPage() {
   const [tablePage, setTablePage] = useState(1);
 
   useEffect(() => {
-    adminApi.getOperators({ page: 1, limit: 500 }).then((result) => setOperators(result.operators));
+    // Reports cover live operators only, so sandbox operators are not offered as a filter.
+    adminApi
+      .getOperators({ page: 1, limit: 500 })
+      .then((result) => setOperators(result.operators.filter((o) => o.environment !== 'sandbox')));
     adminApi.getPackages().then(setPackages).catch(() => setPackages([]));
   }, []);
 

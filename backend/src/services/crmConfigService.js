@@ -20,7 +20,9 @@ function uniqueNumbers(ids = []) {
 function serviceTypeForStaff(type) {
   // CRM ids come from .env for the two built-in types until staff set them here.
   const envFallback =
-    type.key === 'OTT'
+    type.environment !== 'live'
+      ? {}
+      : type.key === 'OTT'
       ? { crmTagId: config.crm.defaultTagId, crmDeviceProductId: config.crm.deviceProductId }
       : type.key === 'MEDIANET_TV'
         ? { crmTagId: config.crm.medianetTvTagId, crmDeviceProductId: config.crm.medianetTvDeviceProductId }
@@ -60,8 +62,9 @@ export async function createServiceType(adminId, data, reqMeta = {}) {
   const [order] = await query('SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM service_types');
   const result = await query(
     `INSERT INTO service_types
-       (type_key, label, short_label, crm_tag_id, crm_tag_name, crm_device_product_id, crm_price_segment_name, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       (type_key, label, short_label, crm_tag_id, crm_tag_name, crm_device_product_id, crm_price_segment_name,
+        sort_order, environment)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       key,
       data.label.trim(),
@@ -71,6 +74,7 @@ export async function createServiceType(adminId, data, reqMeta = {}) {
       data.crmDeviceProductId,
       data.crmPriceSegmentName?.trim() || null,
       Number(order.next) || 1,
+      data.environment,
     ]
   );
   await reloadServiceTypes();
@@ -83,13 +87,13 @@ export async function createServiceType(adminId, data, reqMeta = {}) {
     resourceId: result.insertId,
     ipAddress: reqMeta.ipAddress,
     userAgent: reqMeta.userAgent,
-    metadata: { key, label: data.label.trim(), crmTagName: data.crmTagName.trim() },
+    metadata: { key, label: data.label.trim(), crmTagName: data.crmTagName.trim(), environment: data.environment },
   });
 
   return (await listServiceTypesForStaff()).find((type) => type.key === key);
 }
 
-/** The key never changes: packages, accounts and operator allow-lists refer to it. */
+/** The key and the CRM environment never change: packages, accounts and operator allow-lists refer to them. */
 export async function updateServiceType(adminId, key, data, reqMeta = {}) {
   const [current] = await query('SELECT id, is_active FROM service_types WHERE type_key = ? LIMIT 1', [key]);
   if (!current) {
@@ -128,8 +132,11 @@ export async function updateServiceType(adminId, key, data, reqMeta = {}) {
   return (await listServiceTypesForStaff()).find((type) => type.key === key);
 }
 
-/** Validates the keys exist and are active; returns them in display order, default first. */
-export async function resolveServiceTypeKeys(keys = [], defaultKey = null) {
+/**
+ * Validates the keys exist, are active and belong to the operator's CRM environment; returns
+ * them in display order, default first.
+ */
+export async function resolveServiceTypeKeys(keys = [], defaultKey = null, environment = 'live') {
   await ensureServiceTypesLoaded();
   const requested = [...new Set((keys || []).map((key) => String(key)))];
   if (!requested.length) {
@@ -139,6 +146,16 @@ export async function resolveServiceTypeKeys(keys = [], defaultKey = null) {
   const unknown = requested.filter((key) => !active.has(key));
   if (unknown.length) {
     throw new AppError(`Unknown or inactive customer type: ${unknown.join(', ')}`, 400, 'VALIDATION_ERROR');
+  }
+  const foreign = requested.filter((key) => active.get(key).environment !== environment);
+  if (foreign.length) {
+    throw new AppError(
+      `A ${environment} operator can only be given ${environment} customer types (not ${foreign
+        .map((key) => active.get(key).label)
+        .join(', ')})`,
+      400,
+      'CRM_ENVIRONMENT_MISMATCH'
+    );
   }
   const ordered = [...active.keys()].filter((key) => requested.includes(key));
   const resolvedDefault = defaultKey && ordered.includes(defaultKey) ? defaultKey : ordered[0];
@@ -345,6 +362,163 @@ export function assertPackagesMatchSalesModels(plans = [], allowedSalesModelIds 
       );
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Payment types
+// ---------------------------------------------------------------------------
+
+function mapPaymentType(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    crmTypeId: row.crm_type_id,
+    description: row.description,
+    isActive: Boolean(row.is_active),
+    environment: row.environment || 'live',
+    operatorCount: Number(row.operator_count) || 0,
+  };
+}
+
+const PAYMENT_TYPE_SELECT = `SELECT pt.id, pt.name, pt.crm_type_id, pt.description, pt.is_active, pt.environment,
+            (SELECT COUNT(*) FROM operators o WHERE o.payment_type_id = pt.id) AS operator_count
+     FROM payment_types pt`;
+
+export async function listPaymentTypes() {
+  const rows = await query(`${PAYMENT_TYPE_SELECT} ORDER BY pt.name ASC`);
+  return rows.map(mapPaymentType);
+}
+
+/** The CRM payment type used for operators that have none assigned (PAYMENT_TYPE_ID in .env). */
+export function getDefaultCrmPaymentTypeId(environment = 'live') {
+  return (environment === 'sandbox' ? config.crm.sandbox.paymentTypeId : config.crm.paymentTypeId) || null;
+}
+
+/** Whether sandbox operators can reach a CRM at all. */
+export function isCrmSandboxConfigured() {
+  return Boolean(config.crm.sandbox.apiKey && config.crm.sandbox.baseUrl);
+}
+
+export async function getOperatorCrmEnvironment(operatorId) {
+  const [row] = await query('SELECT environment FROM operators WHERE id = ? LIMIT 1', [operatorId]);
+  if (!row) {
+    throw new AppError('Operator not found', 404, 'NOT_FOUND');
+  }
+  return row.environment;
+}
+
+async function getPaymentTypeOrThrow(paymentTypeId) {
+  const [row] = await query(`${PAYMENT_TYPE_SELECT} WHERE pt.id = ? LIMIT 1`, [paymentTypeId]);
+  if (!row) {
+    throw new AppError('Payment type not found', 404, 'NOT_FOUND');
+  }
+  return mapPaymentType(row);
+}
+
+export async function createPaymentType(adminId, data, reqMeta = {}) {
+  const name = data.name.trim();
+  const existing = await query('SELECT id FROM payment_types WHERE name = ? LIMIT 1', [name]);
+  if (existing.length) {
+    throw new AppError('A payment type with this name already exists', 409, 'PAYMENT_TYPE_EXISTS');
+  }
+  const result = await query(
+    'INSERT INTO payment_types (name, crm_type_id, description, environment) VALUES (?, ?, ?, ?)',
+    [name, data.crmTypeId, data.description?.trim() || null, data.environment]
+  );
+
+  await logAudit({
+    actorType: 'admin',
+    actorId: adminId,
+    action: 'PAYMENT_TYPE_CREATED',
+    resourceType: 'payment_type',
+    resourceId: result.insertId,
+    ipAddress: reqMeta.ipAddress,
+    userAgent: reqMeta.userAgent,
+    metadata: { name, crmTypeId: data.crmTypeId, environment: data.environment },
+  });
+
+  return getPaymentTypeOrThrow(result.insertId);
+}
+
+/**
+ * Changing the CRM id changes the type on every payment posted from now on for the operators
+ * that have this payment type. A type in use cannot be made inactive: reassign its operators first.
+ * Its CRM environment is fixed when it is created.
+ */
+export async function updatePaymentType(adminId, paymentTypeId, data, reqMeta = {}) {
+  const current = await getPaymentTypeOrThrow(paymentTypeId);
+  const name = data.name.trim();
+  const clash = await query('SELECT id FROM payment_types WHERE name = ? AND id != ? LIMIT 1', [name, paymentTypeId]);
+  if (clash.length) {
+    throw new AppError('A payment type with this name already exists', 409, 'PAYMENT_TYPE_EXISTS');
+  }
+  if (!data.isActive && current.operatorCount > 0) {
+    throw new AppError(
+      `This payment type is assigned to ${current.operatorCount} operator(s). Give them another payment type first.`,
+      409,
+      'PAYMENT_TYPE_IN_USE'
+    );
+  }
+
+  await query('UPDATE payment_types SET name = ?, crm_type_id = ?, description = ?, is_active = ? WHERE id = ?', [
+    name,
+    data.crmTypeId,
+    data.description?.trim() || null,
+    data.isActive ? 1 : 0,
+    paymentTypeId,
+  ]);
+
+  await logAudit({
+    actorType: 'admin',
+    actorId: adminId,
+    action: 'PAYMENT_TYPE_UPDATED',
+    resourceType: 'payment_type',
+    resourceId: Number(paymentTypeId),
+    ipAddress: reqMeta.ipAddress,
+    userAgent: reqMeta.userAgent,
+    metadata: {
+      name,
+      crmTypeId: data.crmTypeId,
+      previousCrmTypeId: current.crmTypeId,
+      isActive: Boolean(data.isActive),
+    },
+  });
+
+  return getPaymentTypeOrThrow(paymentTypeId);
+}
+
+/**
+ * Validates an operator's payment type. Null means the default (.env) type. The operator's
+ * current type is always accepted so saving an unrelated change never fails. The type must
+ * belong to the operator's CRM environment: its id does not exist in the other CRM.
+ */
+export async function resolvePaymentTypeId(paymentTypeId, currentPaymentTypeId = null, environment = 'live') {
+  if (paymentTypeId == null) return null;
+  const id = Number(paymentTypeId);
+  const [row] = await query('SELECT id, is_active, environment FROM payment_types WHERE id = ? LIMIT 1', [id]);
+  if (!row || (!row.is_active && id !== Number(currentPaymentTypeId))) {
+    throw new AppError('Payment type does not exist or is inactive', 400, 'PAYMENT_TYPE_NOT_FOUND');
+  }
+  if (row.environment !== environment) {
+    throw new AppError(
+      `A ${environment} operator can only be given a ${environment} payment type`,
+      400,
+      'CRM_ENVIRONMENT_MISMATCH'
+    );
+  }
+  return id;
+}
+
+/** CRM payment type id for the operator's payments, or null to use the default (.env) type. */
+export async function getOperatorCrmPaymentTypeId(operatorId) {
+  const [row] = await query(
+    `SELECT pt.crm_type_id
+     FROM operators o
+     INNER JOIN payment_types pt ON pt.id = o.payment_type_id
+     WHERE o.id = ? LIMIT 1`,
+    [operatorId]
+  );
+  return row?.crm_type_id || null;
 }
 
 // ---------------------------------------------------------------------------

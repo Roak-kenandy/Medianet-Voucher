@@ -184,12 +184,21 @@ export async function assertOperatorCanSelfTopup(operatorId, connection = null) 
       };
 
   const operator = await runner(
-    `SELECT wallet_self_topup_enabled FROM operators WHERE id = ? LIMIT 1`,
+    `SELECT wallet_self_topup_enabled, environment FROM operators WHERE id = ? LIMIT 1`,
     [operatorId]
   );
 
   if (!operator) {
     throw new AppError('Operator not found', 404, 'NOT_FOUND');
+  }
+
+  // Sandbox operators make test sales only, so they never pay real money into the wallet.
+  if (operator.environment === 'sandbox') {
+    throw new AppError(
+      'This is a sandbox account. Test balance is added by Medianet; bank top-up is not available.',
+      403,
+      'SELF_TOPUP_DISABLED'
+    );
   }
 
   if (!operator.wallet_self_topup_enabled) {
@@ -212,7 +221,7 @@ export async function getOperatorWallet(operatorId, connection = null) {
   const operator = await runner(
     `SELECT id, wallet_balance, accounts_created, client_name, is_active,
             wallet_commission_type, wallet_commission_value, wallet_self_topup_enabled,
-            trial_account_limit, trial_accounts_used
+            trial_account_limit, trial_accounts_used, environment
      FROM operators WHERE id = ? LIMIT 1`,
     [operatorId]
   );
@@ -238,7 +247,8 @@ export async function getOperatorWallet(operatorId, connection = null) {
     gstRatePercent: roundMoney(config.wallet.gstRate * 100),
     minTopupAmount: config.wallet.minTopupAmount,
     maxTopupAmount: config.wallet.maxTopupAmount,
-    canSelfTopup: Boolean(operator.wallet_self_topup_enabled),
+    canSelfTopup: Boolean(operator.wallet_self_topup_enabled) && operator.environment !== 'sandbox',
+    environment: operator.environment,
     ...formatTrialForResponse(operator.trial_account_limit, operator.trial_accounts_used),
   };
 }

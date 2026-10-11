@@ -186,6 +186,11 @@ export default function OperatorDashboard() {
           <p className="page-subtitle">{today}</p>
           {!showMarketingHero && (
             <div className="operator-dashboard-welcome-meta">
+              {stats?.environment === 'sandbox' && (
+                <span className="badge badge-warning" title="Test account: sales go to the CRM sandbox, not to live customers">
+                  Sandbox
+                </span>
+              )}
               <span className="badge badge-info">{getServiceScopeLabel(stats?.serviceScope || 'BOTH')}</span>
               {(stats?.packageNames || []).slice(0, 3).map((name) => (
                 <span key={name} className="badge badge-neutral">{name}</span>

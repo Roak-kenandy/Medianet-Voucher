@@ -22,7 +22,12 @@ import {
   refundWalletDebit,
 } from './walletService.js';
 import { assertServiceTag, listServiceTypesPublic } from '../constants/serviceTags.js';
-import { getOperatorServiceTypeKeys } from './crmConfigService.js';
+import {
+  getOperatorCrmEnvironment,
+  getOperatorCrmPaymentTypeId,
+  getOperatorServiceTypeKeys,
+} from './crmConfigService.js';
+import { runInCrmEnvironment } from '../utils/crmEnvironment.js';
 import { evaluatePackageOptions, resolvePurchase } from '../utils/packageEligibility.js';
 import {
   formatTrialForResponse,
@@ -103,11 +108,25 @@ async function resolveAccountPackageIds(operatorId, packageIds, connection) {
   return requested;
 }
 
+/**
+ * Runs CRM work for an operator against that operator's CRM (live or sandbox), inside one of
+ * the concurrency slots. All of an operator's CRM calls go through these two.
+ */
+async function withOperatorCrmSlot(operatorId, task) {
+  const environment = await getOperatorCrmEnvironment(operatorId);
+  return withCrmSlot(operatorId, () => runInCrmEnvironment(environment, task));
+}
+
+async function withOperatorCrmReadSlot(operatorId, task) {
+  const environment = await getOperatorCrmEnvironment(operatorId);
+  return withCrmReadSlot(operatorId, () => runInCrmEnvironment(environment, task));
+}
+
 export async function getOperatorStats(operatorId) {
   const [operator] = await query(
     `SELECT o.id, o.client_name, o.package_id, o.package_type, o.service_scope, o.wallet_balance, o.accounts_created, o.is_active,
             o.wallet_commission_type, o.wallet_commission_value, o.wallet_self_topup_enabled,
-            o.trial_account_limit, o.trial_accounts_used
+            o.trial_account_limit, o.trial_accounts_used, o.environment
      FROM operators o
      WHERE o.id = ? LIMIT 1`,
     [operatorId]
@@ -312,7 +331,8 @@ export async function getOperatorStats(operatorId) {
     currencyCode: config.wallet.currencyCode,
     walletCommissionType: operator.wallet_commission_type || 'none',
     walletCommissionValue: Number(operator.wallet_commission_value) || 0,
-    canSelfTopup: Boolean(operator.wallet_self_topup_enabled),
+    canSelfTopup: Boolean(operator.wallet_self_topup_enabled) && operator.environment !== 'sandbox',
+    environment: operator.environment,
     ...formatTrialForResponse(operator.trial_account_limit, operator.trial_accounts_used),
     accountsCreated,
     minPackagePrice,
@@ -992,7 +1012,7 @@ export async function searchCustomers(operatorId, { phone, code }, serviceTag = 
 
   await assertOperatorServiceTag(operatorId, serviceTag);
   const [result, eligibility] = await Promise.all([
-    withCrmReadSlot(operatorId, () =>
+    withOperatorCrmReadSlot(operatorId, () =>
       code
         ? crmService.searchCustomersByServiceCode(code, serviceTag)
         : crmService.searchCustomersByPhone(phone, serviceTag)
@@ -1021,7 +1041,7 @@ export async function searchCustomers(operatorId, { phone, code }, serviceTag = 
     upgrades.map(async ({ customer, option }) => {
       let estimate;
       try {
-        estimate = await withCrmReadSlot(operatorId, () =>
+        estimate = await withOperatorCrmReadSlot(operatorId, () =>
           crmService.estimateServiceChange(customer.id, option, option.packageId)
         );
       } catch {
@@ -1046,7 +1066,7 @@ export async function searchCustomers(operatorId, { phone, code }, serviceTag = 
 }
 
 export async function crmTopupCustomer(operatorId, data, reqMeta = {}) {
-  return withCrmSlot(operatorId, () => crmTopupCustomerInner(operatorId, data, reqMeta));
+  return withOperatorCrmSlot(operatorId, () => crmTopupCustomerInner(operatorId, data, reqMeta));
 }
 
 async function crmTopupCustomerInner(operatorId, data, reqMeta) {
@@ -1067,6 +1087,9 @@ async function crmTopupCustomerInner(operatorId, data, reqMeta) {
   const binding = await resolveCustomerBinding(data);
   const { phoneNumber } = binding;
   const fullName = String(data.fullName || binding.customer.name || 'Customer').trim();
+
+  // Looked up before any money moves, so a failed lookup cannot strand a wallet charge.
+  const paymentTypeId = await getOperatorCrmPaymentTypeId(operatorId);
 
   // Phase 1: take the money under the operator lock before anything is posted to CRM.
   let debit;
@@ -1106,6 +1129,7 @@ async function crmTopupCustomerInner(operatorId, data, reqMeta) {
   try {
     crmResult = await crmService.postCustomerPayment(data.crmContactId, amount, {
       paymentReference: debit.reference,
+      paymentTypeId,
     });
   } catch (err) {
     const outcome = classifyCrmFailure(err);
@@ -1247,7 +1271,7 @@ async function resolveCustomerBinding(
 }
 
 export async function subscribeCustomer(operatorId, data, reqMeta = {}) {
-  return withCrmSlot(operatorId, () => subscribeCustomerInner(operatorId, data, reqMeta));
+  return withOperatorCrmSlot(operatorId, () => subscribeCustomerInner(operatorId, data, reqMeta));
 }
 
 async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
@@ -1309,6 +1333,8 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
     if (estimate.allowed) upgradeEstimate = estimate;
   }
 
+  // Looked up before any money moves, so a failed lookup cannot strand a wallet charge.
+  const paymentTypeId = await getOperatorCrmPaymentTypeId(operatorId);
   let reservation;
   let resolvedPackageIds;
   let pricing;
@@ -1389,7 +1415,7 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
         return crmService.renewServicesForContact(
           data.crmContactId,
           purchase.options.map((item) => ({ serviceId: item.serviceId, packageId: item.packageId })),
-          { paymentReference }
+          { paymentReference, paymentTypeId }
         );
       }
       if (upgradeMode === 'replace') {
@@ -1397,7 +1423,7 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
           data.crmContactId,
           { serviceId: option.serviceId, cancelServiceIds: option.cancels.map((item) => item.serviceId) },
           option.packageId,
-          { paymentReference, deviceId }
+          { paymentReference, paymentTypeId, deviceId }
         );
       }
       if (purchase.action === 'upgrade') {
@@ -1405,11 +1431,12 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
           data.crmContactId,
           { serviceId: option.serviceId, cancelServiceIds: option.cancels.map((item) => item.serviceId) },
           option.packageId,
-          { paymentReference, amount: upgradeEstimate.amount, deviceId }
+          { paymentReference, paymentTypeId, amount: upgradeEstimate.amount, deviceId }
         );
       }
       return crmService.activatePackagesForContact(data.crmContactId, resolvedPackageIds, {
         paymentReference,
+        paymentTypeId,
         deviceId,
       });
     },
@@ -1523,6 +1550,8 @@ function buildChargeDescription(activity, customerName, phoneNumber, packageName
 
 /** Reserve all accounts in one locked transaction, then provision each in CRM sequentially. */
 async function createAndProvisionAccounts(operatorId, accounts, packageIds, pricing, serviceTag, activity, reqMeta) {
+  // Looked up before any money moves, so a failed lookup cannot strand a wallet charge.
+  const paymentTypeId = await getOperatorCrmPaymentTypeId(operatorId);
   let reservations;
   const connection = await getConnection();
   try {
@@ -1554,6 +1583,7 @@ async function createAndProvisionAccounts(operatorId, accounts, packageIds, pric
       (paymentReference) =>
         crmService.provisionOttAccount(reservation.phoneNumber, reservation.fullName, packageIds, {
           paymentReference,
+          paymentTypeId,
         }),
       reqMeta,
       { activity }
@@ -1609,7 +1639,7 @@ export async function topupCustomer(operatorId, data, reqMeta = {}) {
 }
 
 export async function createSingleAccount(operatorId, account, reqMeta = {}) {
-  return withCrmSlot(operatorId, () => createSingleAccountInner(operatorId, account, reqMeta));
+  return withOperatorCrmSlot(operatorId, () => createSingleAccountInner(operatorId, account, reqMeta));
 }
 
 async function createSingleAccountInner(operatorId, account, reqMeta) {
@@ -1690,7 +1720,7 @@ export async function createBulkAccounts(operatorId, accounts, reqMeta = {}, pac
     );
   }
 
-  return withCrmSlot(operatorId, () =>
+  return withOperatorCrmSlot(operatorId, () =>
     createBulkAccountsInner(operatorId, accounts, reqMeta, packageIds)
   );
 }

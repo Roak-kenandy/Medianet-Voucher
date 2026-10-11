@@ -3,7 +3,8 @@ import { authenticate, ensureActiveAccount, requireStaffRole, requirePermission 
 import { AppError, asyncHandler, success } from '../utils/errors.js';
 import { validateIdParam } from '../utils/params.js';
 import { hasPermission } from '../constants/permissions.js';
-import { refreshServiceTypes, listServiceTypesPublic } from '../constants/serviceTags.js';
+import { refreshServiceTypes, listServiceTypesPublic, getServiceTagConfig } from '../constants/serviceTags.js';
+import { runInCrmEnvironment } from '../utils/crmEnvironment.js';
 import {
   refreshAppSettings,
   getAppSettingsForStaff,
@@ -17,6 +18,11 @@ import {
   getSalesModelOrThrow,
   createSalesModel,
   updateSalesModel,
+  listPaymentTypes,
+  getDefaultCrmPaymentTypeId,
+  isCrmSandboxConfigured,
+  createPaymentType,
+  updatePaymentType,
 } from '../services/crmConfigService.js';
 import {
   reportLimiter,
@@ -119,6 +125,7 @@ import {
   createServiceTypeSchema,
   updateServiceTypeSchema,
   salesModelSchema,
+  paymentTypeSchema,
   appSettingsSchema,
   createOperatorUserSchema,
   updateOperatorUserSchema,
@@ -173,7 +180,10 @@ router.get(
   asyncHandler(async (req, res) => {
     const { serviceTag, salesModelId } = crmCatalogQuerySchema.parse(req.query);
     const salesModel = await getSalesModelOrThrow(salesModelId, { activeOnly: true });
-    const recommendations = await crmService.fetchProductCatalog(serviceTag, salesModel.name);
+    // The catalog comes from the CRM the customer type belongs to (live or sandbox).
+    const recommendations = await runInCrmEnvironment(getServiceTagConfig(serviceTag).environment, () =>
+      crmService.fetchProductCatalog(serviceTag, salesModel.name)
+    );
     success(res, { recommendations, serviceTag, salesModel: { id: salesModel.id, name: salesModel.name } });
   })
 );
@@ -292,6 +302,46 @@ router.patch(
     const data = salesModelSchema.parse(req.body);
     const salesModel = await updateSalesModel(req.user.id, salesModelId, data, getClientMeta(req));
     success(res, salesModel);
+  })
+);
+
+/**
+ * CRM payment types an operator can be given. The type decides how CRM classifies the payments
+ * posted for that operator's sales; operators without one use the default from .env.
+ */
+router.get(
+  '/payment-types',
+  asyncHandler(async (_req, res) => {
+    const paymentTypes = await listPaymentTypes();
+    success(res, {
+      paymentTypes,
+      defaultCrmTypeId: getDefaultCrmPaymentTypeId('live'),
+      sandbox: {
+        configured: isCrmSandboxConfigured(),
+        defaultCrmTypeId: getDefaultCrmPaymentTypeId('sandbox'),
+      },
+    });
+  })
+);
+
+router.post(
+  '/payment-types',
+  requirePermission('manageCrmSettings'),
+  asyncHandler(async (req, res) => {
+    const data = paymentTypeSchema.parse(req.body);
+    const paymentType = await createPaymentType(req.user.id, data, getClientMeta(req));
+    success(res, paymentType, 201);
+  })
+);
+
+router.patch(
+  '/payment-types/:id',
+  requirePermission('manageCrmSettings'),
+  asyncHandler(async (req, res) => {
+    const paymentTypeId = parseInt(req.params.id, 10);
+    const data = paymentTypeSchema.parse(req.body);
+    const paymentType = await updatePaymentType(req.user.id, paymentTypeId, data, getClientMeta(req));
+    success(res, paymentType);
   })
 );
 

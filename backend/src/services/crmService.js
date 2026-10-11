@@ -3,6 +3,7 @@ import { config } from '../config/index.js';
 import { AppError, CrmBillableError, CrmPaymentError } from '../utils/errors.js';
 import { getPlanByPackageId } from './packageService.js';
 import { getServiceTagConfig, assertServiceTag } from '../constants/serviceTags.js';
+import { currentCrmEnvironment } from '../utils/crmEnvironment.js';
 
 const UNDELIVERED_ERROR_CODES = new Set([
   'ECONNREFUSED',
@@ -188,15 +189,48 @@ function isRetryableSubscriptionError(status, data = {}) {
   );
 }
 
+/** A customer type's CRM ids only exist in its own CRM, so it must match the one in use. */
+function tagConfigFor(serviceTag) {
+  const tagConfig = getServiceTagConfig(serviceTag);
+  if (tagConfig.environment !== currentCrmEnvironment()) {
+    throw new AppError(
+      `${tagConfig.label} customers are not available in the ${currentCrmEnvironment()} CRM`,
+      400,
+      'CRM_ENVIRONMENT_MISMATCH'
+    );
+  }
+  return tagConfig;
+}
+
 class CRMService {
   constructor() {
-    this.apiKey = config.crm.apiKey;
-    this.baseUrl = config.crm.baseUrl;
     this.defaultTagId = config.crm.defaultTagId;
-    this.classificationId = config.crm.classificationId;
     this.currencyCode = config.crm.currencyCode;
-    this.paymentTermsId = config.crm.paymentTermsId;
-    this.paymentTypeId = config.crm.paymentTypeId;
+  }
+
+  /** Connection settings and account ids of the CRM this operation runs against. */
+  get environmentConfig() {
+    return currentCrmEnvironment() === 'sandbox' ? config.crm.sandbox : config.crm;
+  }
+
+  get apiKey() {
+    return this.environmentConfig.apiKey;
+  }
+
+  get baseUrl() {
+    return this.environmentConfig.baseUrl;
+  }
+
+  get classificationId() {
+    return this.environmentConfig.classificationId;
+  }
+
+  get paymentTermsId() {
+    return this.environmentConfig.paymentTermsId;
+  }
+
+  get paymentTypeId() {
+    return this.environmentConfig.paymentTypeId;
   }
 
   async resolveServiceTagFromPackageIds(packageIds = []) {
@@ -232,7 +266,7 @@ class CRMService {
   /** `salesModelName` picks which CRM price tier is offered (defaults to the .env model). */
   async fetchProductCatalog(serviceTag = 'OTT', salesModelName = config.crm.salesModelName) {
     this.assertConfigured();
-    const tagConfig = getServiceTagConfig(assertServiceTag(serviceTag));
+    const tagConfig = tagConfigFor(assertServiceTag(serviceTag));
     const products = await this.fetchAllProductsByTag(tagConfig.crmTagName);
 
     const entries = await Promise.all(
@@ -421,7 +455,9 @@ class CRMService {
   assertConfigured() {
     if (!this.apiKey || !this.baseUrl) {
       throw new AppError(
-        'CRM integration is not configured. Set CRM_API_KEY and CRM_BASE_URL.',
+        currentCrmEnvironment() === 'sandbox'
+          ? 'The CRM sandbox is not configured. Set CRM_SANDBOX_API_KEY and CRM_SANDBOX_BASE_URL.'
+          : 'CRM integration is not configured. Set CRM_API_KEY and CRM_BASE_URL.',
         503,
         'CRM_NOT_CONFIGURED'
       );
@@ -460,7 +496,7 @@ class CRMService {
   }
 
   contactHasOttTag(tagsData) {
-    return this.contactHasServiceTag(tagsData, getServiceTagConfig('OTT'));
+    return this.contactHasServiceTag(tagsData, tagConfigFor('OTT'));
   }
 
   isActiveSubscriptionState(state = '') {
@@ -536,7 +572,7 @@ class CRMService {
   }
 
   async createContact(firstName, lastName, phoneNumber, serviceTag = 'OTT') {
-    const tagConfig = getServiceTagConfig(assertServiceTag(serviceTag));
+    const tagConfig = tagConfigFor(assertServiceTag(serviceTag));
     const payload = {
       type: 'PERSON',
       person_name: {
@@ -607,7 +643,7 @@ class CRMService {
   }
 
   async createDevice(contactId, serviceTag = 'OTT') {
-    const tagConfig = getServiceTagConfig(assertServiceTag(serviceTag));
+    const tagConfig = tagConfigFor(assertServiceTag(serviceTag));
     const payload = {
       serial_number: uuidv4(),
       electronic_id: null,
@@ -646,10 +682,11 @@ class CRMService {
    * POST /payments exactly once per logical operation.
    * `paymentReference` must be unique per operation (the wallet reservation reference) and is
    * sent as `backoffice_code` so CRM staff can match every payment to one portal charge.
+   * `paymentTypeId` is the operator's CRM payment type; without one the .env default is used.
    * Only failures where the request provably never reached CRM are retried; anything else that
    * is not a clean success or a definite 4xx rejection is reported as `ambiguous`.
    */
-  async createPayment(contactId, accountId, amount, { paymentReference } = {}) {
+  async createPayment(contactId, accountId, amount, { paymentReference, paymentTypeId = null } = {}) {
     if (!paymentReference) {
       throw new AppError('CRM payment reference is required', 500, 'INTERNAL_ERROR');
     }
@@ -663,7 +700,7 @@ class CRMService {
       payment_method: { type: 'ELECTRONIC_TRANSFER' },
       state: 'POSTED',
       backoffice_code: paymentReference,
-      type_id: this.paymentTypeId,
+      type_id: paymentTypeId || this.paymentTypeId,
       external_payable: ['MTV & OTT Dealer Payment'],
     };
 
@@ -1093,7 +1130,7 @@ class CRMService {
     accountId,
     plans,
     preferredDeviceId = null,
-    { paymentReference, beforeActivation = null, targetDeviceId = null } = {}
+    { paymentReference, paymentTypeId = null, beforeActivation = null, targetDeviceId = null } = {}
   ) {
     const totalAmount = Math.round(
       plans.reduce((sum, plan) => sum + (Number(plan.priceAmount) || 0), 0) * 100
@@ -1101,7 +1138,10 @@ class CRMService {
 
     let paymentResult = { paymentId: null };
     if (totalAmount > 0) {
-      paymentResult = await this.createPayment(contactId, accountId, totalAmount, { paymentReference });
+      paymentResult = await this.createPayment(contactId, accountId, totalAmount, {
+        paymentReference,
+        paymentTypeId,
+      });
       // CRM rejects price_terms_id immediately after payment until the account balance settles.
       await delay(1500);
     }
@@ -1187,7 +1227,7 @@ class CRMService {
   async registerCustomer(phoneNumber, fullName, serviceTag = 'OTT', { forceNew = false } = {}) {
     this.assertConfigured();
     const normalizedTag = assertServiceTag(serviceTag);
-    const tagConfig = getServiceTagConfig(normalizedTag);
+    const tagConfig = tagConfigFor(normalizedTag);
     const normalizedPhone = normalizePhone(phoneNumber);
     const { firstName, lastName } = splitFullName(fullName);
 
@@ -1231,7 +1271,7 @@ class CRMService {
     };
   }
 
-  async registerNewUser(phoneNumber, fullName, packageIds, { paymentReference } = {}) {
+  async registerNewUser(phoneNumber, fullName, packageIds, { paymentReference, paymentTypeId = null } = {}) {
     const serviceTag = await this.resolveServiceTagFromPackageIds(packageIds);
     const plans = await this.resolvePlans(packageIds);
     const registration = await this.registerCustomer(phoneNumber, fullName, serviceTag, {
@@ -1242,7 +1282,7 @@ class CRMService {
       registration.accountId,
       plans,
       registration.deviceId,
-      { paymentReference }
+      { paymentReference, paymentTypeId }
     );
 
     return {
@@ -1260,11 +1300,12 @@ class CRMService {
     contactId,
     accountId,
     packageIds,
-    { paymentReference, beforeActivation = null, deviceId = null } = {}
+    { paymentReference, paymentTypeId = null, beforeActivation = null, deviceId = null } = {}
   ) {
     const plans = await this.resolvePlans(packageIds);
     const subscription = await this.setupSubscription(contactId, accountId, plans, null, {
       paymentReference,
+      paymentTypeId,
       beforeActivation,
       targetDeviceId: deviceId,
     });
@@ -1282,7 +1323,7 @@ class CRMService {
   async searchCustomersByPhone(phoneNumber, serviceTag = 'OTT') {
     this.assertConfigured();
     const normalizedTag = assertServiceTag(serviceTag);
-    const tagConfig = getServiceTagConfig(normalizedTag);
+    const tagConfig = tagConfigFor(normalizedTag);
     const normalizedPhone = normalizePhone(phoneNumber);
     const contactsData = await this.fetchContactsByPhone(normalizedPhone);
     // CRM search_value is a free-text search, so keep only contacts whose own phone number
@@ -1351,14 +1392,14 @@ class CRMService {
    * debit reference), then run the service action(s). Once the payment exists, any failure
    * is reported as "paid but not finished" so the charge is kept and reconciled by staff.
    */
-  async payThenUpdateService(contactId, chargeAmount, { paymentReference }, applyActions) {
+  async payThenUpdateService(contactId, chargeAmount, { paymentReference, paymentTypeId = null }, applyActions) {
     this.assertConfigured();
     const accountId = await this.ensureContactAccount(contactId);
     const amount = Math.round((Number(chargeAmount) || 0) * 100) / 100;
 
     let paymentId = null;
     if (amount > 0) {
-      const payment = await this.createPayment(contactId, accountId, amount, { paymentReference });
+      const payment = await this.createPayment(contactId, accountId, amount, { paymentReference, paymentTypeId });
       paymentId = payment.paymentId;
       // Same settle delay as new subscriptions: CRM needs the payment on the account first.
       await delay(1500);
@@ -1612,10 +1653,10 @@ class CRMService {
    * Continue existing packages: one payment for the total, then each of the customer's
    * current services is renewed for another period. `renewals` is [{ serviceId, packageId }].
    */
-  async renewServicesForContact(contactId, renewals, { paymentReference } = {}) {
+  async renewServicesForContact(contactId, renewals, { paymentReference, paymentTypeId = null } = {}) {
     const plans = await this.resolvePlans(renewals.map((item) => item.packageId));
     const total = plans.reduce((sum, plan) => sum + (Number(plan.priceAmount) || 0), 0);
-    return this.payThenUpdateService(contactId, total, { paymentReference }, async () => {
+    return this.payThenUpdateService(contactId, total, { paymentReference, paymentTypeId }, async () => {
       const renewed = [];
       for (const { serviceId } of renewals) {
         try {
@@ -1638,12 +1679,12 @@ class CRMService {
     contactId,
     { serviceId, cancelServiceIds = [] },
     packageId,
-    { paymentReference, amount, deviceId = null } = {}
+    { paymentReference, paymentTypeId = null, amount, deviceId = null } = {}
   ) {
     const plan = await this.resolvePlan(packageId);
     // `amount` is what CRM estimated for the change (new price less credit for unused days).
     const chargeAmount = amount ?? plan.priceAmount;
-    return this.payThenUpdateService(contactId, chargeAmount, { paymentReference }, async () => {
+    return this.payThenUpdateService(contactId, chargeAmount, { paymentReference, paymentTypeId }, async () => {
       for (const addonServiceId of cancelServiceIds) {
         await this.updateService(addonServiceId, { action: 'CANCEL' }, `Cancel add-on ${addonServiceId}`);
       }
@@ -1671,10 +1712,11 @@ class CRMService {
     contactId,
     { serviceId, cancelServiceIds = [] },
     packageId,
-    { paymentReference, deviceId = null } = {}
+    { paymentReference, paymentTypeId = null, deviceId = null } = {}
   ) {
     const result = await this.activatePackagesForContact(contactId, [packageId], {
       paymentReference,
+      paymentTypeId,
       deviceId,
       beforeActivation: async () => {
         for (const addonServiceId of cancelServiceIds) {
@@ -1770,7 +1812,7 @@ class CRMService {
   async searchCustomersByServiceCode(serviceCode, serviceTag = 'OTT') {
     this.assertConfigured();
     const normalizedTag = assertServiceTag(serviceTag);
-    const tagConfig = getServiceTagConfig(normalizedTag);
+    const tagConfig = tagConfigFor(normalizedTag);
     const code = normalizeServiceCode(serviceCode);
 
     const devices = await this.fetchDevicesByServiceCode(code);
@@ -1820,7 +1862,7 @@ class CRMService {
     return { customers, paging: null, serviceTag: normalizedTag };
   }
 
-  async postCustomerPayment(contactId, amount, { paymentReference } = {}) {
+  async postCustomerPayment(contactId, amount, { paymentReference, paymentTypeId = null } = {}) {
     this.assertConfigured();
     const normalizedAmount = Number(amount);
     if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
@@ -1830,6 +1872,7 @@ class CRMService {
     const accountId = await this.ensureContactAccount(contactId);
     const paymentResult = await this.createPayment(contactId, accountId, normalizedAmount, {
       paymentReference,
+      paymentTypeId,
     });
 
     return {
@@ -1844,11 +1887,11 @@ class CRMService {
   async activatePackagesForContact(
     contactId,
     packageIds,
-    { paymentReference, beforeActivation = null, deviceId = null } = {}
+    { paymentReference, paymentTypeId = null, beforeActivation = null, deviceId = null } = {}
   ) {
     this.assertConfigured();
     const serviceTag = await this.resolveServiceTagFromPackageIds(packageIds);
-    const tagConfig = getServiceTagConfig(serviceTag);
+    const tagConfig = tagConfigFor(serviceTag);
     await this.resolvePlans(packageIds);
 
     const accountId = await this.ensureContactAccount(contactId);
@@ -1861,6 +1904,7 @@ class CRMService {
 
     return this.addSubscriptionForExisting(contactId, accountId, packageIds, {
       paymentReference,
+      paymentTypeId,
       beforeActivation,
       deviceId,
     });
@@ -1940,7 +1984,7 @@ class CRMService {
    * Main entry: provision OTT packages for a phone number.
    * Always creates a new CRM contact, account, device, and subscription(s).
    */
-  async provisionOttAccount(phoneNumber, fullName, packageIds, { paymentReference } = {}) {
+  async provisionOttAccount(phoneNumber, fullName, packageIds, { paymentReference, paymentTypeId = null } = {}) {
     this.assertConfigured();
     await this.resolvePlans(packageIds);
 
@@ -1949,7 +1993,7 @@ class CRMService {
       throw new AppError('Phone number is required', 400, 'VALIDATION_ERROR');
     }
 
-    return this.registerNewUser(normalizedPhone, fullName, packageIds, { paymentReference });
+    return this.registerNewUser(normalizedPhone, fullName, packageIds, { paymentReference, paymentTypeId });
   }
 }
 

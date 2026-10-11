@@ -1,4 +1,5 @@
 import bcrypt from 'bcrypt';
+import { liveOperatorSql } from '../utils/walletSql.js';
 import { config } from '../config/index.js';
 import { query, getConnection } from '../db/pool.js';
 import { AppError } from '../utils/errors.js';
@@ -18,6 +19,8 @@ import {
   getOperatorServiceTypeKeys,
   getSalesModelIdsByOperatorIds,
   getServiceTypeKeysByOperatorIds,
+  isCrmSandboxConfigured,
+  resolvePaymentTypeId,
   resolveSalesModelIds,
   resolveServiceTypeKeys,
   syncOperatorSalesModels,
@@ -74,27 +77,31 @@ async function resolvePackageAssignment(
   };
 }
 
+/** Dashboard figures cover live operators only; sandbox operators are test accounts. */
 export async function getAdminStats() {
+  const liveOperators = `environment = 'live'`;
+  const liveAccounts = liveOperatorSql('operator_id');
   const [stats] = await query(`
     SELECT
       (SELECT COUNT(*) FROM admins) AS totalAdmins,
       (SELECT COUNT(*) FROM admins WHERE is_active = 1) AS activeAdmins,
-      (SELECT COUNT(*) FROM operators) AS totalOperators,
-      (SELECT COUNT(*) FROM operators WHERE is_active = 1) AS activeOperators,
-      (SELECT COALESCE(SUM(accounts_created), 0) FROM operators) AS totalAccountsCreated,
-      (SELECT COUNT(*) FROM voucher_accounts) AS totalVoucherRecords
+      (SELECT COUNT(*) FROM operators WHERE ${liveOperators}) AS totalOperators,
+      (SELECT COUNT(*) FROM operators WHERE is_active = 1 AND ${liveOperators}) AS activeOperators,
+      (SELECT COALESCE(SUM(accounts_created), 0) FROM operators WHERE ${liveOperators}) AS totalAccountsCreated,
+      (SELECT COUNT(*) FROM voucher_accounts WHERE ${liveAccounts}) AS totalVoucherRecords
   `);
 
   const statusBreakdown = await query(`
     SELECT status, COUNT(*) AS count
     FROM voucher_accounts
+    WHERE ${liveAccounts}
     GROUP BY status
   `);
 
   const activityRows = await query(`
     SELECT DATE(created_at) AS date, COUNT(*) AS count
     FROM voucher_accounts
-    WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 29 DAY)
+    WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 29 DAY) AND ${liveAccounts}
     GROUP BY DATE(created_at)
     ORDER BY date ASC
   `);
@@ -102,6 +109,7 @@ export async function getAdminStats() {
   const operatorAccounts = await query(`
     SELECT client_name AS clientName, accounts_created AS accountsCreated, wallet_balance AS walletBalance
     FROM operators
+    WHERE ${liveOperators}
     ORDER BY accounts_created DESC
     LIMIT 8
   `);
@@ -111,6 +119,7 @@ export async function getAdminStats() {
       SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS active,
       SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END) AS inactive
     FROM operators
+    WHERE ${liveOperators}
   `);
 
   const sales = await getSalesDashboardStats({ days: 30 });
@@ -408,9 +417,11 @@ export async function listOperators({ page = 1, limit = 20, search = '' } = {}) 
        (SELECT COUNT(*) FROM operator_users u WHERE u.operator_id = o.id AND u.is_active = 1) AS active_user_count,
        o.trial_account_limit, o.trial_accounts_used, o.accounts_created,
        o.is_active, o.created_at, o.updated_at,
+       o.payment_type_id, pt.name AS payment_type_name, o.environment,
        a.name AS created_by_name
      FROM operators o
      JOIN admins a ON a.id = o.admin_id
+     LEFT JOIN payment_types pt ON pt.id = o.payment_type_id
      LEFT JOIN operator_packages op ON op.operator_id = o.id
      LEFT JOIN packages p ON p.id = op.package_id
      ${where}
@@ -478,8 +489,17 @@ export async function createOperator(adminId, data, reqMeta = {}) {
     throw new AppError('An account with this email already exists', 409, 'EMAIL_EXISTS');
   }
 
-  const serviceTypes = await resolveServiceTypeKeys(data.serviceTypeKeys, data.defaultServiceTypeKey);
+  const environment = data.environment || 'live';
+  if (environment === 'sandbox' && !isCrmSandboxConfigured()) {
+    throw new AppError(
+      'The CRM sandbox is not configured yet. Set CRM_SANDBOX_API_KEY before creating sandbox operators.',
+      400,
+      'CRM_NOT_CONFIGURED'
+    );
+  }
+  const serviceTypes = await resolveServiceTypeKeys(data.serviceTypeKeys, data.defaultServiceTypeKey, environment);
   const salesModelIds = await resolveSalesModelIds(data.salesModelIds);
+  const paymentTypeId = await resolvePaymentTypeId(data.paymentTypeId, null, environment);
   const serviceScope = legacyServiceScope(serviceTypes.keys);
   const assignment = await resolvePackageAssignment(data.packageIds, data.packageGroupIds, {
     serviceTypeKeys: serviceTypes.keys,
@@ -497,8 +517,8 @@ export async function createOperator(adminId, data, reqMeta = {}) {
       `INSERT INTO operators
          (admin_id, client_name, package_type, service_scope, package_id, notes, email, password_hash,
           account_quota, wallet_balance, wallet_commission_type, wallet_commission_value,
-          wallet_self_topup_enabled, portal_role, portal_permissions)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?)`,
+          wallet_self_topup_enabled, portal_role, portal_permissions, payment_type_id, environment)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?)`,
       [
         adminId,
         data.clientName.trim(),
@@ -513,6 +533,8 @@ export async function createOperator(adminId, data, reqMeta = {}) {
         data.canSelfTopup === false ? 0 : 1,
         normalizePortalRole(data.portalRole),
         serializePortalPermissions(data.portalRole, data.portalPermissions),
+        paymentTypeId,
+        environment,
       ]
     );
 
@@ -558,6 +580,8 @@ export async function createOperator(adminId, data, reqMeta = {}) {
         canSelfTopup: data.canSelfTopup !== false,
         serviceTypeKeys: serviceTypes.keys,
         salesModelIds,
+        paymentTypeId,
+        environment,
         firstUserId,
         apiKeyIssued: apiKey ? { apiKeyId: apiKey.id, keyPrefix: apiKey.keyPrefix } : null,
       },
@@ -568,6 +592,8 @@ export async function createOperator(adminId, data, reqMeta = {}) {
       clientName: data.clientName,
       serviceTypeKeys: serviceTypes.keys,
       salesModelIds,
+      paymentTypeId,
+      environment,
       packageIds: assignment.packageIds,
         packageGroupIds: assignment.groupIds,
       packageType: packageSummary,
@@ -716,7 +742,8 @@ export async function updateOperatorPackages(adminId, operatorId, { packageIds, 
  */
 export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
   const [operator] = await query(
-    `SELECT id, client_name, email, accounts_created, is_active FROM operators WHERE id = ? LIMIT 1`,
+    `SELECT id, client_name, email, accounts_created, is_active, payment_type_id, environment
+     FROM operators WHERE id = ? LIMIT 1`,
     [operatorId]
   );
 
@@ -730,12 +757,18 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
   const currentTypes = (await getServiceTypeKeysByOperatorIds([operatorId])).get(operatorId) || { keys: [], defaultKey: null };
   const serviceTypes = await resolveServiceTypeKeys(
     data.serviceTypeKeys ?? currentTypes.keys,
-    data.defaultServiceTypeKey ?? currentTypes.defaultKey
+    data.defaultServiceTypeKey ?? currentTypes.defaultKey,
+    operator.environment
   );
   const salesModelIds = await resolveSalesModelIds(
     data.salesModelIds ??
       ((await getSalesModelIdsByOperatorIds([operatorId])).get(operatorId) || []).map((model) => model.id)
   );
+  // Omitting the payment type keeps the operator's current one.
+  const paymentTypeId =
+    data.paymentTypeId === undefined
+      ? operator.payment_type_id
+      : await resolvePaymentTypeId(data.paymentTypeId, operator.payment_type_id, operator.environment);
   const serviceScope = legacyServiceScope(serviceTypes.keys);
   const assignment = await resolvePackageAssignment(
     data.packageIds,
@@ -760,7 +793,7 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
       `UPDATE operators
        SET client_name = ?, package_type = ?, service_scope = ?, package_id = ?, notes = ?, email = ?,
            wallet_commission_type = ?, wallet_commission_value = ?, wallet_self_topup_enabled = ?,
-           is_active = ?
+           is_active = ?, payment_type_id = ?
        WHERE id = ?`,
       [
         data.clientName.trim(),
@@ -773,6 +806,7 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
         data.walletCommissionValue,
         data.canSelfTopup === false ? 0 : 1,
         data.isActive ? 1 : 0,
+        paymentTypeId,
         operatorId,
       ]
     );
@@ -806,6 +840,8 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
         canSelfTopup: data.canSelfTopup !== false,
         serviceTypeKeys: serviceTypes.keys,
         salesModelIds,
+        paymentTypeId,
+        previousPaymentTypeId: operator.payment_type_id,
         isActive: data.isActive,
         contactEmailChanged: normalizedEmail !== operator.email,
       },
