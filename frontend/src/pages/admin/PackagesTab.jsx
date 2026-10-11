@@ -8,7 +8,7 @@ import { adminApi } from '../../api/client';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import { hasPermission } from '../../constants/permissions';
-import { getServiceTypes, getServiceTagLabel, getServiceTagEnvironment } from '../../constants/serviceTags';
+import { getServiceTypes, getServiceTagLabel } from '../../constants/serviceTags';
 import './admin-shared.css';
 
 function StatusBadge({ active }) {
@@ -164,6 +164,7 @@ function EligibilityFields({ form, onChange, basePackages, families, packageId }
 const emptyForm = () => ({
   name: '',
   serviceTag: 'OTT',
+  environment: 'live',
   salesModelId: '',
   sku: '',
   productId: '',
@@ -185,6 +186,7 @@ export default function PackagesTab() {
   const [modalOpen, setModalOpen] = useState(false);
   const [crmLoading, setCrmLoading] = useState(false);
   const [catalogServiceTag, setCatalogServiceTag] = useState('OTT');
+  const [catalogEnvironment, setCatalogEnvironment] = useState('live');
   const [recommendations, setRecommendations] = useState([]);
   const [form, setForm] = useState(emptyForm());
   const [error, setError] = useState('');
@@ -262,16 +264,16 @@ export default function PackagesTab() {
   const [salesModels, setSalesModels] = useState([]);
   const [catalogSalesModelId, setCatalogSalesModelId] = useState('');
   const serviceTypeOptions = getServiceTypes({ activeOnly: true });
-  // A package belongs to the CRM of its customer type, so the environment only narrows the type list.
+  // The same customer type key can exist in live and sandbox, so a package records which one it is.
   const typesInEnvironment = (environment) =>
     serviceTypeOptions.filter((type) => (type.environment || 'live') === environment);
   const hasSandboxTypes = typesInEnvironment('sandbox').length > 0;
-  const catalogEnvironment = getServiceTagEnvironment(catalogServiceTag);
-  const editEnvironment = getServiceTagEnvironment(editForm.serviceTag);
-  const selectCatalogServiceTag = (serviceTag) => {
+  const editEnvironment = editTarget?.environment || 'live';
+  const selectCatalogServiceTag = (serviceTag, environment = catalogEnvironment) => {
     setCatalogServiceTag(serviceTag);
+    setCatalogEnvironment(environment);
     setRecommendations([]);
-    setForm((prev) => ({ ...prev, serviceTag, productId: '', priceTermId: '' }));
+    setForm((prev) => ({ ...prev, serviceTag, environment, productId: '', priceTermId: '' }));
   };
 
   useEffect(() => {
@@ -310,7 +312,7 @@ export default function PackagesTab() {
   };
 
   const resetForm = () => {
-    setForm(emptyForm());
+    setForm({ ...emptyForm(), serviceTag: catalogServiceTag, environment: catalogEnvironment });
     setRecommendations([]);
     setError('');
   };
@@ -323,18 +325,19 @@ export default function PackagesTab() {
     setCrmLoading(true);
     setError('');
     try {
-      const items = await adminApi.getCrmRecommendations(serviceTag, catalogSalesModelId);
+      const items = await adminApi.getCrmRecommendations(serviceTag, catalogSalesModelId, catalogEnvironment);
       setRecommendations(items);
       setForm((prev) => ({
         ...prev,
         serviceTag,
+        environment: catalogEnvironment,
         salesModelId: Number(catalogSalesModelId),
         productId: '',
         priceTermId: '',
         priceAmount: '',
       }));
       if (!items.length) {
-        toast.warning(`No packages returned for ${getServiceTagLabel(serviceTag)}`);
+        toast.warning(`No packages returned for ${getServiceTagLabel(serviceTag, catalogEnvironment)}`);
       }
     } catch (err) {
       setError(err.message || 'Failed to load service catalog');
@@ -474,22 +477,29 @@ export default function PackagesTab() {
               />
             </div>
             <div className="form-group">
+              <label className="form-label">Environment</label>
+              <select className="form-input" value={editEnvironment} disabled>
+                <option value="live">Live</option>
+                <option value="sandbox">Sandbox (testing)</option>
+              </select>
+              <p className="form-hint">Chosen when the package was created. It cannot be changed.</p>
+            </div>
+            <div className="form-group">
               <label className="form-label">Customer Type</label>
               <select
                 className="form-input"
                 value={editForm.serviceTag}
                 onChange={(e) => setEditForm({ ...editForm, serviceTag: e.target.value })}
               >
-                {!serviceTypeOptions.some((type) => type.key === editForm.serviceTag) && (
-                  <option value={editForm.serviceTag}>{getServiceTagLabel(editForm.serviceTag)} (inactive)</option>
+                {!typesInEnvironment(editEnvironment).some((type) => type.key === editForm.serviceTag) && (
+                  <option value={editForm.serviceTag}>
+                    {getServiceTagLabel(editForm.serviceTag, editEnvironment)} (inactive)
+                  </option>
                 )}
                 {typesInEnvironment(editEnvironment).map((type) => (
                   <option key={type.key} value={type.key}>{type.label}</option>
                 ))}
               </select>
-              {editEnvironment === 'sandbox' && (
-                <p className="form-hint">Sandbox package. Its CRM ids belong to the sandbox, so it stays on sandbox customer types.</p>
-              )}
             </div>
             <div className="form-group">
               <label className="form-label">Sales Model</label>
@@ -627,8 +637,10 @@ export default function PackagesTab() {
                       <tr key={pkg.id}>
                         <td style={{ fontWeight: 500 }}>{pkg.name}</td>
                         <td>
-                          <span className="badge badge-info">{getServiceTagLabel(pkg.service_tag || 'OTT')}</span>
-                          {getServiceTagEnvironment(pkg.service_tag || 'OTT') === 'sandbox' && (
+                          <span className="badge badge-info">
+                            {getServiceTagLabel(pkg.service_tag || 'OTT', pkg.environment || 'live')}
+                          </span>
+                          {pkg.environment === 'sandbox' && (
                             <span className="badge badge-warning" style={{ marginLeft: 6 }}>Sandbox</span>
                           )}
                         </td>
@@ -703,24 +715,26 @@ export default function PackagesTab() {
         {error && <div className="alert alert-error">{error}</div>}
 
         <div style={{ marginBottom: 20 }}>
-          {hasSandboxTypes && (
-            <div className="form-group">
+          <div className="form-group">
               <label className="form-label">Environment</label>
               <select
                 className="form-input"
                 value={catalogEnvironment}
-                onChange={(e) => selectCatalogServiceTag(typesInEnvironment(e.target.value)[0]?.key || catalogServiceTag)}
+                onChange={(e) =>
+                  selectCatalogServiceTag(typesInEnvironment(e.target.value)[0]?.key || catalogServiceTag, e.target.value)
+                }
               >
                 <option value="live">Live</option>
-                <option value="sandbox">Sandbox (testing)</option>
+                <option value="sandbox" disabled={!hasSandboxTypes}>Sandbox (testing)</option>
               </select>
               <p className="form-hint">
                 {catalogEnvironment === 'sandbox'
                   ? 'The catalog is loaded from the sandbox CRM. Only sandbox operators can sell this package.'
-                  : 'The catalog is loaded from the live CRM.'}
+                  : hasSandboxTypes
+                    ? 'The catalog is loaded from the live CRM.'
+                    : 'The catalog is loaded from the live CRM. To create sandbox packages, first add a sandbox customer type in CRM Settings.'}
               </p>
             </div>
-          )}
           <div className="form-group">
             <label className="form-label">Package Tag</label>
             <select
@@ -760,7 +774,7 @@ export default function PackagesTab() {
             {crmLoading ? 'Loading catalog...' : 'Load catalog'}
           </button>
           <p className="form-hint" style={{ marginTop: 8 }}>
-            Loads {getServiceTagLabel(catalogServiceTag)} products with prices from the{' '}
+            Loads {getServiceTagLabel(catalogServiceTag, catalogEnvironment)} products with prices from the{' '}
             {salesModels.find((model) => String(model.id) === String(catalogSalesModelId))?.name || 'selected'}{' '}
             sales model. The package is saved under that customer type and sales model.
           </p>

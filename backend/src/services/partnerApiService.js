@@ -9,7 +9,7 @@ import crypto from 'crypto';
 import { query } from '../db/pool.js';
 import { AppError } from '../utils/errors.js';
 import { getServiceTypeLabel } from '../constants/serviceTags.js';
-import { getOperatorServiceTypeKeys } from './crmConfigService.js';
+import { getOperatorCrmEnvironment, getOperatorServiceTypeKeys } from './crmConfigService.js';
 import { getOperatorPackages, getPackageCatalog } from './packageService.js';
 import { getOperatorWallet, listWalletTransactions } from './walletService.js';
 import { searchCustomers, crmTopupCustomer, subscribeCustomer } from './operatorService.js';
@@ -19,16 +19,17 @@ const money = (value) => (value == null ? null : Math.round(Number(value) * 100)
 /* ------------------------------------------------------------------ account & catalogue */
 
 export async function getAccount(apiClient) {
-  const [wallet, typeKeys] = await Promise.all([
+  const [wallet, typeKeys, environment] = await Promise.all([
     getOperatorWallet(apiClient.operatorId),
     getOperatorServiceTypeKeys(apiClient.operatorId),
+    getOperatorCrmEnvironment(apiClient.operatorId),
   ]);
   return {
     operator: { id: apiClient.operatorId, name: apiClient.operatorName },
     apiKey: { name: apiClient.apiKeyName, prefix: apiClient.keyPrefix },
     serviceTypes: typeKeys.map((key, index) => ({
       key,
-      label: getServiceTypeLabel(key),
+      label: getServiceTypeLabel(key, environment),
       isDefault: index === 0,
     })),
     wallet: mapWallet(wallet),
@@ -54,6 +55,7 @@ export async function getWallet(apiClient) {
 /** The packages this operator may sell, optionally for one customer type. */
 export async function listPackages(apiClient, { serviceType } = {}) {
   const typeKeys = await getOperatorServiceTypeKeys(apiClient.operatorId);
+  const environment = await getOperatorCrmEnvironment(apiClient.operatorId);
   if (serviceType && !typeKeys.includes(serviceType)) {
     throw new AppError('This customer type is not enabled for your account', 403, 'SERVICE_NOT_ALLOWED');
   }
@@ -65,7 +67,7 @@ export async function listPackages(apiClient, { serviceType } = {}) {
   // Add-on requirements live on the catalogue rows.
   const requirements = new Map();
   for (const type of wanted) {
-    for (const pkg of await getPackageCatalog(type)) requirements.set(Number(pkg.id), pkg.requiredPackageIds || []);
+    for (const pkg of await getPackageCatalog(type, environment)) requirements.set(Number(pkg.id), pkg.requiredPackageIds || []);
   }
   const offeredIds = new Set(offered.map((pkg) => Number(pkg.id)));
 

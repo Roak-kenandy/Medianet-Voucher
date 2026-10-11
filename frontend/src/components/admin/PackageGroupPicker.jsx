@@ -9,6 +9,7 @@ export default function PackageGroupPicker({
   selectedIds,
   onChange,
   serviceScope = 'BOTH',
+  environment = null,
   salesModelIds,
   disabled = false,
 }) {
@@ -29,7 +30,9 @@ export default function PackageGroupPicker({
       {groups.map((group) => {
         const usable = group.packages.filter(
           (pkg) =>
-            pkg.isActive && packageMatchesScope(pkg, serviceScope) && packageMatchesSalesModels(pkg, salesModelIds)
+            pkg.isActive &&
+            packageMatchesScope(pkg, serviceScope, environment) &&
+            packageMatchesSalesModels(pkg, salesModelIds)
         );
         return (
           <label key={group.id} className="checkbox-label" style={{ alignItems: 'flex-start' }}>

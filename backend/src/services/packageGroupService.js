@@ -27,7 +27,7 @@ export async function listPackageGroups() {
   if (!groups.length) return [];
 
   const items = await query(
-    `SELECT gi.group_id, p.id, p.name, p.service_tag, p.sales_model_id, sm.name AS sales_model_name,
+    `SELECT gi.group_id, p.id, p.name, p.service_tag, p.environment, p.sales_model_id, sm.name AS sales_model_name,
             p.price_amount, p.currency_code, p.is_active
      FROM package_group_items gi
      INNER JOIN packages p ON p.id = gi.package_id
@@ -53,6 +53,7 @@ export async function listPackageGroups() {
         id: item.id,
         name: item.name,
         serviceTag: item.service_tag || 'OTT',
+        environment: item.environment || 'live',
         salesModelId: item.sales_model_id ?? null,
         salesModelName: item.sales_model_name || null,
         priceAmount: Number(item.price_amount),

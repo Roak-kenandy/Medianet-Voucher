@@ -213,7 +213,7 @@ export default function CrmSettingsPage() {
       } else if (modal.kind === 'type') {
         if (modal.target) {
           const { key: _key, environment: _environment, ...payload } = typeForm;
-          await adminApi.updateServiceType(modal.target.key, payload);
+          await adminApi.updateServiceType(modal.target.key, modal.target.environment || 'live', payload);
         } else {
           await adminApi.createServiceType(typeForm);
         }
@@ -352,7 +352,7 @@ export default function CrmSettingsPage() {
                 </thead>
                 <tbody>
                   {types.map((type) => (
-                    <tr key={type.key}>
+                    <tr key={`${type.environment || 'live'}:${type.key}`}>
                       <td style={{ fontWeight: 500 }}>
                         {type.label}
                         <EnvironmentBadge environment={type.environment} />

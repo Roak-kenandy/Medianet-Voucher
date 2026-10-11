@@ -39,24 +39,35 @@ function serviceTypeForStaff(type) {
 export async function listServiceTypesForStaff() {
   await reloadServiceTypes();
   const usage = await query(
-    `SELECT st.type_key,
-            (SELECT COUNT(*) FROM operator_service_types ost WHERE ost.service_type_key = st.type_key) AS operators,
-            (SELECT COUNT(*) FROM packages p WHERE p.service_tag = st.type_key) AS packages
+    `SELECT st.id,
+            (SELECT COUNT(*) FROM operator_service_types ost
+             INNER JOIN operators o ON o.id = ost.operator_id AND o.environment = st.environment
+             WHERE ost.service_type_key = st.type_key) AS operators,
+            (SELECT COUNT(*) FROM packages p
+             WHERE p.service_tag = st.type_key AND p.environment = st.environment) AS packages
      FROM service_types st`
   );
-  const usageByKey = new Map(usage.map((row) => [row.type_key, row]));
+  const usageById = new Map(usage.map((row) => [row.id, row]));
   return listServiceTypes().map((type) => ({
     ...serviceTypeForStaff(type),
-    operatorCount: Number(usageByKey.get(type.key)?.operators) || 0,
-    packageCount: Number(usageByKey.get(type.key)?.packages) || 0,
+    operatorCount: Number(usageById.get(type.id)?.operators) || 0,
+    packageCount: Number(usageById.get(type.id)?.packages) || 0,
   }));
 }
 
 export async function createServiceType(adminId, data, reqMeta = {}) {
   const key = data.key.trim().toUpperCase();
-  const existing = await query('SELECT id FROM service_types WHERE type_key = ? LIMIT 1', [key]);
+  // The same key may exist once per environment, so a sandbox can mirror production.
+  const existing = await query('SELECT id FROM service_types WHERE type_key = ? AND environment = ? LIMIT 1', [
+    key,
+    data.environment,
+  ]);
   if (existing.length) {
-    throw new AppError('A customer type with this key already exists', 409, 'SERVICE_TYPE_EXISTS');
+    throw new AppError(
+      `A ${data.environment} customer type with this key already exists`,
+      409,
+      'SERVICE_TYPE_EXISTS'
+    );
   }
 
   const [order] = await query('SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM service_types');
@@ -90,12 +101,15 @@ export async function createServiceType(adminId, data, reqMeta = {}) {
     metadata: { key, label: data.label.trim(), crmTagName: data.crmTagName.trim(), environment: data.environment },
   });
 
-  return (await listServiceTypesForStaff()).find((type) => type.key === key);
+  return (await listServiceTypesForStaff()).find((type) => type.key === key && type.environment === data.environment);
 }
 
 /** The key and the CRM environment never change: packages, accounts and operator allow-lists refer to them. */
-export async function updateServiceType(adminId, key, data, reqMeta = {}) {
-  const [current] = await query('SELECT id, is_active FROM service_types WHERE type_key = ? LIMIT 1', [key]);
+export async function updateServiceType(adminId, key, environment, data, reqMeta = {}) {
+  const [current] = await query(
+    'SELECT id, is_active FROM service_types WHERE type_key = ? AND environment = ? LIMIT 1',
+    [key, environment]
+  );
   if (!current) {
     throw new AppError('Customer type not found', 404, 'NOT_FOUND');
   }
@@ -104,7 +118,7 @@ export async function updateServiceType(adminId, key, data, reqMeta = {}) {
     `UPDATE service_types
      SET label = ?, short_label = ?, crm_tag_id = ?, crm_tag_name = ?, crm_device_product_id = ?,
          crm_price_segment_name = ?, is_active = ?
-     WHERE type_key = ?`,
+     WHERE id = ?`,
     [
       data.label.trim(),
       data.shortLabel.trim(),
@@ -113,7 +127,7 @@ export async function updateServiceType(adminId, key, data, reqMeta = {}) {
       data.crmDeviceProductId || null,
       data.crmPriceSegmentName?.trim() || null,
       data.isActive ? 1 : 0,
-      key,
+      current.id,
     ]
   );
   await reloadServiceTypes();
@@ -126,10 +140,16 @@ export async function updateServiceType(adminId, key, data, reqMeta = {}) {
     resourceId: current.id,
     ipAddress: reqMeta.ipAddress,
     userAgent: reqMeta.userAgent,
-    metadata: { key, label: data.label.trim(), crmTagName: data.crmTagName.trim(), isActive: Boolean(data.isActive) },
+    metadata: {
+      key,
+      environment,
+      label: data.label.trim(),
+      crmTagName: data.crmTagName.trim(),
+      isActive: Boolean(data.isActive),
+    },
   });
 
-  return (await listServiceTypesForStaff()).find((type) => type.key === key);
+  return (await listServiceTypesForStaff()).find((type) => type.id === current.id);
 }
 
 /**
@@ -142,19 +162,14 @@ export async function resolveServiceTypeKeys(keys = [], defaultKey = null, envir
   if (!requested.length) {
     throw new AppError('Select at least one customer type', 400, 'VALIDATION_ERROR');
   }
-  const active = new Map(listServiceTypes({ activeOnly: true }).map((type) => [type.key, type]));
+  // Only the operator's own environment is looked at: the same key may exist in the other one.
+  const active = new Map(listServiceTypes({ activeOnly: true, environment }).map((type) => [type.key, type]));
   const unknown = requested.filter((key) => !active.has(key));
   if (unknown.length) {
-    throw new AppError(`Unknown or inactive customer type: ${unknown.join(', ')}`, 400, 'VALIDATION_ERROR');
-  }
-  const foreign = requested.filter((key) => active.get(key).environment !== environment);
-  if (foreign.length) {
     throw new AppError(
-      `A ${environment} operator can only be given ${environment} customer types (not ${foreign
-        .map((key) => active.get(key).label)
-        .join(', ')})`,
+      `Unknown or inactive ${environment} customer type: ${unknown.join(', ')}`,
       400,
-      'CRM_ENVIRONMENT_MISMATCH'
+      'VALIDATION_ERROR'
     );
   }
   const ordered = [...active.keys()].filter((key) => requested.includes(key));
@@ -180,7 +195,9 @@ export async function getOperatorServiceTypeKeys(operatorId, { connection = null
   const rows = await runner(
     `SELECT ost.service_type_key
      FROM operator_service_types ost
-     INNER JOIN service_types st ON st.type_key = ost.service_type_key AND st.is_active = 1
+     INNER JOIN operators o ON o.id = ost.operator_id
+     INNER JOIN service_types st
+       ON st.type_key = ost.service_type_key AND st.environment = o.environment AND st.is_active = 1
      WHERE ost.operator_id = ?
      ORDER BY ost.is_default DESC, st.sort_order ASC`,
     [operatorId]
@@ -194,7 +211,8 @@ export async function getServiceTypeKeysByOperatorIds(operatorIds = []) {
   const rows = await query(
     `SELECT ost.operator_id, ost.service_type_key, ost.is_default
      FROM operator_service_types ost
-     INNER JOIN service_types st ON st.type_key = ost.service_type_key
+     INNER JOIN operators o ON o.id = ost.operator_id
+     INNER JOIN service_types st ON st.type_key = ost.service_type_key AND st.environment = o.environment
      WHERE ost.operator_id IN (${placeholders})
      ORDER BY ost.is_default DESC, st.sort_order ASC`,
     operatorIds

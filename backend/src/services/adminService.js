@@ -53,7 +53,7 @@ import {
 async function resolvePackageAssignment(
   packageIds = [],
   packageGroupIds = [],
-  { serviceTypeKeys = [], salesModelIds = [] } = {}
+  { serviceTypeKeys = [], salesModelIds = [], environment = 'live' } = {}
 ) {
   const groups = await assertPackageGroupsExist(packageGroupIds);
   const hasDirect = (packageIds || []).some((id) => Number(id));
@@ -62,7 +62,7 @@ async function resolvePackageAssignment(
   }
 
   const plans = hasDirect ? await assertPackagesAssignable(packageIds) : [];
-  assertPackagesMatchServiceTypes(plans, serviceTypeKeys);
+  assertPackagesMatchServiceTypes(plans, serviceTypeKeys, environment);
   assertPackagesMatchSalesModels(plans, salesModelIds);
 
   const labels = [...plans.map((plan) => plan.name), ...groups.map((group) => `Group: ${group.name}`)];
@@ -504,6 +504,7 @@ export async function createOperator(adminId, data, reqMeta = {}) {
   const assignment = await resolvePackageAssignment(data.packageIds, data.packageGroupIds, {
     serviceTypeKeys: serviceTypes.keys,
     salesModelIds,
+    environment,
   });
   const { plans, packageSummary, primaryPackageId } = assignment;
   const passwordHash = await bcrypt.hash(data.password, config.security.bcryptRounds);
@@ -683,12 +684,13 @@ export async function updateOperatorQuota(adminId, operatorId, accountQuota, req
  * belongs to. The rest of the operator record is left alone.
  */
 export async function updateOperatorPackages(adminId, operatorId, { packageIds, packageGroupIds }, reqMeta = {}) {
-  const [operator] = await query(`SELECT id FROM operators WHERE id = ? LIMIT 1`, [operatorId]);
+  const [operator] = await query(`SELECT id, environment FROM operators WHERE id = ? LIMIT 1`, [operatorId]);
   if (!operator) {
     throw new AppError('Operator not found', 404, 'NOT_FOUND');
   }
 
   const assignment = await resolvePackageAssignment(packageIds, packageGroupIds, {
+    environment: operator.environment,
     serviceTypeKeys: await getOperatorServiceTypeKeys(operatorId),
     salesModelIds: ((await getSalesModelIdsByOperatorIds([operatorId])).get(operatorId) || []).map((m) => m.id),
   });
@@ -773,7 +775,7 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
   const assignment = await resolvePackageAssignment(
     data.packageIds,
     data.packageGroupIds ?? currentGroupIds,
-    { serviceTypeKeys: serviceTypes.keys, salesModelIds }
+    { serviceTypeKeys: serviceTypes.keys, salesModelIds, environment: operator.environment }
   );
   const { plans, packageSummary, primaryPackageId } = assignment;
   const normalizedEmail = data.email.toLowerCase().trim();
