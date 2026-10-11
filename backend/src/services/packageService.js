@@ -2,7 +2,7 @@ import { query } from '../db/pool.js';
 import { AppError } from '../utils/errors.js';
 import { logAudit } from './auditService.js';
 import { paginationSql } from '../utils/pagination.js';
-import { assertServiceTag, ensureServiceTypesLoaded } from '../constants/serviceTags.js';
+import { assertServiceTag, ensureServiceTypesLoaded, listServiceTypes } from '../constants/serviceTags.js';
 
 export async function listPackages({ page = 1, limit = 20, search = '', activeOnly = false } = {}) {
   const { page: pageNum, limit: limitNum, clause } = paginationSql(page, limit);
@@ -272,6 +272,15 @@ export async function updatePackage(adminId, packageId, data, reqMeta = {}) {
   // An unchanged type may already be inactive; only a newly chosen one must be active.
   const serviceTag =
     data.serviceTag === current.service_tag ? current.service_tag : assertServiceTag(data.serviceTag);
+  // The product and price ids belong to one CRM, so a package cannot move between live and sandbox.
+  const environmentOf = (key) => listServiceTypes().find((type) => type.key === key)?.environment || 'live';
+  if (environmentOf(serviceTag) !== environmentOf(current.service_tag)) {
+    throw new AppError(
+      'A package cannot be moved between live and sandbox customer types',
+      400,
+      'CRM_ENVIRONMENT_MISMATCH'
+    );
+  }
 
   const [salesModel] = await query('SELECT id, name, is_active FROM sales_models WHERE id = ? LIMIT 1', [
     data.salesModelId,
