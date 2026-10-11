@@ -189,17 +189,22 @@ function isRetryableSubscriptionError(status, data = {}) {
   );
 }
 
-/** A customer type's CRM ids only exist in its own CRM, so it must match the one in use. */
+/** A customer type's CRM ids only exist in its own CRM, so it is read for the one in use. */
 function tagConfigFor(serviceTag) {
-  const tagConfig = getServiceTagConfig(serviceTag);
-  if (tagConfig.environment !== currentCrmEnvironment()) {
+  return getServiceTagConfig(serviceTag, currentCrmEnvironment());
+}
+
+/** A package's product and price ids only exist in its own CRM. */
+async function planForCurrentEnvironment(packageId) {
+  const plan = await getPlanByPackageId(packageId);
+  if (plan && plan.environment !== currentCrmEnvironment()) {
     throw new AppError(
-      `${tagConfig.label} customers are not available in the ${currentCrmEnvironment()} CRM`,
+      `Package "${plan.name}" is not available in the ${currentCrmEnvironment()} CRM`,
       400,
       'CRM_ENVIRONMENT_MISMATCH'
     );
   }
-  return tagConfig;
+  return plan;
 }
 
 class CRMService {
@@ -239,7 +244,7 @@ class CRMService {
       throw new AppError('At least one package is required', 400, 'PACKAGE_REQUIRED');
     }
 
-    const plan = await getPlanByPackageId(firstId);
+    const plan = await planForCurrentEnvironment(firstId);
     if (!plan?.serviceTag) {
       throw new AppError('Package service tag is not configured', 400, 'PACKAGE_NOT_CONFIGURED');
     }
@@ -248,7 +253,7 @@ class CRMService {
       (
         await Promise.all(
           [...new Set(packageIds.map((id) => Number(id)).filter(Boolean))].map((id) =>
-            getPlanByPackageId(id)
+            planForCurrentEnvironment(id)
           )
         )
       )
@@ -299,7 +304,7 @@ class CRMService {
   }
 
   async resolvePlan(packageId) {
-    const plan = await getPlanByPackageId(packageId);
+    const plan = await planForCurrentEnvironment(packageId);
     if (!plan) {
       throw new AppError(
         'Selected package is not configured for CRM provisioning.',

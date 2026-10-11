@@ -3,8 +3,8 @@ import { authenticate, ensureActiveAccount, requireStaffRole, requirePermission 
 import { AppError, asyncHandler, success } from '../utils/errors.js';
 import { validateIdParam } from '../utils/params.js';
 import { hasPermission } from '../constants/permissions.js';
-import { refreshServiceTypes, listServiceTypesPublic, getServiceTagConfig } from '../constants/serviceTags.js';
-import { runInCrmEnvironment } from '../utils/crmEnvironment.js';
+import { refreshServiceTypes, listServiceTypesPublic } from '../constants/serviceTags.js';
+import { CRM_ENVIRONMENTS, runInCrmEnvironment } from '../utils/crmEnvironment.js';
 import {
   refreshAppSettings,
   getAppSettingsForStaff,
@@ -162,6 +162,7 @@ router.get(
         label: pkg.name,
         name: pkg.name,
         serviceTag: pkg.service_tag || 'OTT',
+        environment: pkg.environment || 'live',
         salesModelId: pkg.sales_model_id ?? null,
         salesModelName: pkg.sales_model_name || null,
         packageRole: pkg.package_role || 'standalone',
@@ -178,13 +179,13 @@ router.get(
   '/packages/crm-recommendations',
   requirePermission('createPackage'),
   asyncHandler(async (req, res) => {
-    const { serviceTag, salesModelId } = crmCatalogQuerySchema.parse(req.query);
+    const { serviceTag, environment, salesModelId } = crmCatalogQuerySchema.parse(req.query);
     const salesModel = await getSalesModelOrThrow(salesModelId, { activeOnly: true });
-    // The catalog comes from the CRM the customer type belongs to (live or sandbox).
-    const recommendations = await runInCrmEnvironment(getServiceTagConfig(serviceTag).environment, () =>
+    // The catalog comes from the chosen CRM (live or sandbox); the type is read from the same one.
+    const recommendations = await runInCrmEnvironment(environment, () =>
       crmService.fetchProductCatalog(serviceTag, salesModel.name)
     );
-    success(res, { recommendations, serviceTag, salesModel: { id: salesModel.id, name: salesModel.name } });
+    success(res, { recommendations, serviceTag, environment, salesModel: { id: salesModel.id, name: salesModel.name } });
   })
 );
 
@@ -270,8 +271,10 @@ router.patch(
     if (!/^[A-Z][A-Z0-9_]{1,39}$/.test(typeKey)) {
       throw new AppError('Invalid customer type', 400, 'VALIDATION_ERROR');
     }
+    // The same key can exist in live and sandbox, so the environment says which one is meant.
+    const environment = CRM_ENVIRONMENTS.includes(req.query.environment) ? req.query.environment : 'live';
     const data = updateServiceTypeSchema.parse(req.body);
-    const serviceType = await updateServiceType(req.user.id, typeKey, data, getClientMeta(req));
+    const serviceType = await updateServiceType(req.user.id, typeKey, environment, data, getClientMeta(req));
     success(res, serviceType);
   })
 );

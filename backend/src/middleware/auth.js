@@ -18,11 +18,16 @@ import {
 } from '../constants/operatorPermissions.js';
 import { getClientMeta } from '../services/auditService.js';
 import { ensureServiceTypesLoaded, listServiceTypesPublic } from '../constants/serviceTags.js';
+import { getOperatorCrmEnvironment } from '../services/crmConfigService.js';
 import { ensureAppSettingsLoaded, getPublicAppSettings } from '../services/appSettingsService.js';
 
 /** Customer type labels the app needs to render type names (no CRM ids). */
-async function serviceTypesForClient() {
+async function serviceTypesForClient(user) {
   await ensureServiceTypesLoaded();
+  // An operator only ever deals with the types of its own CRM environment (keys can repeat across them).
+  if (user?.role === 'operator') {
+    return listServiceTypesPublic({ environment: await getOperatorCrmEnvironment(user.id) });
+  }
   return listServiceTypesPublic();
 }
 
@@ -177,7 +182,7 @@ export const authController = {
         data: {
           accessToken: result.accessToken,
           user: result.user,
-          serviceTypes: await serviceTypesForClient(),
+          serviceTypes: await serviceTypesForClient(result.user),
           settings: await appSettingsForClient(),
         },
       });
@@ -197,7 +202,7 @@ export const authController = {
         data: {
           accessToken: result.accessToken,
           user: result.user,
-          serviceTypes: await serviceTypesForClient(),
+          serviceTypes: await serviceTypesForClient(result.user),
           settings: await appSettingsForClient(),
         },
       });
@@ -238,7 +243,7 @@ export const authController = {
         success: true,
         data: {
           user: sanitizeUser(user, role),
-          serviceTypes: await serviceTypesForClient(),
+          serviceTypes: await serviceTypesForClient({ id: user.id, role }),
           settings: await appSettingsForClient(),
         },
       });

@@ -2,6 +2,9 @@
  * Customer (service) types are configured by staff and arrive from the API with the signed-in
  * user. They are kept in this module so label helpers can be used anywhere. A "scope" is the
  * list of type keys an operator may serve; the old 'BOTH' value means every type.
+ *
+ * A key is unique within one CRM environment (live or sandbox), so staff can see the same key
+ * twice. Operators only receive the types of their own environment.
  */
 const BUILT_IN = [
   { key: 'OTT', label: 'Mobile (OTT)', shortLabel: 'Mobile', isActive: true },
@@ -17,17 +20,17 @@ export function setServiceTypes(list) {
 }
 
 /** Every configured type, including inactive ones (needed to label old records). */
-export function getServiceTypes({ activeOnly = false } = {}) {
-  return activeOnly ? serviceTypes.filter((type) => type.isActive) : serviceTypes;
+export function getServiceTypes({ activeOnly = false, environment = null } = {}) {
+  return serviceTypes.filter(
+    (type) => (!activeOnly || type.isActive) && (!environment || (type.environment || 'live') === environment)
+  );
 }
 
-export function getServiceTagLabel(key) {
-  return serviceTypes.find((type) => type.key === key)?.label || key;
-}
-
-/** Which CRM a type's ids belong to: 'live' or 'sandbox'. */
-export function getServiceTagEnvironment(key) {
-  return serviceTypes.find((type) => type.key === key)?.environment || 'live';
+/** Pass the environment when it is known; without it the first type with that key is used. */
+export function getServiceTagLabel(key, environment = null) {
+  const matches = serviceTypes.filter((type) => type.key === key);
+  const type = matches.find((item) => (item.environment || 'live') === environment) || matches[0];
+  return type?.label || key;
 }
 
 export function getServiceTagShortLabel(key) {
@@ -58,8 +61,10 @@ export function filterServiceTags(serviceScope = 'BOTH') {
   }));
 }
 
-export function packageMatchesScope(pkg, serviceScope = 'BOTH') {
+/** With an `environment`, the package must also belong to that CRM (keys can repeat across them). */
+export function packageMatchesScope(pkg, serviceScope = 'BOTH', environment = null) {
   const tag = pkg.serviceTag || pkg.service_tag || 'OTT';
+  if (environment && (pkg.environment || 'live') !== environment) return false;
   return getAllowedServiceTags(serviceScope).includes(tag);
 }
 

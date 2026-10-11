@@ -147,7 +147,9 @@ export default function OperatorsTab() {
   /** Packages an operator with these customer types and sales models may be given. */
   const packagesFor = (form) =>
     packages.filter(
-      (pkg) => packageMatchesScope(pkg, form.serviceTypeKeys) && packageMatchesSalesModels(pkg, form.salesModelIds)
+      (pkg) =>
+        packageMatchesScope(pkg, form.serviceTypeKeys, form.environment || 'live') &&
+        packageMatchesSalesModels(pkg, form.salesModelIds)
     );
   const [loading, setLoading] = useState(true);
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -580,6 +582,7 @@ export default function OperatorsTab() {
           selectedIds={form.packageGroupIds || []}
           onChange={(packageGroupIds) => setForm({ ...form, packageGroupIds })}
           serviceScope={form.serviceTypeKeys}
+          environment={form.environment || 'live'}
           salesModelIds={form.salesModelIds}
         />
         <p className="form-hint">

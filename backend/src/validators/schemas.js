@@ -125,6 +125,7 @@ export const salesModelSchema = z.object({
 
 export const crmCatalogQuerySchema = z.object({
   serviceTag: serviceTypeKeySchema.default('OTT'),
+  environment: crmEnvironmentSchema,
   salesModelId: salesModelIdSchema,
 });
 
@@ -420,6 +421,8 @@ export const updatePackageSchema = z.object({
 export const createPackageSchema = z.object({
   name: z.string().trim().min(2, 'Package name is required').max(200),
   serviceTag: serviceTypeKeySchema.default('OTT'),
+  // Which CRM the customer type (and so the product and price ids) belongs to.
+  environment: crmEnvironmentSchema,
   // The CRM sales model this price belongs to.
   salesModelId: salesModelIdSchema,
   // Eligibility: base (upgrade family + tier), addon (needs one of the listed base packages) or standalone.

@@ -30,3 +30,8 @@ export function currentCrmEnvironment() {
   }
   return environment;
 }
+
+/** The selected environment, or null outside `runInCrmEnvironment`. For lookups, never for CRM calls. */
+export function activeCrmEnvironment() {
+  return storage.getStore() || null;
+}

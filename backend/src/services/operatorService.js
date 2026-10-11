@@ -58,7 +58,7 @@ const PURCHASE_ACTIVITY = {
  */
 async function loadEligibilityContext(operatorId, serviceTag) {
   const [catalog, operatorPackages] = await Promise.all([
-    getPackageCatalog(serviceTag),
+    getPackageCatalog(serviceTag, await getOperatorCrmEnvironment(operatorId)),
     getOperatorPackages(operatorId),
   ]);
   const requirementsById = new Map(catalog.map((pkg) => [Number(pkg.id), pkg.requiredPackageIds]));
@@ -316,7 +316,9 @@ export async function getOperatorStats(operatorId) {
     clientName: operator.client_name,
     serviceScope,
     allowedServiceTags,
-    serviceTypes: listServiceTypesPublic().filter((type) => allowedServiceTags.includes(type.key)),
+    serviceTypes: listServiceTypesPublic({ environment: operator.environment }).filter((type) =>
+      allowedServiceTags.includes(type.key)
+    ),
     packageType,
     packageNames,
     packages: packages.map((pkg) => ({
@@ -971,7 +973,7 @@ function roundMoney(value) {
 }
 
 async function resolveActivatePackageIds(operatorId, packageIds, serviceTag, connection) {
-  assertServiceTag(serviceTag);
+  assertServiceTag(serviceTag, await getOperatorCrmEnvironment(operatorId));
   const allowedPackages = await getOperatorPackages(operatorId, { connection });
   const allowedIds = allowedPackages
     .filter((pkg) => pkg.is_active && (pkg.service_tag || 'OTT') === serviceTag)

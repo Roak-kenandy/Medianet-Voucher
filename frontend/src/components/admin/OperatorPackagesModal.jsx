@@ -26,6 +26,7 @@ export default function OperatorPackagesModal({ operator, packages, groups, canC
 
   const operatorId = operator?.id;
   const serviceScope = operator?.service_type_keys || [];
+  const environment = operator?.environment || 'live';
   const salesModelIds = operator?.sales_model_ids || [];
   const salesModelNames = (operator?.sales_models || []).map((model) => model.name).join(', ');
   const currentDirectIds = operator?.direct_package_ids || [];
@@ -35,7 +36,8 @@ export default function OperatorPackagesModal({ operator, packages, groups, canC
   const assignable = useMemo(
     () =>
       packages.filter(
-        (pkg) => packageMatchesScope(pkg, serviceScope) && packageMatchesSalesModels(pkg, salesModelIds)
+        (pkg) =>
+          packageMatchesScope(pkg, serviceScope, environment) && packageMatchesSalesModels(pkg, salesModelIds)
       ),
     [packages, operatorId]
   );
@@ -63,7 +65,7 @@ export default function OperatorPackagesModal({ operator, packages, groups, canC
       for (const pkg of group.packages) {
         if (
           !pkg.isActive ||
-          !packageMatchesScope(pkg, serviceScope) ||
+          !packageMatchesScope(pkg, serviceScope, environment) ||
           !packageMatchesSalesModels(pkg, salesModelIds)
         ) {
           continue;

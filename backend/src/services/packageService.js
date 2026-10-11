@@ -2,7 +2,7 @@ import { query } from '../db/pool.js';
 import { AppError } from '../utils/errors.js';
 import { logAudit } from './auditService.js';
 import { paginationSql } from '../utils/pagination.js';
-import { assertServiceTag, ensureServiceTypesLoaded, listServiceTypes } from '../constants/serviceTags.js';
+import { assertServiceTag, ensureServiceTypesLoaded } from '../constants/serviceTags.js';
 
 export async function listPackages({ page = 1, limit = 20, search = '', activeOnly = false } = {}) {
   const { page: pageNum, limit: limitNum, clause } = paginationSql(page, limit);
@@ -23,7 +23,7 @@ export async function listPackages({ page = 1, limit = 20, search = '', activeOn
 
   const packages = await query(
     `SELECT p.id, p.name, p.service_tag, p.sales_model_id, sm.name AS sales_model_name, p.sku,
-            p.package_role, p.upgrade_family, p.upgrade_tier,
+            p.environment, p.package_role, p.upgrade_family, p.upgrade_tier,
             p.product_id, p.price_term_id, p.price_amount, p.currency_code,
             p.description, p.is_active, p.created_at, p.updated_at
      FROM packages p
@@ -52,7 +52,7 @@ export async function listPackages({ page = 1, limit = 20, search = '', activeOn
 export async function getActivePackages() {
   return query(
     `SELECT p.id, p.name, p.service_tag, p.sales_model_id, sm.name AS sales_model_name, p.sku,
-            p.package_role, p.upgrade_family, p.upgrade_tier,
+            p.environment, p.package_role, p.upgrade_family, p.upgrade_tier,
             p.product_id, p.price_term_id, p.price_amount, p.currency_code, p.description
      FROM packages p
      LEFT JOIN sales_models sm ON sm.id = p.sales_model_id
@@ -64,7 +64,7 @@ export async function getActivePackages() {
 export async function getPackageById(packageId) {
   const [pkg] = await query(
     `SELECT p.id, p.name, p.service_tag, p.sales_model_id, sm.name AS sales_model_name, p.sku,
-            p.package_role, p.upgrade_family, p.upgrade_tier,
+            p.environment, p.package_role, p.upgrade_family, p.upgrade_tier,
             p.product_id, p.price_term_id, p.price_amount, p.currency_code, p.description, p.is_active
      FROM packages p
      LEFT JOIN sales_models sm ON sm.id = p.sales_model_id
@@ -140,11 +140,11 @@ async function saveRequirements(packageId, requiredPackageIds) {
  * Every package of a customer type in the shape the eligibility rules use. Inactive packages
  * are included so a service the customer already holds is still recognised.
  */
-export async function getPackageCatalog(serviceTag) {
+export async function getPackageCatalog(serviceTag, environment = 'live') {
   const rows = await query(
     `SELECT id, name, package_role, upgrade_family, upgrade_tier, product_id, is_active
-     FROM packages WHERE service_tag = ?`,
-    [serviceTag]
+     FROM packages WHERE service_tag = ? AND environment = ?`,
+    [serviceTag, environment]
   );
   await attachRequirements(rows);
   return rows.map(toEligibilityPackage);
@@ -177,6 +177,7 @@ export async function getPlanByPackageId(packageId) {
     priceAmount: Number(pkg.price_amount),
     currencyCode: pkg.currency_code,
     serviceTag: pkg.service_tag || 'OTT',
+    environment: pkg.environment || 'live',
     salesModelId: pkg.sales_model_id ?? null,
     salesModelName: pkg.sales_model_name || null,
   };
@@ -192,7 +193,9 @@ export async function assertPackageAssignable(packageId) {
 
 export async function createPackage(adminId, data, reqMeta = {}) {
   await ensureServiceTypesLoaded();
-  const serviceTag = assertServiceTag(data.serviceTag || 'OTT');
+  // The package belongs to the CRM of its customer type; the same key can exist in both.
+  const environment = data.environment || 'live';
+  const serviceTag = assertServiceTag(data.serviceTag || 'OTT', environment);
   const [salesModel] = await query(
     'SELECT id, name FROM sales_models WHERE id = ? AND is_active = 1 LIMIT 1',
     [data.salesModelId]
@@ -214,12 +217,13 @@ export async function createPackage(adminId, data, reqMeta = {}) {
 
   const result = await query(
     `INSERT INTO packages
-       (name, service_tag, sales_model_id, package_role, upgrade_family, upgrade_tier,
+       (name, service_tag, environment, sales_model_id, package_role, upgrade_family, upgrade_tier,
         sku, product_id, price_term_id, price_amount, currency_code, description, created_by_admin_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       data.name.trim(),
       serviceTag,
+      environment,
       salesModel.id,
       eligibility.role,
       eligibility.family,
@@ -271,16 +275,10 @@ export async function updatePackage(adminId, packageId, data, reqMeta = {}) {
   await ensureServiceTypesLoaded();
   // An unchanged type may already be inactive; only a newly chosen one must be active.
   const serviceTag =
-    data.serviceTag === current.service_tag ? current.service_tag : assertServiceTag(data.serviceTag);
-  // The product and price ids belong to one CRM, so a package cannot move between live and sandbox.
-  const environmentOf = (key) => listServiceTypes().find((type) => type.key === key)?.environment || 'live';
-  if (environmentOf(serviceTag) !== environmentOf(current.service_tag)) {
-    throw new AppError(
-      'A package cannot be moved between live and sandbox customer types',
-      400,
-      'CRM_ENVIRONMENT_MISMATCH'
-    );
-  }
+    data.serviceTag === current.service_tag
+      ? current.service_tag
+      : // The product and price ids belong to one CRM, so the new type must be in the package's own.
+        assertServiceTag(data.serviceTag, current.environment || 'live');
 
   const [salesModel] = await query('SELECT id, name, is_active FROM sales_models WHERE id = ? LIMIT 1', [
     data.salesModelId,
@@ -378,6 +376,7 @@ const EFFECTIVE_PACKAGE_SOURCES = `
   SELECT op.operator_id, op.package_id, 1 AS is_direct, NULL AS group_id
   FROM operator_packages op
   INNER JOIN packages dp ON dp.id = op.package_id
+  INNER JOIN operators dop ON dop.id = op.operator_id AND dop.environment = dp.environment
   WHERE dp.sales_model_id IS NULL OR EXISTS (
     SELECT 1 FROM operator_sales_models osm
     WHERE osm.operator_id = op.operator_id AND osm.sales_model_id = dp.sales_model_id
@@ -387,6 +386,7 @@ const EFFECTIVE_PACKAGE_SOURCES = `
   FROM operator_package_groups og
   INNER JOIN package_group_items gi ON gi.group_id = og.group_id
   INNER JOIN packages gp ON gp.id = gi.package_id
+  INNER JOIN operators gop ON gop.id = og.operator_id AND gop.environment = gp.environment
   INNER JOIN operator_service_types ost
     ON ost.operator_id = og.operator_id AND ost.service_type_key = COALESCE(gp.service_tag, 'OTT')
   WHERE gp.sales_model_id IS NULL OR EXISTS (

@@ -134,8 +134,8 @@ export const adminApi = {
   getOperators: (params = {}) => apiRequest(`/admin/operators${buildQuery(params)}`),
   getPackages: () => apiRequest('/admin/packages/active').then((data) => data.packages),
   getPackagesList: (params = {}) => apiRequest(`/admin/packages${buildQuery(params)}`),
-  getCrmRecommendations: (serviceTag, salesModelId) =>
-    apiRequest(`/admin/packages/crm-recommendations${buildQuery({ serviceTag, salesModelId })}`).then(
+  getCrmRecommendations: (serviceTag, salesModelId, environment = 'live') =>
+    apiRequest(`/admin/packages/crm-recommendations${buildQuery({ serviceTag, salesModelId, environment })}`).then(
       (data) => data.recommendations
     ),
   getAppSettings: () => apiRequest('/admin/settings'),
@@ -144,8 +144,8 @@ export const adminApi = {
   getServiceTypes: () => apiRequest('/admin/service-types').then((data) => data.serviceTypes),
   createServiceType: (payload) =>
     apiRequest('/admin/service-types', { method: 'POST', body: JSON.stringify(payload) }),
-  updateServiceType: (key, payload) =>
-    apiRequest(`/admin/service-types/${encodeURIComponent(key)}`, {
+  updateServiceType: (key, environment, payload) =>
+    apiRequest(`/admin/service-types/${encodeURIComponent(key)}${buildQuery({ environment })}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
