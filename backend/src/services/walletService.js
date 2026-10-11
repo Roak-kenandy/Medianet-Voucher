@@ -51,7 +51,8 @@ export function calculateGstFromTotal(grossAmount, gstRate = config.wallet.gstRa
   }
 
   const afterGst = roundMoney(total / (1 + rate));
-  const gstAmount = roundMoney(afterGst * rate);
+  // Derived from the total so wallet credit + GST always equals the total to the cent.
+  const gstAmount = roundMoney(total - afterGst);
 
   return {
     grossAmount: total,
@@ -62,34 +63,58 @@ export function calculateGstFromTotal(grossAmount, gstRate = config.wallet.gstRa
   };
 }
 
+/**
+ * Finance revenue-share ratio: (100 + GST%) / (100 + GST% - share).
+ * At 8% GST a 50% share is 108 / 58 = 1.86206896551724.
+ */
+export function revenueShareRatio(sharePercent, gstRate = config.wallet.gstRate) {
+  const share = Number(sharePercent) || 0;
+  const total = 100 * (1 + Math.max(0, Math.min(1, Number(gstRate) || 0)));
+  if (share <= 0 || share >= total) return 1;
+  return total / (total - share);
+}
+
 export function calculateTopupCredit(
   paidAmount,
-  { commissionType = 'none', commissionValue = 0, gstRate = config.wallet.gstRate } = {}
+  {
+    commissionType = 'none',
+    commissionValue = 0,
+    gstRate = config.wallet.gstRate,
+    paymentFeePercent = 0,
+  } = {}
 ) {
   const amountPaid = roundMoney(paidAmount);
   const rate = Math.max(0, Math.min(1, Number(gstRate) || 0));
+  // Gateway fee (BML only) comes off the payment before the commission ratio is applied.
+  const feePercent = Math.max(0, Math.min(99.99, Number(paymentFeePercent) || 0));
+  const paymentFee = roundMoney(amountPaid * (feePercent / 100));
+  const baseAmount = roundMoney(amountPaid - paymentFee);
 
-  let grossTotal = amountPaid;
+  let grossTotal = baseAmount;
   let commission = 0;
 
   if (commissionType === 'multiplier') {
     const multiplier = Math.max(1, Number(commissionValue) || 1);
-    grossTotal = roundMoney(amountPaid * multiplier);
-    commission = roundMoney(grossTotal - amountPaid);
+    grossTotal = roundMoney(baseAmount * multiplier);
+    commission = roundMoney(grossTotal - baseAmount);
   } else if (commissionType === 'fixed') {
     commission = roundMoney(commissionValue);
-    grossTotal = roundMoney(amountPaid + commission);
+    grossTotal = roundMoney(baseAmount + commission);
   } else if (commissionType === 'percent') {
-    commission = roundMoney(amountPaid * (Number(commissionValue) / 100));
-    grossTotal = roundMoney(amountPaid + commission);
+    grossTotal = roundMoney(baseAmount * revenueShareRatio(commissionValue, rate));
+    commission = roundMoney(grossTotal - baseAmount);
   }
 
+  // The wallet holds the GST-inclusive total; the GST split is kept for finance reporting only.
   const gst = calculateGstFromTotal(grossTotal, rate);
-  const net = gst.afterGst;
+  const net = grossTotal;
 
   return {
     amount: amountPaid,
     amountPaid,
+    paymentFeePercent: feePercent,
+    paymentFee,
+    amountAfterFee: baseAmount,
     grossTotal,
     gstRate: gst.gstRate,
     gstRatePercent: gst.gstRatePercent,
@@ -103,22 +128,23 @@ export function calculateTopupCredit(
 }
 
 function buildTopupDescription(breakdown, currencyCode = config.wallet.currencyCode) {
-  const { amountPaid, gstRatePercent, gstAmount, commission, net } = breakdown;
-  let description = `Wallet top-up — paid ${amountPaid} ${currencyCode}, GST ${gstRatePercent}% (${gstAmount} ${currencyCode})`;
-
-  if (commission > 0) {
-    description += `, bonus +${commission} ${currencyCode}, credited ${net} ${currencyCode}`;
-  } else {
-    description += `, credited ${net} ${currencyCode}`;
+  const { amountPaid, gstRatePercent, gstAmount, commission, net, paymentFee, paymentFeePercent } = breakdown;
+  let description = `Wallet top-up — paid ${amountPaid} ${currencyCode}`;
+  if (paymentFee > 0) {
+    description += `, BML fee ${paymentFeePercent}% −${paymentFee} ${currencyCode}`;
   }
-
-  return description;
+  if (commission > 0) {
+    description += `, BP commission +${commission} ${currencyCode}`;
+  }
+  return `${description}, credited ${net} ${currencyCode} (incl. GST ${gstRatePercent}% ${gstAmount} ${currencyCode})`;
 }
 
 function buildTopupMetadata(breakdown, commissionSettings) {
   return {
     activity: 'wallet_topup',
     amountPaid: breakdown.amountPaid,
+    paymentFeePercent: breakdown.paymentFeePercent ?? 0,
+    paymentFee: breakdown.paymentFee ?? 0,
     grossTotal: breakdown.grossTotal ?? breakdown.amountPaid,
     gstRate: breakdown.gstRate,
     gstRatePercent: breakdown.gstRatePercent,
@@ -589,6 +615,8 @@ function buildPendingTopupResponse(pending, breakdown, commissionSettings) {
     gstRatePercent: breakdown.gstRatePercent,
     gstAmount,
     afterGst,
+    paymentFeePercent: breakdown.paymentFeePercent,
+    paymentFee: breakdown.paymentFee,
     commissionAmount: commission,
     netAmount: net,
     currencyCode: config.wallet.currencyCode,
@@ -610,6 +638,7 @@ export async function initiateTopup(operatorId, amount, reqMeta = {}) {
     commissionType: commissionSettings.commissionType,
     commissionValue: commissionSettings.commissionValue,
     gstRate: config.wallet.gstRate,
+    paymentFeePercent: getAppSettings().bmlFeePercent,
   });
   const { amount: gross, commission, net, gstAmount, afterGst } = breakdown;
 
@@ -688,6 +717,8 @@ export async function initiateTopup(operatorId, amount, reqMeta = {}) {
         gstRatePercent: breakdown.gstRatePercent,
         gstAmount,
         afterGst,
+        paymentFeePercent: breakdown.paymentFeePercent,
+        paymentFee: breakdown.paymentFee,
         commissionAmount: commission,
         netAmount: net,
         balance: result.balanceAfter,
@@ -695,7 +726,7 @@ export async function initiateTopup(operatorId, amount, reqMeta = {}) {
         walletCommissionType: commissionSettings.commissionType,
         walletCommissionValue: commissionSettings.commissionValue,
         paymentUrl: null,
-        message: `You paid ${gross} ${config.wallet.currencyCode}. After ${breakdown.gstRatePercent}% GST (${gstAmount} ${config.wallet.currencyCode}), ${net} ${config.wallet.currencyCode} was added to your wallet.`,
+        message: `You paid ${gross} ${config.wallet.currencyCode}. ${net} ${config.wallet.currencyCode} was added to your wallet.`,
       };
     }
 
@@ -754,6 +785,8 @@ export async function initiateTopup(operatorId, amount, reqMeta = {}) {
         gstRatePercent: breakdown.gstRatePercent,
         gstAmount,
         afterGst,
+        paymentFeePercent: breakdown.paymentFeePercent,
+        paymentFee: breakdown.paymentFee,
         commissionAmount: commission,
         netAmount: net,
         currencyCode: config.wallet.currencyCode,
@@ -812,6 +845,8 @@ export async function initiateTopup(operatorId, amount, reqMeta = {}) {
       gstRatePercent: breakdown.gstRatePercent,
       gstAmount,
       afterGst,
+      paymentFeePercent: breakdown.paymentFeePercent,
+      paymentFee: breakdown.paymentFee,
       commissionAmount: commission,
       netAmount: net,
       currencyCode: config.wallet.currencyCode,
@@ -821,7 +856,7 @@ export async function initiateTopup(operatorId, amount, reqMeta = {}) {
       shortPaymentUrl,
       qrImageUrl,
       bmlTransactionId: bmlTransaction.id,
-      message: `Complete payment of ${gross} ${config.wallet.currencyCode} with Bank of Maldives. After GST, ${net} ${config.wallet.currencyCode} will be credited to your wallet.`,
+      message: `Complete payment of ${gross} ${config.wallet.currencyCode} with Bank of Maldives. ${net} ${config.wallet.currencyCode} will be credited to your wallet.`,
     };
   } catch (err) {
     if (connection) {
@@ -1758,6 +1793,8 @@ export function buildWalletTopupBill(transaction, operator = {}) {
     paymentRef: transaction.payment_ref || metadata.bmlTransactionId || null,
     currencyCode: transaction.currency_code || config.wallet.currencyCode,
     amountPaid,
+    paymentFeePercent: Number(metadata.paymentFeePercent) || 0,
+    paymentFee: roundMoney(metadata.paymentFee ?? 0),
     grossTotal,
     commissionAmount,
     gstRatePercent,

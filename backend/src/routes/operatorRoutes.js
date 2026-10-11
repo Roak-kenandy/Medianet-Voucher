@@ -17,7 +17,7 @@ import {
 import { asyncHandler, success } from '../utils/errors.js';
 import { parseIdParam } from '../utils/params.js';
 import { refreshServiceTypes } from '../constants/serviceTags.js';
-import { refreshAppSettings } from '../services/appSettingsService.js';
+import { getAppSettings, refreshAppSettings } from '../services/appSettingsService.js';
 import { getClientMeta } from '../services/auditService.js';
 import {
   getOperatorStats,
@@ -141,6 +141,7 @@ router.post(
       commissionType: wallet.walletCommissionType,
       commissionValue: wallet.walletCommissionValue,
       gstRate: wallet.gstRate,
+      paymentFeePercent: getAppSettings().bmlFeePercent,
     });
     success(res, {
       ...breakdown,

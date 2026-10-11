@@ -26,6 +26,8 @@ export default function WalletTopupBill({ bill }) {
 
   const currencyCode = bill.currencyCode || 'MVR';
   const billId = `wallet-topup-bill-${bill.billNumber}`;
+  // Older top-ups credited the total less GST; newer ones credit the GST-inclusive total.
+  const gstDeducted = Number(bill.creditedAmount) + 0.005 < Number(bill.grossTotal);
 
   const handlePrint = () => printBill(billId);
   const handleDownload = () => downloadBillHtml(billId, `wallet-topup-${bill.billNumber}.html`);
@@ -105,22 +107,35 @@ export default function WalletTopupBill({ bill }) {
               <span>Amount paid</span>
               <span>{formatMoney(bill.amountPaid, currencyCode)}</span>
             </div>
+            {bill.paymentFee > 0 && (
+              <div className="wallet-topup-bill-line">
+                <span>BML fee ({formatPercent(bill.paymentFeePercent)})</span>
+                <span>− {formatMoney(bill.paymentFee, currencyCode)}</span>
+              </div>
+            )}
             {bill.commissionAmount > 0 && (
               <div className="wallet-topup-bill-line">
-                <span>Operator bonus</span>
+                <span>BP commission</span>
                 <span>+ {formatMoney(bill.commissionAmount, currencyCode)}</span>
               </div>
             )}
-            {bill.grossTotal > bill.amountPaid && (
+            {gstDeducted ? (
+              <>
+                <div className="wallet-topup-bill-line">
+                  <span>Total before GST</span>
+                  <span>{formatMoney(bill.grossTotal, currencyCode)}</span>
+                </div>
+                <div className="wallet-topup-bill-line">
+                  <span>GST ({formatPercent(bill.gstRatePercent)})</span>
+                  <span>− {formatMoney(bill.gstAmount, currencyCode)}</span>
+                </div>
+              </>
+            ) : (
               <div className="wallet-topup-bill-line">
-                <span>Total before GST</span>
-                <span>{formatMoney(bill.grossTotal, currencyCode)}</span>
+                <span>GST included ({formatPercent(bill.gstRatePercent)})</span>
+                <span>{formatMoney(bill.gstAmount, currencyCode)}</span>
               </div>
             )}
-            <div className="wallet-topup-bill-line">
-              <span>GST ({formatPercent(bill.gstRatePercent)})</span>
-              <span>− {formatMoney(bill.gstAmount, currencyCode)}</span>
-            </div>
             <div className="wallet-topup-bill-total">
               <span>Credited to wallet</span>
               <span>{formatMoney(bill.creditedAmount, currencyCode)}</span>

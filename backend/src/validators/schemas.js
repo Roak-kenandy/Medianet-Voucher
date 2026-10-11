@@ -105,6 +105,13 @@ export const appSettingsSchema = z.object({
     .regex(/^[A-Za-z0-9 ./-]*$/, 'TIN may contain letters, digits, spaces, dots, slashes and dashes')
     .optional()
     .default(''),
+  bmlFeePercent: z.coerce
+    .number()
+    .finite()
+    .min(0, 'BML fee cannot be negative')
+    .max(99.99, 'BML fee must be less than 100%')
+    .refine((value) => Math.abs(Math.round(value * 100) - value * 100) < 1e-6, 'BML fee can have at most 2 decimal places')
+    .optional(),
   currencyCode: z.string().trim().toUpperCase().length(3, 'Currency must be a 3-letter code'),
 });
 
@@ -196,7 +203,7 @@ function moneyAmountSchema(label, max = MONEY_MAX) {
 }
 
 const walletCommissionFields = {
-  // multiplier: ratio applied to the payment total (1.15). percent: bonus on top (15).
+  // multiplier: ratio applied to the payment total (1.15). percent: BP revenue share (50 -> 108 / 58).
   walletCommissionType: z.enum(['none', 'multiplier', 'percent']).default('none'),
   walletCommissionValue: z.coerce
     .number()
@@ -245,6 +252,13 @@ function validateWalletCommission(data, ctx) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'Commission percent must be greater than zero',
+      path: ['walletCommissionValue'],
+    });
+  }
+  if (data.walletCommissionType === 'percent' && data.walletCommissionValue >= 100) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Revenue share must be less than 100%',
       path: ['walletCommissionValue'],
     });
   }

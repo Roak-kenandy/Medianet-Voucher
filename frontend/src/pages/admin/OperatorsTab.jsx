@@ -8,6 +8,7 @@ import TablePagination from '../../components/TablePagination';
 import { adminApi } from '../../api/client';
 import { formatPackageLabel } from '../../constants/packages';
 import { formatMoney } from '../../utils/money';
+import { commissionRatio, formatRatio } from '../../utils/commission';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import { hasPermission } from '../../constants/permissions';
@@ -56,7 +57,7 @@ const emptyForm = () => ({
 
 const COMMISSION_TYPES = [
   { key: 'none', label: 'None' },
-  { key: 'percent', label: 'Percent (%)' },
+  { key: 'percent', label: 'Revenue share (%)' },
   { key: 'multiplier', label: 'Ratio (multiplier)' },
 ];
 
@@ -87,25 +88,19 @@ function commissionPayload(type, rawValue) {
 function formatCommissionLabel(operator) {
   const { walletCommissionType: type, walletCommissionValue: value } = commissionFromOperator(operator);
   if (type === 'multiplier') {
-    const bonusPercent = Math.round((value - 1) * 10000) / 100;
-    return `×${Math.round(value * 100000) / 100000} (+${bonusPercent}%)`;
+    return `×${formatRatio(value)}`;
   }
   if (type === 'percent') {
-    return `+${value}%`;
+    return `${value}% share (×${formatRatio(commissionRatio(type, value))})`;
   }
   return 'None';
 }
 
 /** Worked example shown under the commission field so staff can check what they entered. */
 function commissionExample(type, rawValue) {
-  const value = Number(rawValue);
-  if (type === 'percent' && value > 0) {
-    return `A 1,000 MVR payment counts as ${formatMoney(1000 + 1000 * (value / 100), 'MVR')} before GST.`;
-  }
-  if (type === 'multiplier' && value > 1) {
-    return `A 1,000 MVR payment counts as ${formatMoney(1000 * value, 'MVR')} before GST.`;
-  }
-  return null;
+  const ratio = commissionRatio(type, rawValue);
+  if (ratio <= 1) return null;
+  return `Ratio ${formatRatio(ratio)}: a 1,000 MVR payment counts as ${formatMoney(1000 * ratio, 'MVR')} including GST.`;
 }
 
 function StatusBadge({ active }) {
@@ -689,23 +684,24 @@ export default function OperatorsTab() {
               })
             }
             min={form.walletCommissionType === 'percent' ? 0.01 : 1.01}
-            max={form.walletCommissionType === 'percent' ? 900 : 10}
+            max={form.walletCommissionType === 'percent' ? 99.99 : 10}
             step={form.walletCommissionType === 'percent' ? '0.01' : 'any'}
             list={form.walletCommissionType === 'percent' ? `commissionPercents-${isEdit ? 'edit' : 'create'}` : undefined}
-            placeholder={form.walletCommissionType === 'percent' ? 'e.g. 50 for a 50% bonus' : 'e.g. 1.5 for a 50% bonus'}
+            placeholder={form.walletCommissionType === 'percent' ? 'e.g. 50 for a 50% share' : 'e.g. 1.86206896551724'}
             required
           />
         )}
         {form.walletCommissionType === 'percent' && (
           <datalist id={`commissionPercents-${isEdit ? 'edit' : 'create'}`}>
-            {[10, 20, 30, 40, 50].map((percent) => (
+            {[50, 45, 40, 35, 30, 25, 20, 15, 10].map((percent) => (
               <option key={percent} value={percent} />
             ))}
           </datalist>
         )}
         <p className="form-hint">
-          Bonus added to the operator's wallet top-ups, before GST. Enter it as a percent (50) or as a
-          ratio (1.5); both give the same result. Customer sales earn no commission.
+          Revenue share uses the finance formula: ratio = (100 + GST%) / (100 + GST% − share), so 50% at
+          8% GST is 108 / 58 = 1.86206896551724. The wallet is credited payment × ratio (GST included).
+          Customer sales earn no commission.
           {commissionExample(form.walletCommissionType, form.walletCommissionValue)
             ? ` ${commissionExample(form.walletCommissionType, form.walletCommissionValue)}`
             : ''}

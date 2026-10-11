@@ -18,6 +18,7 @@ const ENV_DEFAULTS = {
   timeZone: 'Indian/Maldives',
   gstRatePercent: Math.round(config.wallet.gstRate * 10000) / 100,
   tinNumber: '',
+  bmlFeePercent: 3,
   currencyCode: SUPPORTED_CURRENCIES.includes(config.wallet.currencyCode) ? config.wallet.currencyCode : 'MVR',
 };
 
@@ -37,6 +38,7 @@ export function isValidTimeZone(timeZone) {
 function fromRows(rows) {
   const stored = Object.fromEntries(rows.map((row) => [row.setting_key, row.setting_value]));
   const gst = Number(stored.gstRatePercent);
+  const bmlFee = Number(stored.bmlFeePercent);
   return {
     timeZone: stored.timeZone && isValidTimeZone(stored.timeZone) ? stored.timeZone : ENV_DEFAULTS.timeZone,
     gstRatePercent:
@@ -44,6 +46,10 @@ function fromRows(rows) {
         ? gst
         : ENV_DEFAULTS.gstRatePercent,
     tinNumber: stored.tinNumber ?? ENV_DEFAULTS.tinNumber,
+    bmlFeePercent:
+      stored.bmlFeePercent != null && Number.isFinite(bmlFee) && bmlFee >= 0 && bmlFee < 100
+        ? bmlFee
+        : ENV_DEFAULTS.bmlFeePercent,
     currencyCode: SUPPORTED_CURRENCIES.includes(stored.currencyCode) ? stored.currencyCode : ENV_DEFAULTS.currencyCode,
   };
 }
@@ -103,6 +109,7 @@ export async function updateAppSettings(adminId, data, reqMeta = {}) {
     timeZone: data.timeZone,
     gstRatePercent: String(data.gstRatePercent),
     tinNumber: data.tinNumber.trim(),
+    bmlFeePercent: String(data.bmlFeePercent ?? settings.bmlFeePercent),
     currencyCode: data.currencyCode,
   };
 

@@ -1,7 +1,7 @@
 import { config } from '../config/index.js';
 import { liveOperatorSql } from '../utils/walletSql.js';
 import { query } from '../db/pool.js';
-import { calculateGstFromTotal } from './walletService.js';
+import { calculateGstFromTotal, revenueShareRatio } from './walletService.js';
 import { REPORT_SCAN_BATCH_SIZE } from '../constants/reportLimits.js';
 import { paginationSql } from '../utils/pagination.js';
 import { csvEscape } from '../utils/csv.js';
@@ -129,7 +129,7 @@ const TOPUP_TYPE_LABELS = {
 function formatRatio(value) {
   const ratio = Number(value);
   if (!Number.isFinite(ratio) || ratio <= 1) return '';
-  return String(Math.round(ratio * 100000) / 100000);
+  return String(Number(ratio.toFixed(14)));
 }
 
 function resolvePaymentType(row, metadata) {
@@ -220,7 +220,7 @@ export function mapDealerTopupRow(row) {
   if (metadata.commissionType === 'multiplier' && Number(metadata.commissionValue) > 1) {
     ratioSource = metadata.commissionValue;
   } else if (metadata.commissionType === 'percent' && Number(metadata.commissionValue) > 0) {
-    ratioSource = 1 + Number(metadata.commissionValue) / 100;
+    ratioSource = revenueShareRatio(metadata.commissionValue, metadata.gstRate ?? config.wallet.gstRate);
   }
 
   return {
@@ -234,7 +234,9 @@ export function mapDealerTopupRow(row) {
     commissionRatio: formatRatio(ratioSource),
     originalAmount: roundMoney(sign * financials.amountPaid),
     originalWithoutGst: '',
-    totalTopupAmount: roundMoney(sign * grossTotal),
+    paymentFee: roundMoney(sign * (Number(metadata.paymentFee) || 0)),
+    grossTotal: roundMoney(sign * grossTotal),
+    totalTopupAmount: roundMoney(sign * financials.totalTopupAmount),
     amountPaid: roundMoney(sign * financials.amountPaid),
     gstAmount: roundMoney(sign * financials.gstAmount),
     afterGst: roundMoney(sign * financials.afterGst),
@@ -260,6 +262,7 @@ export function createEmptyTopupSummary(currencyCode = config.wallet.currencyCod
     totalRecords: 0,
     uniqueOperators: 0,
     totalAmountPaid: 0,
+    totalPaymentFee: 0,
     totalAfterGst: 0,
     totalGstAmount: 0,
     totalCommission: 0,
@@ -274,6 +277,7 @@ export function foldTopupSummary(summary, mappedRow) {
   summary.totalRecords += 1;
   summary._operatorIds.add(mappedRow.operatorId);
   summary.totalAmountPaid = roundMoney(summary.totalAmountPaid + mappedRow.amountPaid);
+  summary.totalPaymentFee = roundMoney(summary.totalPaymentFee + mappedRow.paymentFee);
   summary.totalAfterGst = roundMoney(summary.totalAfterGst + mappedRow.afterGst);
   summary.totalGstAmount = roundMoney(summary.totalGstAmount + mappedRow.gstAmount);
   summary.totalCommission = roundMoney(summary.totalCommission + mappedRow.commission);
@@ -419,9 +423,11 @@ const CSV_HEADERS = [
   'Commission ratio',
   'Original Amount',
   'OA Without GST',
-  'Total TopUp Amount',
-  'GST %',
+  'BML Fee',
+  'Amount ex GST',
+  'GST',
   'BP Commission',
+  'Total (Wallet Credit)',
   'User',
   'Note',
 ];
@@ -436,9 +442,11 @@ function mappedRowToCsvLine(row) {
     row.commissionRatio,
     row.originalAmount,
     row.originalWithoutGst,
-    row.totalTopupAmount,
+    row.paymentFee,
+    row.afterGst,
     row.gstAmount,
     row.commission,
+    row.totalTopupAmount,
     row.processedBy,
     row.note,
   ]
@@ -456,6 +464,7 @@ export function dealerTopupReportToCsv(report) {
     `Total Records,${report.summary.totalRecords}`,
     `Unique Operators,${report.summary.uniqueOperators}`,
     `Total Amount Paid,${report.summary.totalAmountPaid}`,
+    `Total BML Fee,${report.summary.totalPaymentFee}`,
     `Total After GST,${report.summary.totalAfterGst}`,
     `Total GST,${report.summary.totalGstAmount}`,
     `Total Commission,${report.summary.totalCommission}`,
@@ -487,6 +496,7 @@ export async function streamDealerTopupReportCsv(res, filters) {
     `Total Records,${summary.totalRecords}`,
     `Unique Operators,${summary.uniqueOperators}`,
     `Total Amount Paid,${summary.totalAmountPaid}`,
+    `Total BML Fee,${summary.totalPaymentFee}`,
     `Total After GST,${summary.totalAfterGst}`,
     `Total GST,${summary.totalGstAmount}`,
     `Total Commission,${summary.totalCommission}`,

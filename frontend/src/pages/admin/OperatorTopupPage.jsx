@@ -11,6 +11,7 @@ import { useToast } from '../../context/ToastContext';
 import { hasPermission } from '../../constants/permissions';
 import { formatMoney } from '../../utils/money';
 import { downloadCsv } from '../../utils/reports';
+import { commissionRatio, formatRatio } from '../../utils/commission';
 import { getDefaultReportDateRange } from '../../utils/dates';
 import './admin-shared.css';
 
@@ -30,25 +31,14 @@ function previewStaffTopup(paid, wallet) {
   const amountPaid = roundMoney(paid);
   if (!Number.isFinite(amountPaid) || amountPaid <= 0 || !wallet) return null;
 
-  const type = wallet.walletCommissionType;
-  const value = Number(wallet.walletCommissionValue) || 1;
-  let grossTotal = amountPaid;
-  let commission = 0;
-  let ratio = null;
-
-  if (type === 'multiplier' && value > 1) {
-    grossTotal = roundMoney(amountPaid * value);
-    commission = roundMoney(grossTotal - amountPaid);
-    ratio = Math.round(value * 100000) / 100000;
-  } else if (type === 'percent' && value > 0) {
-    commission = roundMoney(amountPaid * (value / 100));
-    grossTotal = roundMoney(amountPaid + commission);
-    ratio = Math.round((1 + value / 100) * 100000) / 100000;
-  }
-
   const rate = Math.max(0, Number(wallet.gstRate) || 0);
+  const ratioValue = commissionRatio(wallet.walletCommissionType, wallet.walletCommissionValue, rate);
+  const grossTotal = roundMoney(amountPaid * ratioValue);
+  const commission = roundMoney(grossTotal - amountPaid);
+  const ratio = ratioValue > 1 ? formatRatio(ratioValue) : null;
+
   const afterGst = rate > 0 ? roundMoney(grossTotal / (1 + rate)) : grossTotal;
-  const gstAmount = rate > 0 ? roundMoney(afterGst * rate) : 0;
+  const gstAmount = roundMoney(grossTotal - afterGst);
 
   return { amountPaid, grossTotal, commission, ratio, afterGst, gstAmount };
 }
@@ -397,8 +387,8 @@ export default function OperatorTopupPage() {
                   {!creditPreview
                     ? 'Enter the amount received. The operator’s commission rate is applied before the wallet is credited.'
                     : creditPreview.ratio
-                      ? `Ratio ${creditPreview.ratio}. Total ${formatMoney(creditPreview.grossTotal, currencyCode)}, BP commission ${formatMoney(creditPreview.commission, currencyCode)}, wallet credit ${formatMoney(creditPreview.afterGst, currencyCode)}.`
-                      : `No commission rate. ${formatMoney(creditPreview.afterGst, currencyCode)} is added to the wallet.`}
+                      ? `Total ${formatMoney(creditPreview.grossTotal, currencyCode)} is added to the wallet (ratio ${creditPreview.ratio}). The GST and BP commission breakdown is saved to the top-up report for finance.`
+                      : `Total ${formatMoney(creditPreview.grossTotal, currencyCode)} is added to the wallet. No commission rate.`}
                 </p>
               </div>
 

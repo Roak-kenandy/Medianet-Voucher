@@ -59,16 +59,25 @@ console.log('Wallet arithmetic');
 {
   const plain = calculateTopupCredit(100, { gstRate: 0.08 });
   check('no commission: gross equals paid', plain.grossTotal === 100);
-  check('no commission: net + gst equals gross', Math.abs(plain.net + plain.gstAmount - plain.grossTotal) < 0.005);
+  check('no commission: wallet credit equals amount paid', plain.net === 100);
+  check('no commission: ex-GST + GST equals gross', Math.abs(plain.afterGst + plain.gstAmount - plain.grossTotal) < 0.001);
   const mult = calculateTopupCredit(100, { commissionType: 'multiplier', commissionValue: 1.5, gstRate: 0 });
   check('multiplier 1.5 credits 150', mult.net === 150);
   const below = calculateTopupCredit(100, { commissionType: 'multiplier', commissionValue: 0.2, gstRate: 0 });
   check('multiplier below 1 never reduces credit', below.net === 100);
   const cents = calculateTopupCredit(0.1 + 0.2, { gstRate: 0 });
   check('amounts are rounded to cents', cents.net === 0.3);
-  const percent = calculateTopupCredit(100, { commissionType: 'percent', commissionValue: 15, gstRate: 0.08 });
-  const ratio = calculateTopupCredit(100, { commissionType: 'multiplier', commissionValue: 1.15, gstRate: 0.08 });
-  check('15 percent equals a 1.15 multiplier', percent.net === ratio.net && percent.commission === 15);
+  const share = calculateTopupCredit(1500, { commissionType: 'percent', commissionValue: 50, gstRate: 0.08 });
+  check(
+    '50 percent revenue share is the 108/58 ratio',
+    share.grossTotal === 2793.1 && share.commission === 1293.1 && share.net === 2793.1
+  );
+  const split = calculateTopupCredit(500, { commissionType: 'multiplier', commissionValue: 108 / 88, gstRate: 0.08 });
+  check('wallet is credited the GST-inclusive total', split.net === 613.64 && split.gstAmount === 45.45);
+  const bmlPlain = calculateTopupCredit(100, { gstRate: 0.08, paymentFeePercent: 3 });
+  check('3% BML fee on 100 credits 97', bmlPlain.paymentFee === 3 && bmlPlain.net === 97);
+  const bmlShare = calculateTopupCredit(500, { commissionType: 'percent', commissionValue: 20, gstRate: 0.08, paymentFeePercent: 3 });
+  check('BML fee is taken before the ratio', bmlShare.paymentFee === 15 && bmlShare.net === 595.23);
   check(
     'stored percent commission is honoured',
     formatOperatorCommission({ commissionType: 'percent', commissionValue: 12.5 }).commissionType === 'percent'

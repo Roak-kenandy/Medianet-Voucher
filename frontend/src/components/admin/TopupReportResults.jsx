@@ -11,6 +11,8 @@ const TOPUP_SUMMARY_KEYS = [
   'totalRecords',
   'uniqueOperators',
   'totalAmountPaid',
+  'totalPaymentFee',
+  'totalAfterGst',
   'totalGstAmount',
   'totalCommission',
   'totalCredited',
@@ -20,9 +22,11 @@ const SUMMARY_LABELS = {
   totalRecords: 'Transactions',
   uniqueOperators: 'Operators',
   totalAmountPaid: 'Total Paid',
+  totalPaymentFee: 'Total BML Fee',
+  totalAfterGst: 'Total ex GST',
   totalGstAmount: 'Total GST',
-  totalCommission: 'Total Commission',
-  totalCredited: 'Total Credited',
+  totalCommission: 'Total BP Commission',
+  totalCredited: 'Total Wallet Credit',
 };
 
 export default function TopupReportResults({
@@ -159,9 +163,11 @@ export default function TopupReportResults({
                       <th>Dealer/Operator</th>
                       <th>Commission ratio</th>
                       <th className="col-money">Original Amount</th>
-                      <th className="col-money">Total TopUp</th>
+                      <th className="col-money">BML Fee</th>
+                      <th className="col-money">Amount ex GST</th>
                       <th className="col-money">GST</th>
                       <th className="col-money">BP Commission</th>
+                      <th className="col-money">Total (Wallet credit)</th>
                       <th>User</th>
                       <th>Note</th>
                       {canVoid && <th></th>}
@@ -184,9 +190,11 @@ export default function TopupReportResults({
                         </td>
                         <td>{row.commissionRatio || '—'}</td>
                         <td className="col-money">{formatMoney(row.originalAmount, currencyCode)}</td>
-                        <td className="col-money col-highlight">{formatMoney(row.totalTopupAmount, currencyCode)}</td>
+                        <td className="col-money">{row.paymentFee ? formatMoney(row.paymentFee, currencyCode) : '—'}</td>
+                        <td className="col-money">{formatMoney(row.afterGst, currencyCode)}</td>
                         <td className="col-money">{formatMoney(row.gstAmount, currencyCode)}</td>
                         <td className="col-money">{row.commission ? formatMoney(row.commission, currencyCode) : '—'}</td>
+                        <td className="col-money col-highlight">{formatMoney(row.totalTopupAmount, currencyCode)}</td>
                         <td className="col-user">
                           <span className="cell-clip" title={row.processedBy || undefined}>{row.processedBy}</span>
                         </td>

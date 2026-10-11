@@ -95,7 +95,7 @@ export default function CrmSettingsPage() {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [general, setGeneral] = useState(null);
-  const [generalForm, setGeneralForm] = useState({ timeZone: '', gstRatePercent: '', tinNumber: '', currencyCode: 'MVR' });
+  const [generalForm, setGeneralForm] = useState({ timeZone: '', gstRatePercent: '', bmlFeePercent: '', tinNumber: '', currencyCode: 'MVR' });
   const [generalError, setGeneralError] = useState('');
   const [generalSaving, setGeneralSaving] = useState(false);
 
@@ -104,6 +104,7 @@ export default function CrmSettingsPage() {
     setGeneralForm({
       timeZone: data.timeZone,
       gstRatePercent: data.gstRatePercent,
+      bmlFeePercent: data.bmlFeePercent ?? 3,
       tinNumber: data.tinNumber || '',
       currencyCode: data.currencyCode,
     });
@@ -115,7 +116,13 @@ export default function CrmSettingsPage() {
     setGeneralError('');
     setGeneralSaving(true);
     try {
-      applyGeneral(await adminApi.updateAppSettings({ ...generalForm, gstRatePercent: Number(generalForm.gstRatePercent) }));
+      applyGeneral(
+        await adminApi.updateAppSettings({
+          ...generalForm,
+          gstRatePercent: Number(generalForm.gstRatePercent),
+          bmlFeePercent: Number(generalForm.bmlFeePercent),
+        })
+      );
       toast.success('Settings saved');
     } catch (err) {
       setGeneralError(errorText(err, 'Failed to save settings'));
@@ -280,6 +287,23 @@ export default function CrmSettingsPage() {
                   <p className="form-hint">
                     Taken out of wallet top-ups from now on. Top-ups already started or completed keep the
                     rate they were made with.
+                  </p>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">BML payment fee (%)</label>
+                  <input
+                    type="number"
+                    className="form-input"
+                    value={generalForm.bmlFeePercent}
+                    onChange={(e) => setGeneralForm({ ...generalForm, bmlFeePercent: e.target.value })}
+                    min={0}
+                    max={99.99}
+                    step="0.01"
+                    required
+                  />
+                  <p className="form-hint">
+                    Deducted from online (BML) wallet top-ups before the commission ratio is applied, e.g. 3% of
+                    100 MVR leaves 97. Staff top-ups are not affected.
                   </p>
                 </div>
                 <div className="form-group">

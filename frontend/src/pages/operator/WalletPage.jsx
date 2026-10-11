@@ -9,6 +9,7 @@ import WalletPaymentStatusCard from '../../components/operator/WalletPaymentStat
 import { operatorApi } from '../../api/client';
 import { useToast } from '../../context/ToastContext';
 import { formatMoney } from '../../utils/money';
+import { commissionRatio, formatRatio } from '../../utils/commission';
 import TrialBanner from '../../components/operator/TrialBanner';
 import { useAuth } from '../../context/AuthContext';
 import { openBmlPayment } from '../../utils/openPayment';
@@ -16,16 +17,10 @@ import '../admin/admin-shared.css';
 import './operator-workflow.css';
 
 function commissionHint(wallet) {
-  if (wallet?.walletCommissionType === 'percent') {
-    const percent = Number(wallet.walletCommissionValue) || 0;
-    if (percent <= 0) return null;
-    return `A ${percent}% bonus is added to the payment total before GST is calculated.`;
-  }
-  if (!wallet || wallet.walletCommissionType !== 'multiplier') return null;
-  const multiplier = Number(wallet.walletCommissionValue) || 1;
-  if (multiplier <= 1) return null;
-  const bonusPercent = Math.round((multiplier - 1) * 10000) / 100;
-  return `${bonusPercent}% commission is added to the payment before GST is calculated.`;
+  if (!wallet) return null;
+  const ratio = commissionRatio(wallet.walletCommissionType, wallet.walletCommissionValue, wallet.gstRate);
+  if (ratio <= 1) return null;
+  return `Your payment is multiplied by ${formatRatio(ratio)} and the full amount (GST included) is added to your wallet.`;
 }
 
 export default function WalletPage() {
