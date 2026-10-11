@@ -22,7 +22,7 @@ import {
   refundWalletDebit,
 } from './walletService.js';
 import { assertServiceTag, listServiceTypesPublic } from '../constants/serviceTags.js';
-import { getOperatorServiceTypeKeys } from './crmConfigService.js';
+import { getOperatorCrmPaymentTypeId, getOperatorServiceTypeKeys } from './crmConfigService.js';
 import { evaluatePackageOptions, resolvePurchase } from '../utils/packageEligibility.js';
 import {
   formatTrialForResponse,
@@ -1068,6 +1068,9 @@ async function crmTopupCustomerInner(operatorId, data, reqMeta) {
   const { phoneNumber } = binding;
   const fullName = String(data.fullName || binding.customer.name || 'Customer').trim();
 
+  // Looked up before any money moves, so a failed lookup cannot strand a wallet charge.
+  const paymentTypeId = await getOperatorCrmPaymentTypeId(operatorId);
+
   // Phase 1: take the money under the operator lock before anything is posted to CRM.
   let debit;
   const connection = await getConnection();
@@ -1106,6 +1109,7 @@ async function crmTopupCustomerInner(operatorId, data, reqMeta) {
   try {
     crmResult = await crmService.postCustomerPayment(data.crmContactId, amount, {
       paymentReference: debit.reference,
+      paymentTypeId,
     });
   } catch (err) {
     const outcome = classifyCrmFailure(err);
@@ -1309,6 +1313,8 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
     if (estimate.allowed) upgradeEstimate = estimate;
   }
 
+  // Looked up before any money moves, so a failed lookup cannot strand a wallet charge.
+  const paymentTypeId = await getOperatorCrmPaymentTypeId(operatorId);
   let reservation;
   let resolvedPackageIds;
   let pricing;
@@ -1389,7 +1395,7 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
         return crmService.renewServicesForContact(
           data.crmContactId,
           purchase.options.map((item) => ({ serviceId: item.serviceId, packageId: item.packageId })),
-          { paymentReference }
+          { paymentReference, paymentTypeId }
         );
       }
       if (upgradeMode === 'replace') {
@@ -1397,7 +1403,7 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
           data.crmContactId,
           { serviceId: option.serviceId, cancelServiceIds: option.cancels.map((item) => item.serviceId) },
           option.packageId,
-          { paymentReference, deviceId }
+          { paymentReference, paymentTypeId, deviceId }
         );
       }
       if (purchase.action === 'upgrade') {
@@ -1405,11 +1411,12 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
           data.crmContactId,
           { serviceId: option.serviceId, cancelServiceIds: option.cancels.map((item) => item.serviceId) },
           option.packageId,
-          { paymentReference, amount: upgradeEstimate.amount, deviceId }
+          { paymentReference, paymentTypeId, amount: upgradeEstimate.amount, deviceId }
         );
       }
       return crmService.activatePackagesForContact(data.crmContactId, resolvedPackageIds, {
         paymentReference,
+        paymentTypeId,
         deviceId,
       });
     },
@@ -1523,6 +1530,8 @@ function buildChargeDescription(activity, customerName, phoneNumber, packageName
 
 /** Reserve all accounts in one locked transaction, then provision each in CRM sequentially. */
 async function createAndProvisionAccounts(operatorId, accounts, packageIds, pricing, serviceTag, activity, reqMeta) {
+  // Looked up before any money moves, so a failed lookup cannot strand a wallet charge.
+  const paymentTypeId = await getOperatorCrmPaymentTypeId(operatorId);
   let reservations;
   const connection = await getConnection();
   try {
@@ -1554,6 +1563,7 @@ async function createAndProvisionAccounts(operatorId, accounts, packageIds, pric
       (paymentReference) =>
         crmService.provisionOttAccount(reservation.phoneNumber, reservation.fullName, packageIds, {
           paymentReference,
+          paymentTypeId,
         }),
       reqMeta,
       { activity }

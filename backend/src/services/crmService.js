@@ -646,10 +646,11 @@ class CRMService {
    * POST /payments exactly once per logical operation.
    * `paymentReference` must be unique per operation (the wallet reservation reference) and is
    * sent as `backoffice_code` so CRM staff can match every payment to one portal charge.
+   * `paymentTypeId` is the operator's CRM payment type; without one the .env default is used.
    * Only failures where the request provably never reached CRM are retried; anything else that
    * is not a clean success or a definite 4xx rejection is reported as `ambiguous`.
    */
-  async createPayment(contactId, accountId, amount, { paymentReference } = {}) {
+  async createPayment(contactId, accountId, amount, { paymentReference, paymentTypeId = null } = {}) {
     if (!paymentReference) {
       throw new AppError('CRM payment reference is required', 500, 'INTERNAL_ERROR');
     }
@@ -663,7 +664,7 @@ class CRMService {
       payment_method: { type: 'ELECTRONIC_TRANSFER' },
       state: 'POSTED',
       backoffice_code: paymentReference,
-      type_id: this.paymentTypeId,
+      type_id: paymentTypeId || this.paymentTypeId,
       external_payable: ['MTV & OTT Dealer Payment'],
     };
 
@@ -1093,7 +1094,7 @@ class CRMService {
     accountId,
     plans,
     preferredDeviceId = null,
-    { paymentReference, beforeActivation = null, targetDeviceId = null } = {}
+    { paymentReference, paymentTypeId = null, beforeActivation = null, targetDeviceId = null } = {}
   ) {
     const totalAmount = Math.round(
       plans.reduce((sum, plan) => sum + (Number(plan.priceAmount) || 0), 0) * 100
@@ -1101,7 +1102,10 @@ class CRMService {
 
     let paymentResult = { paymentId: null };
     if (totalAmount > 0) {
-      paymentResult = await this.createPayment(contactId, accountId, totalAmount, { paymentReference });
+      paymentResult = await this.createPayment(contactId, accountId, totalAmount, {
+        paymentReference,
+        paymentTypeId,
+      });
       // CRM rejects price_terms_id immediately after payment until the account balance settles.
       await delay(1500);
     }
@@ -1231,7 +1235,7 @@ class CRMService {
     };
   }
 
-  async registerNewUser(phoneNumber, fullName, packageIds, { paymentReference } = {}) {
+  async registerNewUser(phoneNumber, fullName, packageIds, { paymentReference, paymentTypeId = null } = {}) {
     const serviceTag = await this.resolveServiceTagFromPackageIds(packageIds);
     const plans = await this.resolvePlans(packageIds);
     const registration = await this.registerCustomer(phoneNumber, fullName, serviceTag, {
@@ -1242,7 +1246,7 @@ class CRMService {
       registration.accountId,
       plans,
       registration.deviceId,
-      { paymentReference }
+      { paymentReference, paymentTypeId }
     );
 
     return {
@@ -1260,11 +1264,12 @@ class CRMService {
     contactId,
     accountId,
     packageIds,
-    { paymentReference, beforeActivation = null, deviceId = null } = {}
+    { paymentReference, paymentTypeId = null, beforeActivation = null, deviceId = null } = {}
   ) {
     const plans = await this.resolvePlans(packageIds);
     const subscription = await this.setupSubscription(contactId, accountId, plans, null, {
       paymentReference,
+      paymentTypeId,
       beforeActivation,
       targetDeviceId: deviceId,
     });
@@ -1351,14 +1356,14 @@ class CRMService {
    * debit reference), then run the service action(s). Once the payment exists, any failure
    * is reported as "paid but not finished" so the charge is kept and reconciled by staff.
    */
-  async payThenUpdateService(contactId, chargeAmount, { paymentReference }, applyActions) {
+  async payThenUpdateService(contactId, chargeAmount, { paymentReference, paymentTypeId = null }, applyActions) {
     this.assertConfigured();
     const accountId = await this.ensureContactAccount(contactId);
     const amount = Math.round((Number(chargeAmount) || 0) * 100) / 100;
 
     let paymentId = null;
     if (amount > 0) {
-      const payment = await this.createPayment(contactId, accountId, amount, { paymentReference });
+      const payment = await this.createPayment(contactId, accountId, amount, { paymentReference, paymentTypeId });
       paymentId = payment.paymentId;
       // Same settle delay as new subscriptions: CRM needs the payment on the account first.
       await delay(1500);
@@ -1612,10 +1617,10 @@ class CRMService {
    * Continue existing packages: one payment for the total, then each of the customer's
    * current services is renewed for another period. `renewals` is [{ serviceId, packageId }].
    */
-  async renewServicesForContact(contactId, renewals, { paymentReference } = {}) {
+  async renewServicesForContact(contactId, renewals, { paymentReference, paymentTypeId = null } = {}) {
     const plans = await this.resolvePlans(renewals.map((item) => item.packageId));
     const total = plans.reduce((sum, plan) => sum + (Number(plan.priceAmount) || 0), 0);
-    return this.payThenUpdateService(contactId, total, { paymentReference }, async () => {
+    return this.payThenUpdateService(contactId, total, { paymentReference, paymentTypeId }, async () => {
       const renewed = [];
       for (const { serviceId } of renewals) {
         try {
@@ -1638,12 +1643,12 @@ class CRMService {
     contactId,
     { serviceId, cancelServiceIds = [] },
     packageId,
-    { paymentReference, amount, deviceId = null } = {}
+    { paymentReference, paymentTypeId = null, amount, deviceId = null } = {}
   ) {
     const plan = await this.resolvePlan(packageId);
     // `amount` is what CRM estimated for the change (new price less credit for unused days).
     const chargeAmount = amount ?? plan.priceAmount;
-    return this.payThenUpdateService(contactId, chargeAmount, { paymentReference }, async () => {
+    return this.payThenUpdateService(contactId, chargeAmount, { paymentReference, paymentTypeId }, async () => {
       for (const addonServiceId of cancelServiceIds) {
         await this.updateService(addonServiceId, { action: 'CANCEL' }, `Cancel add-on ${addonServiceId}`);
       }
@@ -1671,10 +1676,11 @@ class CRMService {
     contactId,
     { serviceId, cancelServiceIds = [] },
     packageId,
-    { paymentReference, deviceId = null } = {}
+    { paymentReference, paymentTypeId = null, deviceId = null } = {}
   ) {
     const result = await this.activatePackagesForContact(contactId, [packageId], {
       paymentReference,
+      paymentTypeId,
       deviceId,
       beforeActivation: async () => {
         for (const addonServiceId of cancelServiceIds) {
@@ -1820,7 +1826,7 @@ class CRMService {
     return { customers, paging: null, serviceTag: normalizedTag };
   }
 
-  async postCustomerPayment(contactId, amount, { paymentReference } = {}) {
+  async postCustomerPayment(contactId, amount, { paymentReference, paymentTypeId = null } = {}) {
     this.assertConfigured();
     const normalizedAmount = Number(amount);
     if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
@@ -1830,6 +1836,7 @@ class CRMService {
     const accountId = await this.ensureContactAccount(contactId);
     const paymentResult = await this.createPayment(contactId, accountId, normalizedAmount, {
       paymentReference,
+      paymentTypeId,
     });
 
     return {
@@ -1844,7 +1851,7 @@ class CRMService {
   async activatePackagesForContact(
     contactId,
     packageIds,
-    { paymentReference, beforeActivation = null, deviceId = null } = {}
+    { paymentReference, paymentTypeId = null, beforeActivation = null, deviceId = null } = {}
   ) {
     this.assertConfigured();
     const serviceTag = await this.resolveServiceTagFromPackageIds(packageIds);
@@ -1861,6 +1868,7 @@ class CRMService {
 
     return this.addSubscriptionForExisting(contactId, accountId, packageIds, {
       paymentReference,
+      paymentTypeId,
       beforeActivation,
       deviceId,
     });
@@ -1940,7 +1948,7 @@ class CRMService {
    * Main entry: provision OTT packages for a phone number.
    * Always creates a new CRM contact, account, device, and subscription(s).
    */
-  async provisionOttAccount(phoneNumber, fullName, packageIds, { paymentReference } = {}) {
+  async provisionOttAccount(phoneNumber, fullName, packageIds, { paymentReference, paymentTypeId = null } = {}) {
     this.assertConfigured();
     await this.resolvePlans(packageIds);
 
@@ -1949,7 +1957,7 @@ class CRMService {
       throw new AppError('Phone number is required', 400, 'VALIDATION_ERROR');
     }
 
-    return this.registerNewUser(normalizedPhone, fullName, packageIds, { paymentReference });
+    return this.registerNewUser(normalizedPhone, fullName, packageIds, { paymentReference, paymentTypeId });
   }
 }
 

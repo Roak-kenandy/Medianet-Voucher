@@ -37,6 +37,7 @@ const emptyForm = () => ({
   serviceTypeKeys: [],
   defaultServiceTypeKey: '',
   salesModelIds: [],
+  paymentTypeId: null,
   packageIds: [],
   packageGroupIds: [],
   email: '',
@@ -135,6 +136,7 @@ export default function OperatorsTab() {
   const [packages, setPackages] = useState([]);
   const [packageGroups, setPackageGroups] = useState([]);
   const [salesModels, setSalesModels] = useState([]);
+  const [paymentTypes, setPaymentTypes] = useState([]);
   const serviceTypeOptions = getServiceTypes({ activeOnly: true });
 
   /** Packages an operator with these customer types and sales models may be given. */
@@ -187,6 +189,10 @@ export default function OperatorsTab() {
       .getSalesModels()
       .then((models) => setSalesModels(models.filter((model) => model.isActive)))
       .catch(() => setSalesModels([]));
+    adminApi
+      .getPaymentTypes()
+      .then((data) => setPaymentTypes(data.paymentTypes.filter((paymentType) => paymentType.isActive)))
+      .catch(() => setPaymentTypes([]));
   }, [page, search]);
 
   const handleSearchChange = (value) => {
@@ -215,6 +221,7 @@ export default function OperatorsTab() {
       serviceTypeKeys: operator.service_type_keys || [],
       defaultServiceTypeKey: operator.default_service_type_key || operator.service_type_keys?.[0] || '',
       salesModelIds: operator.sales_model_ids || [],
+      paymentTypeId: operator.payment_type_id ?? null,
       packageIds,
       packageGroupIds: operator.package_group_ids || [],
       email: operator.email,
@@ -495,6 +502,25 @@ export default function OperatorsTab() {
         )}
         <p className="form-hint">
           The operator can only be given packages priced under the ticked sales models.
+        </p>
+      </div>
+      <div className="form-group">
+        <label className="form-label">Payment Type</label>
+        <select
+          className="form-input"
+          value={form.paymentTypeId ?? ''}
+          onChange={(e) =>
+            setForm({ ...form, paymentTypeId: e.target.value ? Number(e.target.value) : null })
+          }
+        >
+          <option value="">Default</option>
+          {paymentTypes.map((paymentType) => (
+            <option key={paymentType.id} value={paymentType.id}>{paymentType.name}</option>
+          ))}
+        </select>
+        <p className="form-hint">
+          The CRM payment type recorded on payments for this operator's sales. Payment types are
+          configured under CRM Settings.
         </p>
       </div>
       <div className="form-group form-group-full">

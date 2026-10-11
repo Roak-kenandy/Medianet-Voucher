@@ -18,6 +18,7 @@ import {
   getOperatorServiceTypeKeys,
   getSalesModelIdsByOperatorIds,
   getServiceTypeKeysByOperatorIds,
+  resolvePaymentTypeId,
   resolveSalesModelIds,
   resolveServiceTypeKeys,
   syncOperatorSalesModels,
@@ -408,9 +409,11 @@ export async function listOperators({ page = 1, limit = 20, search = '' } = {}) 
        (SELECT COUNT(*) FROM operator_users u WHERE u.operator_id = o.id AND u.is_active = 1) AS active_user_count,
        o.trial_account_limit, o.trial_accounts_used, o.accounts_created,
        o.is_active, o.created_at, o.updated_at,
+       o.payment_type_id, pt.name AS payment_type_name,
        a.name AS created_by_name
      FROM operators o
      JOIN admins a ON a.id = o.admin_id
+     LEFT JOIN payment_types pt ON pt.id = o.payment_type_id
      LEFT JOIN operator_packages op ON op.operator_id = o.id
      LEFT JOIN packages p ON p.id = op.package_id
      ${where}
@@ -480,6 +483,7 @@ export async function createOperator(adminId, data, reqMeta = {}) {
 
   const serviceTypes = await resolveServiceTypeKeys(data.serviceTypeKeys, data.defaultServiceTypeKey);
   const salesModelIds = await resolveSalesModelIds(data.salesModelIds);
+  const paymentTypeId = await resolvePaymentTypeId(data.paymentTypeId);
   const serviceScope = legacyServiceScope(serviceTypes.keys);
   const assignment = await resolvePackageAssignment(data.packageIds, data.packageGroupIds, {
     serviceTypeKeys: serviceTypes.keys,
@@ -497,8 +501,8 @@ export async function createOperator(adminId, data, reqMeta = {}) {
       `INSERT INTO operators
          (admin_id, client_name, package_type, service_scope, package_id, notes, email, password_hash,
           account_quota, wallet_balance, wallet_commission_type, wallet_commission_value,
-          wallet_self_topup_enabled, portal_role, portal_permissions)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?)`,
+          wallet_self_topup_enabled, portal_role, portal_permissions, payment_type_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?)`,
       [
         adminId,
         data.clientName.trim(),
@@ -513,6 +517,7 @@ export async function createOperator(adminId, data, reqMeta = {}) {
         data.canSelfTopup === false ? 0 : 1,
         normalizePortalRole(data.portalRole),
         serializePortalPermissions(data.portalRole, data.portalPermissions),
+        paymentTypeId,
       ]
     );
 
@@ -558,6 +563,7 @@ export async function createOperator(adminId, data, reqMeta = {}) {
         canSelfTopup: data.canSelfTopup !== false,
         serviceTypeKeys: serviceTypes.keys,
         salesModelIds,
+        paymentTypeId,
         firstUserId,
         apiKeyIssued: apiKey ? { apiKeyId: apiKey.id, keyPrefix: apiKey.keyPrefix } : null,
       },
@@ -568,6 +574,7 @@ export async function createOperator(adminId, data, reqMeta = {}) {
       clientName: data.clientName,
       serviceTypeKeys: serviceTypes.keys,
       salesModelIds,
+      paymentTypeId,
       packageIds: assignment.packageIds,
         packageGroupIds: assignment.groupIds,
       packageType: packageSummary,
@@ -716,7 +723,8 @@ export async function updateOperatorPackages(adminId, operatorId, { packageIds, 
  */
 export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
   const [operator] = await query(
-    `SELECT id, client_name, email, accounts_created, is_active FROM operators WHERE id = ? LIMIT 1`,
+    `SELECT id, client_name, email, accounts_created, is_active, payment_type_id
+     FROM operators WHERE id = ? LIMIT 1`,
     [operatorId]
   );
 
@@ -736,6 +744,11 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
     data.salesModelIds ??
       ((await getSalesModelIdsByOperatorIds([operatorId])).get(operatorId) || []).map((model) => model.id)
   );
+  // Omitting the payment type keeps the operator's current one.
+  const paymentTypeId =
+    data.paymentTypeId === undefined
+      ? operator.payment_type_id
+      : await resolvePaymentTypeId(data.paymentTypeId, operator.payment_type_id);
   const serviceScope = legacyServiceScope(serviceTypes.keys);
   const assignment = await resolvePackageAssignment(
     data.packageIds,
@@ -760,7 +773,7 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
       `UPDATE operators
        SET client_name = ?, package_type = ?, service_scope = ?, package_id = ?, notes = ?, email = ?,
            wallet_commission_type = ?, wallet_commission_value = ?, wallet_self_topup_enabled = ?,
-           is_active = ?
+           is_active = ?, payment_type_id = ?
        WHERE id = ?`,
       [
         data.clientName.trim(),
@@ -773,6 +786,7 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
         data.walletCommissionValue,
         data.canSelfTopup === false ? 0 : 1,
         data.isActive ? 1 : 0,
+        paymentTypeId,
         operatorId,
       ]
     );
@@ -806,6 +820,8 @@ export async function updateOperator(adminId, operatorId, data, reqMeta = {}) {
         canSelfTopup: data.canSelfTopup !== false,
         serviceTypeKeys: serviceTypes.keys,
         salesModelIds,
+        paymentTypeId,
+        previousPaymentTypeId: operator.payment_type_id,
         isActive: data.isActive,
         contactEmailChanged: normalizedEmail !== operator.email,
       },

@@ -56,6 +56,11 @@ const salesModelIdSchema = z.coerce.number().int().positive('Invalid sales model
 const salesModelIdsSchema = z.array(salesModelIdSchema).min(1, 'Select at least one sales model').max(30);
 
 const crmIdSchema = z.string().trim().uuid('Must be a CRM id (UUID)');
+/** An operator's payment type; null means the default CRM payment type from .env. */
+const operatorPaymentTypeIdSchema = z.union([
+  z.coerce.number().int().positive('Invalid payment type'),
+  z.null(),
+]);
 const serviceTypeFields = {
   label: z.string().trim().min(2, 'Label is required').max(120),
   shortLabel: z.string().trim().min(1, 'Short label is required').max(40),
@@ -98,6 +103,13 @@ export const appSettingsSchema = z.object({
     .optional()
     .default(''),
   currencyCode: z.string().trim().toUpperCase().length(3, 'Currency must be a 3-letter code'),
+});
+
+export const paymentTypeSchema = z.object({
+  name: z.string().trim().min(1, 'Payment type name is required').max(120),
+  crmTypeId: crmIdSchema,
+  description: z.string().trim().max(500).optional().default(''),
+  isActive: z.boolean().optional().default(true),
 });
 
 export const salesModelSchema = z.object({
@@ -249,6 +261,7 @@ export const createOperatorSchema = z
     serviceTypeKeys: serviceTypeKeysSchema,
     defaultServiceTypeKey: serviceTypeKeySchema.optional(),
     salesModelIds: salesModelIdsSchema,
+    paymentTypeId: operatorPaymentTypeIdSchema.optional().default(null),
     packageIds: operatorPackageIdsSchema,
     packageGroupIds: packageGroupIdsSchema.optional().default([]),
     // Login of the operator's first user; also stored as the operator's contact email.
@@ -273,6 +286,8 @@ export const updateOperatorSchema = z
     serviceTypeKeys: serviceTypeKeysSchema.optional(),
     defaultServiceTypeKey: serviceTypeKeySchema.optional(),
     salesModelIds: salesModelIdsSchema.optional(),
+    // Omit to keep the operator's current payment type; null switches back to the default.
+    paymentTypeId: operatorPaymentTypeIdSchema.optional(),
     packageIds: operatorPackageIdsSchema,
     // Omit to keep the operator's current package groups.
     packageGroupIds: packageGroupIdsSchema.optional(),

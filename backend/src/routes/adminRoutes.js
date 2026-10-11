@@ -17,6 +17,10 @@ import {
   getSalesModelOrThrow,
   createSalesModel,
   updateSalesModel,
+  listPaymentTypes,
+  getDefaultCrmPaymentTypeId,
+  createPaymentType,
+  updatePaymentType,
 } from '../services/crmConfigService.js';
 import {
   reportLimiter,
@@ -118,6 +122,7 @@ import {
   createServiceTypeSchema,
   updateServiceTypeSchema,
   salesModelSchema,
+  paymentTypeSchema,
   appSettingsSchema,
   createOperatorUserSchema,
   updateOperatorUserSchema,
@@ -291,6 +296,39 @@ router.patch(
     const data = salesModelSchema.parse(req.body);
     const salesModel = await updateSalesModel(req.user.id, salesModelId, data, getClientMeta(req));
     success(res, salesModel);
+  })
+);
+
+/**
+ * CRM payment types an operator can be given. The type decides how CRM classifies the payments
+ * posted for that operator's sales; operators without one use the default from .env.
+ */
+router.get(
+  '/payment-types',
+  asyncHandler(async (_req, res) => {
+    const paymentTypes = await listPaymentTypes();
+    success(res, { paymentTypes, defaultCrmTypeId: getDefaultCrmPaymentTypeId() });
+  })
+);
+
+router.post(
+  '/payment-types',
+  requirePermission('manageCrmSettings'),
+  asyncHandler(async (req, res) => {
+    const data = paymentTypeSchema.parse(req.body);
+    const paymentType = await createPaymentType(req.user.id, data, getClientMeta(req));
+    success(res, paymentType, 201);
+  })
+);
+
+router.patch(
+  '/payment-types/:id',
+  requirePermission('manageCrmSettings'),
+  asyncHandler(async (req, res) => {
+    const paymentTypeId = parseInt(req.params.id, 10);
+    const data = paymentTypeSchema.parse(req.body);
+    const paymentType = await updatePaymentType(req.user.id, paymentTypeId, data, getClientMeta(req));
+    success(res, paymentType);
   })
 );
 

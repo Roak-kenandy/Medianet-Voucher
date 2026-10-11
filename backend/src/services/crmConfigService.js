@@ -348,6 +348,141 @@ export function assertPackagesMatchSalesModels(plans = [], allowedSalesModelIds 
 }
 
 // ---------------------------------------------------------------------------
+// Payment types
+// ---------------------------------------------------------------------------
+
+function mapPaymentType(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    crmTypeId: row.crm_type_id,
+    description: row.description,
+    isActive: Boolean(row.is_active),
+    operatorCount: Number(row.operator_count) || 0,
+  };
+}
+
+const PAYMENT_TYPE_SELECT = `SELECT pt.id, pt.name, pt.crm_type_id, pt.description, pt.is_active,
+            (SELECT COUNT(*) FROM operators o WHERE o.payment_type_id = pt.id) AS operator_count
+     FROM payment_types pt`;
+
+export async function listPaymentTypes() {
+  const rows = await query(`${PAYMENT_TYPE_SELECT} ORDER BY pt.name ASC`);
+  return rows.map(mapPaymentType);
+}
+
+/** The CRM payment type used for operators that have none assigned (PAYMENT_TYPE_ID in .env). */
+export function getDefaultCrmPaymentTypeId() {
+  return config.crm.paymentTypeId || null;
+}
+
+async function getPaymentTypeOrThrow(paymentTypeId) {
+  const [row] = await query(`${PAYMENT_TYPE_SELECT} WHERE pt.id = ? LIMIT 1`, [paymentTypeId]);
+  if (!row) {
+    throw new AppError('Payment type not found', 404, 'NOT_FOUND');
+  }
+  return mapPaymentType(row);
+}
+
+export async function createPaymentType(adminId, data, reqMeta = {}) {
+  const name = data.name.trim();
+  const existing = await query('SELECT id FROM payment_types WHERE name = ? LIMIT 1', [name]);
+  if (existing.length) {
+    throw new AppError('A payment type with this name already exists', 409, 'PAYMENT_TYPE_EXISTS');
+  }
+  const result = await query('INSERT INTO payment_types (name, crm_type_id, description) VALUES (?, ?, ?)', [
+    name,
+    data.crmTypeId,
+    data.description?.trim() || null,
+  ]);
+
+  await logAudit({
+    actorType: 'admin',
+    actorId: adminId,
+    action: 'PAYMENT_TYPE_CREATED',
+    resourceType: 'payment_type',
+    resourceId: result.insertId,
+    ipAddress: reqMeta.ipAddress,
+    userAgent: reqMeta.userAgent,
+    metadata: { name, crmTypeId: data.crmTypeId },
+  });
+
+  return getPaymentTypeOrThrow(result.insertId);
+}
+
+/**
+ * Changing the CRM id changes the type on every payment posted from now on for the operators
+ * that have this payment type. A type in use cannot be made inactive: reassign its operators first.
+ */
+export async function updatePaymentType(adminId, paymentTypeId, data, reqMeta = {}) {
+  const current = await getPaymentTypeOrThrow(paymentTypeId);
+  const name = data.name.trim();
+  const clash = await query('SELECT id FROM payment_types WHERE name = ? AND id != ? LIMIT 1', [name, paymentTypeId]);
+  if (clash.length) {
+    throw new AppError('A payment type with this name already exists', 409, 'PAYMENT_TYPE_EXISTS');
+  }
+  if (!data.isActive && current.operatorCount > 0) {
+    throw new AppError(
+      `This payment type is assigned to ${current.operatorCount} operator(s). Give them another payment type first.`,
+      409,
+      'PAYMENT_TYPE_IN_USE'
+    );
+  }
+
+  await query('UPDATE payment_types SET name = ?, crm_type_id = ?, description = ?, is_active = ? WHERE id = ?', [
+    name,
+    data.crmTypeId,
+    data.description?.trim() || null,
+    data.isActive ? 1 : 0,
+    paymentTypeId,
+  ]);
+
+  await logAudit({
+    actorType: 'admin',
+    actorId: adminId,
+    action: 'PAYMENT_TYPE_UPDATED',
+    resourceType: 'payment_type',
+    resourceId: Number(paymentTypeId),
+    ipAddress: reqMeta.ipAddress,
+    userAgent: reqMeta.userAgent,
+    metadata: {
+      name,
+      crmTypeId: data.crmTypeId,
+      previousCrmTypeId: current.crmTypeId,
+      isActive: Boolean(data.isActive),
+    },
+  });
+
+  return getPaymentTypeOrThrow(paymentTypeId);
+}
+
+/**
+ * Validates an operator's payment type. Null means the default (.env) type. The operator's
+ * current type is always accepted so saving an unrelated change never fails.
+ */
+export async function resolvePaymentTypeId(paymentTypeId, currentPaymentTypeId = null) {
+  if (paymentTypeId == null) return null;
+  const id = Number(paymentTypeId);
+  const [row] = await query('SELECT id, is_active FROM payment_types WHERE id = ? LIMIT 1', [id]);
+  if (!row || (!row.is_active && id !== Number(currentPaymentTypeId))) {
+    throw new AppError('Payment type does not exist or is inactive', 400, 'PAYMENT_TYPE_NOT_FOUND');
+  }
+  return id;
+}
+
+/** CRM payment type id for the operator's payments, or null to use the default (.env) type. */
+export async function getOperatorCrmPaymentTypeId(operatorId) {
+  const [row] = await query(
+    `SELECT pt.crm_type_id
+     FROM operators o
+     INNER JOIN payment_types pt ON pt.id = o.payment_type_id
+     WHERE o.id = ? LIMIT 1`,
+    [operatorId]
+  );
+  return row?.crm_type_id || null;
+}
+
+// ---------------------------------------------------------------------------
 // One-time defaults from .env (safe to run on every start)
 // ---------------------------------------------------------------------------
 

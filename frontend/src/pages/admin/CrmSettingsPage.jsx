@@ -26,6 +26,8 @@ const emptyTypeForm = () => ({
 
 const emptyModelForm = () => ({ name: '', description: '', isActive: true });
 
+const emptyPaymentTypeForm = () => ({ name: '', crmTypeId: '', description: '', isActive: true });
+
 /** Every IANA time zone the browser knows, with a short fallback list for older browsers. */
 function listTimeZones(current) {
   let zones = [];
@@ -48,8 +50,8 @@ function errorText(err, fallback) {
 }
 
 /**
- * Customer types (CRM tag, device product, price segment) and CRM sales models. Operators are
- * then allowed specific types and sales models from the Operators page.
+ * Customer types (CRM tag, device product, price segment), CRM sales models and CRM payment
+ * types. Operators are then given specific ones from the Operators page.
  */
 export default function CrmSettingsPage() {
   const { user } = useAuth();
@@ -57,7 +59,10 @@ export default function CrmSettingsPage() {
   const [types, setTypes] = useState([]);
   const [models, setModels] = useState([]);
   const [loading, setLoading] = useState(true);
-  // { kind: 'type' | 'model', target: row | null }
+  const [paymentTypes, setPaymentTypes] = useState([]);
+  const [defaultCrmPaymentTypeId, setDefaultCrmPaymentTypeId] = useState('');
+  const [paymentTypeForm, setPaymentTypeForm] = useState(emptyPaymentTypeForm());
+  // { kind: 'type' | 'model' | 'paymentType', target: row | null }
   const [modal, setModal] = useState(null);
   const [typeForm, setTypeForm] = useState(emptyTypeForm());
   const [modelForm, setModelForm] = useState(emptyModelForm());
@@ -97,11 +102,18 @@ export default function CrmSettingsPage() {
 
   const load = () => {
     setLoading(true);
-    Promise.all([adminApi.getServiceTypes(), adminApi.getSalesModels(), adminApi.getAppSettings()])
-      .then(([typeList, modelList, generalSettings]) => {
+    Promise.all([
+      adminApi.getServiceTypes(),
+      adminApi.getSalesModels(),
+      adminApi.getAppSettings(),
+      adminApi.getPaymentTypes(),
+    ])
+      .then(([typeList, modelList, generalSettings, paymentTypeData]) => {
         applyGeneral(generalSettings);
         setTypes(typeList);
         setModels(modelList);
+        setPaymentTypes(paymentTypeData.paymentTypes);
+        setDefaultCrmPaymentTypeId(paymentTypeData.defaultCrmTypeId || '');
         setServiceTypes(typeList);
       })
       .catch((err) => toast.error(err.message || 'Failed to load CRM settings'))
@@ -145,12 +157,31 @@ export default function CrmSettingsPage() {
     setModal({ kind: 'model', target });
   };
 
+  const openPaymentType = (target = null) => {
+    setPaymentTypeForm(
+      target
+        ? {
+            name: target.name,
+            crmTypeId: target.crmTypeId,
+            description: target.description || '',
+            isActive: target.isActive,
+          }
+        : emptyPaymentTypeForm()
+    );
+    setError('');
+    setModal({ kind: 'paymentType', target });
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     setSubmitting(true);
     try {
-      if (modal.kind === 'type') {
+      if (modal.kind === 'paymentType') {
+        if (modal.target) await adminApi.updatePaymentType(modal.target.id, paymentTypeForm);
+        else await adminApi.createPaymentType(paymentTypeForm);
+        toast.success('Payment type saved');
+      } else if (modal.kind === 'type') {
         if (modal.target) {
           const { key: _key, ...payload } = typeForm;
           await adminApi.updateServiceType(modal.target.key, payload);
@@ -179,7 +210,8 @@ export default function CrmSettingsPage() {
       <div className="page-header">
         <h1 className="page-title">System Settings</h1>
         <p className="page-subtitle">
-          General settings, plus the customer types and sales models used for CRM lookups and package pricing
+          General settings, plus the customer types, sales models and payment types used for CRM lookups,
+          package pricing and payments
         </p>
       </div>
 
@@ -325,7 +357,7 @@ export default function CrmSettingsPage() {
         </div>
       </div>
 
-      <div className="card">
+      <div className="card" style={{ marginBottom: 24 }}>
         <div className="card-body">
           <div className="page-header-row">
             <div>
@@ -374,13 +406,78 @@ export default function CrmSettingsPage() {
         </div>
       </div>
 
+      <div className="card">
+        <div className="card-body">
+          <div className="page-header-row">
+            <div>
+              <h2 className="page-title" style={{ fontSize: 18 }}>Payment types</h2>
+              <p className="form-hint" style={{ marginTop: 4 }}>
+                The CRM payment type recorded on the payments posted for an operator's sales. Give an
+                operator one from the Operators page; operators without one use the default
+                {defaultCrmPaymentTypeId ? ` (${defaultCrmPaymentTypeId}, from .env)` : ' from .env'}.
+              </p>
+            </div>
+            <div className="page-header-actions">
+              <button type="button" className="btn btn-primary" onClick={() => openPaymentType()}>
+                <Plus size={18} /> Add Payment Type
+              </button>
+            </div>
+          </div>
+          {!loading && (
+            <div className="table-wrapper">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>CRM payment type id</th>
+                    <th>Description</th>
+                    <th>Used by</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paymentTypes.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="form-hint">
+                        No payment types yet. Every operator uses the default.
+                      </td>
+                    </tr>
+                  )}
+                  {paymentTypes.map((paymentType) => (
+                    <tr key={paymentType.id}>
+                      <td style={{ fontWeight: 500 }}>{paymentType.name}</td>
+                      <td style={{ fontSize: 12 }}>{paymentType.crmTypeId}</td>
+                      <td>{paymentType.description || '—'}</td>
+                      <td>{paymentType.operatorCount} operator(s)</td>
+                      <td><StatusBadge active={paymentType.isActive} /></td>
+                      <td>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => openPaymentType(paymentType)}
+                        >
+                          <Pencil size={14} /> Edit
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+
       <Modal
         open={!!modal}
         onClose={() => setModal(null)}
         title={
           modal?.kind === 'type'
             ? editingType ? `Edit Customer Type — ${editingType.label}` : 'Add Customer Type'
-            : modal?.target ? `Edit Sales Model — ${modal.target.name}` : 'Add Sales Model'
+            : modal?.kind === 'paymentType'
+              ? modal.target ? `Edit Payment Type — ${modal.target.name}` : 'Add Payment Type'
+              : modal?.target ? `Edit Sales Model — ${modal.target.name}` : 'Add Sales Model'
         }
         wide
         footer={(
@@ -538,6 +635,62 @@ export default function CrmSettingsPage() {
                   <p className="form-hint">
                     An inactive sales model cannot be chosen for new packages or operators. Operators that
                     already have it keep selling its packages.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+          {modal?.kind === 'paymentType' && (
+            <div className="form-grid">
+              <div className="form-group">
+                <label className="form-label">Name</label>
+                <input
+                  className="form-input"
+                  value={paymentTypeForm.name}
+                  onChange={(e) => setPaymentTypeForm({ ...paymentTypeForm, name: e.target.value })}
+                  placeholder="e.g. Dealer Payment"
+                  required
+                  maxLength={120}
+                />
+                <p className="form-hint">Shown when choosing an operator's payment type.</p>
+              </div>
+              <div className="form-group">
+                <label className="form-label">CRM payment type id</label>
+                <input
+                  className="form-input"
+                  value={paymentTypeForm.crmTypeId}
+                  onChange={(e) => setPaymentTypeForm({ ...paymentTypeForm, crmTypeId: e.target.value.trim() })}
+                  placeholder="CRM payment type UUID"
+                  required
+                />
+                <p className="form-hint">
+                  Sent as the payment type on every CRM payment for operators with this type. Changing it
+                  affects payments made from now on.
+                </p>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Description (optional)</label>
+                <input
+                  className="form-input"
+                  value={paymentTypeForm.description}
+                  onChange={(e) => setPaymentTypeForm({ ...paymentTypeForm, description: e.target.value })}
+                  maxLength={500}
+                />
+              </div>
+              {modal.target && (
+                <div className="form-group">
+                  <label className="form-label">Status</label>
+                  <select
+                    className="form-input"
+                    value={paymentTypeForm.isActive ? 'active' : 'inactive'}
+                    onChange={(e) => setPaymentTypeForm({ ...paymentTypeForm, isActive: e.target.value === 'active' })}
+                  >
+                    <option value="active">Active</option>
+                    <option value="inactive">Inactive</option>
+                  </select>
+                  <p className="form-hint">
+                    An inactive payment type cannot be given to operators. It cannot be made inactive
+                    while operators still have it.
                   </p>
                 </div>
               )}
