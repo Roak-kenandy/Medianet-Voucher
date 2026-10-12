@@ -14,7 +14,7 @@ const ROLES = [
   {
     value: 'finance',
     label: 'Finance',
-    description: 'View reports and operators. Cannot create packages.',
+    description: 'Add and edit operators, activate wallets, view reports. Cannot create packages.',
   },
 ];
 

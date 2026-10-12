@@ -32,7 +32,7 @@ export const ROLE_PERMISSIONS = {
     manageAdminStatus: false,
     createPackage: false,
     managePackageStatus: false,
-    manageOperators: false,
+    manageOperators: true,
     adjustWallet: true,
     completeTopup: true,
     viewReports: true,

@@ -37,7 +37,7 @@ export const ROLE_PERMISSIONS = {
     manageAdminStatus: true,
     createPackage: false,
     managePackageStatus: false,
-    manageOperators: false,
+    manageOperators: true,
     adjustWallet: true,
     manageMarketingAds: false,
     manageKnowledgeBase: false,
