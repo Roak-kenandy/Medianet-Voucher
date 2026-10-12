@@ -70,7 +70,7 @@ export default function OperatorTopupPage() {
   const [trialAccounts, setTrialAccounts] = useState('0');
   const [notes, setNotes] = useState('');
   const [topupType, setTopupType] = useState('bank_transfer');
-  const [receiptNo, setReceiptNo] = useState('');
+  const [lastReceiptNo, setLastReceiptNo] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const defaultReportRange = getDefaultReportDateRange();
@@ -199,19 +199,19 @@ export default function OperatorTopupPage() {
         trialAccounts: Number(trialAccounts) || 0,
         notes: trimmedNotes,
         topupType,
-        receiptNo: receiptNo.trim(),
       });
 
       const credited = formatMoney(result.netAmount ?? result.amount, result.currencyCode);
       const received = formatMoney(result.amountPaid ?? result.amount, result.currencyCode);
+      const receiptLabel = result.receiptNo ? ` — receipt no. ${result.receiptNo}` : '';
       toast.success(
         result.commissionAmount > 0
-          ? `${selectedOperator.client_name}: received ${received}, ${credited} added to the wallet`
-          : `Wallet activated for ${selectedOperator.client_name}: ${credited}`
+          ? `${selectedOperator.client_name}: received ${received}, ${credited} added to the wallet${receiptLabel}`
+          : `Wallet activated for ${selectedOperator.client_name}: ${credited}${receiptLabel}`
       );
+      setLastReceiptNo(result.receiptNo || '');
       setAmount('');
       setNotes('');
-      setReceiptNo('');
       setTrialAccounts('0');
       setWallet((prev) =>
         prev
@@ -364,12 +364,12 @@ export default function OperatorTopupPage() {
                 <input
                   id="receiptNo"
                   className="form-input"
-                  value={receiptNo}
-                  onChange={(e) => setReceiptNo(e.target.value)}
-                  placeholder="Bank or Quickpay receipt"
-                  maxLength={64}
-                  disabled={!canTopup}
+                  value={lastReceiptNo ? `Last issued: ${lastReceiptNo}` : ''}
+                  placeholder="Generated automatically (6 digits)"
+                  readOnly
+                  disabled
                 />
+                <p className="form-hint">A unique 6-digit receipt number is issued when the wallet is activated.</p>
               </div>
               <div className="form-group">
                 <label htmlFor="topupAmount" className="form-label">Amount received (MVR)</label>
@@ -520,6 +520,7 @@ export default function OperatorTopupPage() {
                       <th>Amount</th>
                       <th>Activated by</th>
                       <th>Notes</th>
+                      <th>Receipt no.</th>
                       <th>Reference</th>
                     </tr>
                   </thead>
@@ -541,6 +542,7 @@ export default function OperatorTopupPage() {
                         <td>
                           <span className="cell-clip" title={row.notes || undefined}>{row.notes || '—'}</span>
                         </td>
+                        <td style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{row.receiptNo || '—'}</td>
                         <td style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{row.reference}</td>
                       </tr>
                     ))}

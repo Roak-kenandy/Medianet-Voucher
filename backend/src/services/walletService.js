@@ -1262,10 +1262,26 @@ export async function adminAdjustTrialQuota(adminId, operatorId, { action, accou
   }
 }
 
+/** Random 6-digit receipt number not yet used by another staff top-up. */
+async function generateReceiptNo(connection) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const candidate = String(crypto.randomInt(100000, 1000000));
+    const [rows] = await connection.execute(
+      `SELECT 1 FROM wallet_transactions
+       WHERE created_by_type = 'admin'
+         AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.receiptNo')) = ?
+       LIMIT 1`,
+      [candidate]
+    );
+    if (!rows.length) return candidate;
+  }
+  throw new AppError('Could not allocate a receipt number. Please try again.', 503, 'RECEIPT_UNAVAILABLE');
+}
+
 export async function adminOperatorTopup(
   adminId,
   operatorId,
-  { amount, trialAccounts = 0, notes, topupType = 'bank_transfer', receiptNo = '' },
+  { amount, trialAccounts = 0, notes, topupType = 'bank_transfer' },
   reqMeta = {},
   staff = {}
 ) {
@@ -1274,6 +1290,7 @@ export async function adminOperatorTopup(
 
   try {
     await connection.beginTransaction();
+    const receiptNo = await generateReceiptNo(connection);
 
     const commissionSettings = await getOperatorCommissionSettings(operatorId, connection);
     const breakdown = calculateTopupCredit(creditAmount, {
@@ -1287,7 +1304,7 @@ export async function adminOperatorTopup(
       source: 'admin_activation',
       notes,
       topupType,
-      receiptNo: receiptNo || null,
+      receiptNo,
       staffId: adminId,
       staffName: staff.name || null,
       staffEmail: staff.email || null,
@@ -1355,6 +1372,7 @@ export async function adminOperatorTopup(
       userAgent: reqMeta.userAgent,
       metadata: {
         amount: creditAmount,
+        receiptNo,
         notes,
         trialAccounts,
         staffName: staff.name || null,
@@ -1362,6 +1380,7 @@ export async function adminOperatorTopup(
     });
 
     return {
+      receiptNo,
       amount: creditAmount,
       amountPaid: breakdown.amountPaid,
       grossTotal: breakdown.grossTotal,
@@ -1424,6 +1443,7 @@ function mapAdminOperatorActivationRow(row) {
     balanceAfter: roundMoney(row.balanceAfter),
     currencyCode: row.currencyCode || config.wallet.currencyCode,
     reference: row.reference,
+    receiptNo: metadata.receiptNo || null,
     notes: row.notes || metadata.notes || '',
     staffName: row.staffName || metadata.staffName || 'Staff',
     staffEmail: row.staffEmail || metadata.staffEmail || null,
@@ -1522,6 +1542,7 @@ export function operatorActivationsToCsv(report) {
       'Staff Email',
       'Free Accounts Granted',
       'Notes',
+      'Receipt No',
       'Reference',
     ].join(','),
   ];
@@ -1539,6 +1560,7 @@ export function operatorActivationsToCsv(report) {
         row.staffEmail || '',
         row.trialAccounts || 0,
         row.notes,
+        row.receiptNo || '',
         row.reference,
       ]
         .map(csvEscape)
