@@ -467,6 +467,10 @@ export const operatorApi = {
     if (!res.ok) throw new Error('Export failed');
     return res.text();
   },
+  resendLogin: (historyId) =>
+    apiRequest(`/operator/accounts/${encodeURIComponent(historyId)}/resend-login`, {
+      method: 'POST',
+    }),
   createAccount: (payload) =>
     apiRequest('/operator/accounts', {
       method: 'POST',

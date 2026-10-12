@@ -10,6 +10,7 @@ import {
   defaultOperatorPermissions,
 } from '../../constants/operatorPermissions';
 import { formatDateTime } from '../../constants/appSettings';
+import Select from '../ui/Select';
 
 const emptyUserForm = () => ({
   name: '',
@@ -351,14 +352,14 @@ export default function OperatorUsersModal({ operator, onClose, onChanged }) {
                 {view === 'edit' && (
                   <div className="form-group">
                     <label className="form-label">Status</label>
-                    <select
+                    <Select
                       className="form-input"
                       value={form.isActive ? 'active' : 'inactive'}
                       onChange={(e) => setForm({ ...form, isActive: e.target.value === 'active' })}
                     >
                       <option value="active">Active</option>
                       <option value="inactive">Inactive</option>
-                    </select>
+                    </Select>
                     <p className="form-hint">
                       Deactivating signs this user out. Activating also clears a login lock.
                     </p>

@@ -332,7 +332,7 @@ export default function BulkUploadPage() {
               </table>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 20 }}>
+            <div className="form-actions-split">
               <button
                 type="button"
                 className="btn btn-secondary"

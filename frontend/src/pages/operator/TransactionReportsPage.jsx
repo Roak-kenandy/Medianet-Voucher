@@ -12,6 +12,8 @@ import { downloadCsv } from '../../utils/reports';
 import TablePagination from '../../components/TablePagination';
 import '../admin/admin-shared.css';
 import { formatDateTime } from '../../constants/appSettings';
+import Select from '../../components/ui/Select';
+import DateRangePicker from '../../components/ui/DateRangePicker';
 
 const REPORT_PAGE_SIZE = 50;
 
@@ -77,28 +79,18 @@ export default function TransactionReportsPage() {
 
       <div className="card reports-panel" style={{ marginBottom: 24 }}>
         <div className="card-body">
-          <div className="reports-filters" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
+          <div className="reports-filters reports-filters-2">
             <div className="form-group">
-              <label className="form-label">Start Date</label>
-              <input
-                type="date"
-                className="form-input"
-                value={filters.startDate}
-                onChange={(e) => setFilters({ ...filters, startDate: e.target.value })}
-              />
-            </div>
-            <div className="form-group">
-              <label className="form-label">End Date</label>
-              <input
-                type="date"
-                className="form-input"
-                value={filters.endDate}
-                onChange={(e) => setFilters({ ...filters, endDate: e.target.value })}
+              <label className="form-label">Date range</label>
+              <DateRangePicker
+                startDate={filters.startDate}
+                endDate={filters.endDate}
+                onChange={(range) => setFilters({ ...filters, ...range })}
               />
             </div>
             <div className="form-group">
               <label className="form-label">Type</label>
-              <select
+              <Select
                 className="form-input"
                 value={filters.type}
                 onChange={(e) => setFilters({ ...filters, type: e.target.value })}
@@ -108,7 +100,7 @@ export default function TransactionReportsPage() {
                 <option value="debit">Customer charge</option>
                 <option value="adjustment">Adjustment</option>
                 <option value="refund">Refund</option>
-              </select>
+              </Select>
             </div>
           </div>
 

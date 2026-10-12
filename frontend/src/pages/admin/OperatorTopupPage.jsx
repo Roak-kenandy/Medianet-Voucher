@@ -14,6 +14,8 @@ import { downloadCsv } from '../../utils/reports';
 import { commissionRatio, formatRatio } from '../../utils/commission';
 import { getDefaultReportDateRange } from '../../utils/dates';
 import './admin-shared.css';
+import Select from '../../components/ui/Select';
+import DateRangePicker from '../../components/ui/DateRangePicker';
 
 function formatTrialLabel(operator, wallet) {
   const limit = Number(wallet?.trialAccountLimit ?? operator?.trial_account_limit) || 0;
@@ -344,7 +346,7 @@ export default function OperatorTopupPage() {
             <div className="form-grid">
               <div className="form-group">
                 <label htmlFor="topupType" className="form-label">Type</label>
-                <select
+                <Select
                   id="topupType"
                   className="form-input"
                   value={topupType}
@@ -355,7 +357,7 @@ export default function OperatorTopupPage() {
                   <option value="quickpay">Quickpay</option>
                   <option value="cash">Cash</option>
                   <option value="other">Other</option>
-                </select>
+                </Select>
               </div>
               <div className="form-group">
                 <label htmlFor="receiptNo" className="form-label">Receipt no.</label>
@@ -459,27 +461,14 @@ export default function OperatorTopupPage() {
         </div>
         <div className="activation-report-filters">
           <div className="form-group">
-            <label htmlFor="activationStartDate" className="form-label">Start date</label>
-            <input
-              id="activationStartDate"
-              type="date"
-              className="form-input"
-              value={reportStartDate}
-              onChange={(e) => {
-                setReportStartDate(e.target.value);
-                setReportPage(1);
-              }}
-            />
-          </div>
-          <div className="form-group">
-            <label htmlFor="activationEndDate" className="form-label">End date</label>
-            <input
-              id="activationEndDate"
-              type="date"
-              className="form-input"
-              value={reportEndDate}
-              onChange={(e) => {
-                setReportEndDate(e.target.value);
+            <label htmlFor="activationDateRange" className="form-label">Date range</label>
+            <DateRangePicker
+              id="activationDateRange"
+              startDate={reportStartDate}
+              endDate={reportEndDate}
+              onChange={({ startDate, endDate }) => {
+                setReportStartDate(startDate);
+                setReportEndDate(endDate);
                 setReportPage(1);
               }}
             />

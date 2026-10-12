@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { UserPlus, Download } from 'lucide-react';
+import { UserPlus, Download, Receipt, MessageSquare } from 'lucide-react';
 import Layout from '../../components/Layout';
 import Sidebar from '../../components/Sidebar';
 import Header from '../../components/Header';
@@ -16,8 +16,11 @@ import {
 } from '../../constants/customerHistory';
 import { formatMoney } from '../../utils/money';
 import { downloadCsv } from '../../utils/reports';
+import { getDefaultReportDateRange } from '../../utils/dates';
 import '../admin/admin-shared.css';
 import { formatDateTime } from '../../constants/appSettings';
+import Select from '../../components/ui/Select';
+import DateRangePicker from '../../components/ui/DateRangePicker';
 
 function StatusBadge({ status }) {
   const map = {
@@ -49,7 +52,24 @@ function ActivityBadge({ activity }) {
   return <span className={`badge ${map[activity] || 'badge-neutral'}`}>{label}</span>;
 }
 
-function AccountCard({ acc, packageLabel }) {
+function ResendLoginButton({ acc, sending, onResend }) {
+  if (!acc.phone_number) return <span style={{ color: 'var(--color-text-muted)' }}>—</span>;
+  return (
+    <button
+      type="button"
+      className="btn btn-secondary btn-sm"
+      onClick={() => onResend(acc)}
+      disabled={sending}
+      title={`Send login details by SMS to ${acc.phone_number}`}
+      style={{ whiteSpace: 'nowrap' }}
+    >
+      <MessageSquare size={14} />
+      {sending ? 'Sending…' : 'Resend Login'}
+    </button>
+  );
+}
+
+function AccountCard({ acc, packageLabel, sending, onResend }) {
   return (
     <div className="data-card">
       <div className="data-card-title">{acc.full_name}</div>
@@ -101,60 +121,124 @@ function AccountCard({ acc, packageLabel }) {
         <span className="data-card-label">Date</span>
         <span className="data-card-value">{formatDateTime(acc.created_at)}</span>
       </div>
+      {acc.phone_number && (
+        <div className="data-card-row">
+          <span className="data-card-label">Login</span>
+          <span className="data-card-value">
+            <ResendLoginButton acc={acc} sending={sending} onResend={onResend} />
+          </span>
+        </div>
+      )}
     </div>
   );
 }
 
+const REPORT_PAGE_SIZE = 20;
+
+function toApiParams({ startDate, endDate, activity }) {
+  return {
+    ...(startDate ? { startDate } : {}),
+    ...(endDate ? { endDate } : {}),
+    activity: activity || 'all',
+  };
+}
+
 export default function AccountsPage() {
   const toast = useToast();
-  const [data, setData] = useState({ accounts: [], pagination: {} });
-  const [loading, setLoading] = useState(true);
+  const defaultRange = getDefaultReportDateRange();
+  const [filters, setFilters] = useState({
+    startDate: defaultRange.startDate,
+    endDate: defaultRange.endDate,
+    activity: 'all',
+  });
+  const [applied, setApplied] = useState(null);
+  const [data, setData] = useState(null);
+  const [generatedAt, setGeneratedAt] = useState(null);
+  const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
-  const [activity, setActivity] = useState('all');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+  const [resendingId, setResendingId] = useState(null);
 
-  useEffect(() => {
-    setLoading(true);
-    operatorApi
-      .getAccounts({
-        page,
-        limit: 20,
-        search,
-        ...(startDate ? { startDate } : {}),
-        ...(endDate ? { endDate } : {}),
-        activity,
-      })
-      .then((accountsData) => setData(accountsData))
-      .finally(() => setLoading(false));
-  }, [page, search, startDate, endDate, activity]);
-
-  const handleSearchChange = (value) => {
-    setSearch(value);
-    setPage(1);
-  };
-
-  const handleExport = async () => {
-    setExporting(true);
+  const handleResendLogin = async (acc) => {
+    if (resendingId) return;
+    const who = acc.full_name ? `${acc.full_name} (${acc.phone_number})` : acc.phone_number;
+    if (!window.confirm(`Send login details by SMS to ${who}?`)) return;
+    setResendingId(acc.id);
     try {
-      const csv = await operatorApi.exportAccounts({
-        search,
-        ...(startDate ? { startDate } : {}),
-        ...(endDate ? { endDate } : {}),
-        activity,
-      });
-      downloadCsv(csv, 'customer-history.csv');
-      toast.success('Customer history downloaded');
+      const result = await operatorApi.resendLogin(acc.id);
+      toast.success(result?.message || `Login details sent to ${acc.phone_number}`);
     } catch (err) {
-      toast.error(err.message || 'Export failed');
+      toast.error(err.message || 'Failed to send login SMS');
     } finally {
-      setExportting(false);
+      setResendingId(null);
     }
   };
 
-  const { accounts, pagination } = data;
+  const loadReport = useCallback(
+    async (params, { pageNum = 1, searchTerm = '', announce = false } = {}) => {
+      setLoading(true);
+      try {
+        const result = await operatorApi.getAccounts({
+          ...toApiParams(params),
+          page: pageNum,
+          limit: REPORT_PAGE_SIZE,
+          search: searchTerm,
+        });
+        setData(result);
+        setApplied(params);
+        setGeneratedAt(new Date().toISOString());
+        if (announce) {
+          toast.success(`Report generated — ${result.pagination?.total ?? 0} record(s)`);
+        }
+      } catch (err) {
+        toast.error(err.message || 'Failed to generate report');
+      } finally {
+        setLoading(false);
+      }
+    },
+    [toast]
+  );
+
+  useEffect(() => {
+    loadReport(filters);
+    // Initial load only: later filter changes apply when Generate Report is clicked.
+  }, []);
+
+  const generate = () => {
+    if (filters.startDate && filters.endDate && filters.startDate > filters.endDate) {
+      toast.error('Start date must be on or before the end date');
+      return;
+    }
+    setSearch('');
+    loadReport(filters, { announce: true });
+  };
+
+  const handleSearchChange = (value) => {
+    setSearch(value);
+    if (applied) loadReport(applied, { searchTerm: value });
+  };
+
+  const handlePageChange = (nextPage) => {
+    if (applied) loadReport(applied, { pageNum: nextPage, searchTerm: search });
+  };
+
+  const handleExport = async () => {
+    if (!applied) return;
+    setExporting(true);
+    try {
+      const csv = await operatorApi.exportAccounts({ ...toApiParams(applied), search });
+      downloadCsv(csv, 'customer-history.csv');
+      toast.success('Report downloaded — open in Excel');
+    } catch (err) {
+      toast.error(err.message || 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const accounts = data?.accounts || [];
+  const pagination = data?.pagination || {};
+  const hasFilters = Boolean(search) || (applied && applied.activity !== 'all');
 
   const accountPackageLabel = (acc) =>
     acc.package_names || acc.package_name || formatPackageLabel('');
@@ -168,93 +252,92 @@ export default function AccountsPage() {
         </p>
       </div>
 
-      <div className="card">
-        <div className="card-header activation-report-header">
-          <div>
-            <h3 className="card-title">History</h3>
-            <p className="card-subtitle">Filter by activity and date, then download the full report as CSV</p>
+      <div className="card reports-panel" style={{ marginBottom: 24 }}>
+        <div className="card-body">
+          <div className="reports-filters reports-filters-2">
+            <div className="form-group">
+              <label htmlFor="accountsDateRange" className="form-label">Date range</label>
+              <DateRangePicker
+                id="accountsDateRange"
+                startDate={filters.startDate}
+                endDate={filters.endDate}
+                onChange={(range) => setFilters({ ...filters, ...range })}
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="historyActivity" className="form-label">Activity</label>
+              <Select
+                id="historyActivity"
+                className="form-input"
+                value={filters.activity}
+                onChange={(e) => setFilters({ ...filters, activity: e.target.value })}
+              >
+                {CUSTOMER_HISTORY_ACTIVITY_FILTERS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </Select>
+            </div>
           </div>
-          {pagination.total > 0 && (
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={handleExport}
-              disabled={exporting || loading}
-            >
-              <Download size={16} />
-              {exporting ? 'Exporting…' : 'Download CSV'}
+
+          <div className="reports-actions">
+            <button type="button" className="btn btn-primary" onClick={generate} disabled={loading}>
+              <Receipt size={18} />
+              {loading ? 'Generating...' : 'Generate Report'}
             </button>
-          )}
-        </div>
-
-        <div className="activation-report-filters">
-          <div className="form-group">
-            <label htmlFor="historyActivity" className="form-label">Activity</label>
-            <select
-              id="historyActivity"
-              className="form-input"
-              value={activity}
-              onChange={(e) => {
-                setActivity(e.target.value);
-                setPage(1);
-              }}
-            >
-              {CUSTOMER_HISTORY_ACTIVITY_FILTERS.map((opt) => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
-          </div>
-          <div className="form-group">
-            <label htmlFor="accountsStartDate" className="form-label">Start date</label>
-            <input
-              id="accountsStartDate"
-              type="date"
-              className="form-input"
-              value={startDate}
-              onChange={(e) => {
-                setStartDate(e.target.value);
-                setPage(1);
-              }}
-            />
-          </div>
-          <div className="form-group">
-            <label htmlFor="accountsEndDate" className="form-label">End date</label>
-            <input
-              id="accountsEndDate"
-              type="date"
-              className="form-input"
-              value={endDate}
-              onChange={(e) => {
-                setEndDate(e.target.value);
-                setPage(1);
-              }}
-            />
+            {pagination.total > 0 && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={handleExport}
+                disabled={exporting || loading}
+              >
+                <Download size={18} />
+                {exporting ? 'Exporting…' : 'Download Excel (CSV)'}
+              </button>
+            )}
           </div>
         </div>
+      </div>
 
-        <TableToolbar
-          value={search}
-          onChange={handleSearchChange}
-          placeholder="Search by name, phone, activity, or reference..."
-        />
+      <div className="card">
+        <div className="card-header">
+          <h3 className="card-title">Report Results</h3>
+          <p className="card-subtitle">
+            {generatedAt ? `Generated ${formatDateTime(generatedAt)}` : 'Choose a date range and click Generate Report'}
+            {applied && (
+              <>
+                {' · '}
+                {applied.startDate || 'All'} to {applied.endDate || 'All'}
+                {applied.activity !== 'all' && ` · ${customerHistoryActivityLabel(applied.activity)}`}
+              </>
+            )}
+            {pagination.total != null && ` · ${Number(pagination.total).toLocaleString()} record(s)`}
+          </p>
+        </div>
+
+        {data && (
+          <TableToolbar
+            value={search}
+            onChange={handleSearchChange}
+            placeholder="Search by name, phone, activity, or reference..."
+          />
+        )}
         <div className="card-body" style={{ padding: 0 }}>
-          {loading ? (
+          {loading && !data ? (
             <div className="loading-screen" style={{ height: 200 }}>
               <div className="spinner spinner-lg" />
             </div>
           ) : accounts.length === 0 ? (
             <div className="empty-state">
               <p className="empty-state-title">
-                {search || startDate || endDate || activity !== 'all'
-                  ? 'No customers match your filters'
-                  : 'No customer history yet'}
+                {hasFilters ? 'No customers match your filters' : 'No customer history for the selected period'}
               </p>
               <p>
-                {search || startDate || endDate || activity !== 'all'
+                {hasFilters
                   ? 'Try a different filter or search term'
                   : 'Actions from Create Account, Topup & Subscribe, and bulk upload appear here'}
               </p>
-              {!search && !startDate && !endDate && activity === 'all' && (
+              {!hasFilters && (
                 <div className="empty-state-action">
                   <Link to="/operator/create" className="btn btn-primary">
                     <UserPlus size={18} />
@@ -278,6 +361,7 @@ export default function AccountsPage() {
                       <th>Status</th>
                       <th>Charged</th>
                       <th>Details</th>
+                      <th>Login</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -316,6 +400,13 @@ export default function AccountsPage() {
                               <span style={{ color: 'var(--color-text-muted)' }}>—</span>
                             )}
                           </td>
+                          <td>
+                            <ResendLoginButton
+                              acc={acc}
+                              sending={resendingId === acc.id}
+                              onResend={handleResendLogin}
+                            />
+                          </td>
                         </tr>
                       );
                     })}
@@ -329,6 +420,8 @@ export default function AccountsPage() {
                     key={acc.id}
                     acc={acc}
                     packageLabel={accountPackageLabel(acc)}
+                    sending={resendingId === acc.id}
+                    onResend={handleResendLogin}
                   />
                 ))}
               </div>
@@ -338,7 +431,7 @@ export default function AccountsPage() {
                 totalPages={pagination.totalPages}
                 total={pagination.total}
                 limit={pagination.limit}
-                onPageChange={setPage}
+                onPageChange={handlePageChange}
                 itemLabel="records"
               />
             </>

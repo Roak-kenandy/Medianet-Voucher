@@ -1,0 +1,642 @@
+/* ---------- Select (react-select, unstyled + themed) ---------- */
+.ui-select {
+  width: 100%;
+  font-size: 14px;
+}
+
+.ui-select__control {
+  min-height: 42px;
+  padding: 0 6px 0 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.ui-select__control:hover {
+  border-color: var(--color-border-strong);
+}
+
+.ui-select__control--is-focused {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-focus-ring);
+}
+
+.ui-select__control--is-disabled {
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+.ui-select__value-container {
+  gap: 4px;
+}
+
+.ui-select__placeholder {
+  color: var(--color-text-muted);
+}
+
+.ui-select__single-value {
+  color: var(--color-text);
+}
+
+.ui-select__input-container {
+  color: var(--color-text);
+}
+
+.ui-select__indicator-separator {
+  display: none;
+}
+
+.ui-select__dropdown-indicator {
+  padding: 6px;
+  color: var(--color-text-secondary);
+  transition: transform 0.15s;
+}
+
+.ui-select__control--menu-is-open .ui-select__dropdown-indicator {
+  transform: rotate(180deg);
+  color: var(--color-accent);
+}
+
+.ui-select__menu {
+  margin-top: 6px;
+  padding: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-elevated);
+  box-shadow: var(--shadow-lg);
+  font-size: 14px;
+}
+
+.ui-select__menu-list {
+  max-height: 280px;
+}
+
+.ui-select__option {
+  padding: 9px 12px;
+  border-radius: 6px;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.ui-select__option--is-focused {
+  background: var(--color-hover-subtle);
+}
+
+.ui-select__option--is-selected {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+.ui-select__option--is-disabled {
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+.ui-select__menu-notice {
+  padding: 10px 12px;
+  color: var(--color-text-muted);
+}
+
+/* ---------- Date trigger (single date and range) ---------- */
+.ui-date-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+}
+
+.ui-date-trigger:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+}
+
+.ui-date-trigger.is-open {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-focus-ring);
+}
+
+.ui-date-trigger:disabled {
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+.ui-date-trigger-icon {
+  flex-shrink: 0;
+  color: var(--color-accent);
+}
+
+.ui-date-trigger-value {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--color-text);
+}
+
+.ui-date-trigger-placeholder {
+  flex: 1;
+  color: var(--color-text-muted);
+}
+
+.ui-date-trigger-clear {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 50%;
+  color: var(--color-text-secondary);
+}
+
+.ui-date-trigger-clear:hover {
+  background: var(--color-hover-subtle);
+  color: var(--color-text);
+}
+
+.ui-hidden-required {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ---------- Popover ---------- */
+.ui-popover {
+  position: fixed;
+  z-index: 3000;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-elevated);
+  box-shadow: 0 20px 24px -4px rgba(16, 24, 40, 0.08), 0 8px 8px -4px rgba(16, 24, 40, 0.03);
+  color: var(--color-text);
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.ui-popover-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2999;
+  background: var(--color-overlay);
+  animation: fadeIn 0.15s ease;
+}
+
+.ui-sheet-handle {
+  display: none;
+}
+
+.ui-popover.is-sheet {
+  top: auto;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  max-width: none;
+  max-height: 90dvh;
+  border-bottom: 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  animation: slideUp 0.2s ease;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ui-popover.is-sheet > .ui-sheet-handle {
+  display: block;
+  width: 40px;
+  height: 4px;
+  margin: 10px auto 2px;
+  border-radius: 999px;
+  background: var(--color-border-strong);
+}
+
+.ui-popover > .ui-cal {
+  padding: 20px 24px 12px;
+}
+
+.ui-popover > .ui-range-footer {
+  padding: 14px 24px 16px;
+}
+
+/* ---------- Range picker layout ---------- */
+.ui-range-popover {
+  display: flex;
+}
+
+.ui-range-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 168px;
+  padding: 12px 12px;
+  border-right: 1px solid var(--color-border);
+}
+
+.ui-range-preset {
+  padding: 9px 14px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.ui-range-preset:hover {
+  background: var(--color-hover-subtle);
+}
+
+.ui-range-preset.is-active {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+.ui-range-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ui-range-main > .ui-cal {
+  padding: 20px 24px 12px;
+}
+
+.ui-range-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 24px 16px;
+  border-top: 1px solid var(--color-border);
+}
+
+.ui-range-inputs {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ui-range-dash {
+  color: var(--color-text-muted);
+}
+
+.ui-range-actions {
+  display: flex;
+  gap: 10px;
+}
+
+/* Typed date fields in the footer (React Aria DateField). */
+.ui-date-field-input {
+  display: inline-flex;
+  align-items: center;
+  width: 128px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-date-field-input[data-focus-within] {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-focus-ring);
+}
+
+.ui-date-segment {
+  padding: 0 1px;
+  border-radius: 3px;
+  color: var(--color-text);
+  outline: none;
+}
+
+.ui-date-segment[data-type='literal'] {
+  color: var(--color-text-muted);
+}
+
+.ui-date-segment[data-placeholder] {
+  color: var(--color-text-muted);
+}
+
+.ui-date-segment[data-focused] {
+  background: var(--color-accent);
+  color: #ffffff;
+}
+
+/* ---------- Calendar (React Aria) ---------- */
+.ui-cal-months {
+  display: flex;
+  gap: 32px;
+}
+
+.ui-cal-month {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ui-cal-month-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 36px;
+}
+
+.ui-cal-month-title {
+  flex: 1;
+  text-align: center;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.ui-cal-nav,
+.ui-cal-nav-spacer {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+}
+
+.ui-cal-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  outline: none;
+}
+
+.ui-cal-nav[data-hovered] {
+  background: var(--color-hover-subtle);
+  color: var(--color-text);
+}
+
+.ui-cal-nav[data-focus-visible] {
+  box-shadow: 0 0 0 3px var(--color-focus-ring);
+}
+
+.ui-cal-nav[data-disabled] {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.ui-cal-grid {
+  border-collapse: separate;
+  border-spacing: 0 4px;
+}
+
+.ui-cal-weekday {
+  width: 40px;
+  height: 36px;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+.ui-cal-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  font-size: 14px;
+  color: var(--color-text);
+  cursor: pointer;
+  outline: none;
+}
+
+.ui-cal-cell-inner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  transition: background 0.1s;
+}
+
+.ui-cal-cell.is-hovered:not(.is-selected):not(.is-disabled) .ui-cal-cell-inner {
+  background: var(--color-hover-subtle);
+}
+
+/* Continuous band behind a selected range (range picker only). */
+.ui-cal-cell.is-selected::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--color-accent-soft);
+}
+
+.ui-cal-cell.is-range-start::before {
+  left: 50%;
+}
+
+.ui-cal-cell.is-range-end::before {
+  right: 50%;
+}
+
+.ui-cal-cell.is-range-start.is-range-end::before {
+  display: none;
+}
+
+.ui-cal-cell.is-range-start .ui-cal-cell-inner,
+.ui-cal-cell.is-range-end .ui-cal-cell-inner {
+  background: var(--color-accent);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+/* Single-date calendar: the selected day is a filled circle with no band. */
+.ui-cal:not(.ui-cal-range) .ui-cal-cell.is-selected::before {
+  display: none;
+}
+
+.ui-cal:not(.ui-cal-range) .ui-cal-cell.is-selected .ui-cal-cell-inner {
+  background: var(--color-accent);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.ui-cal-cell.is-today .ui-cal-cell-inner::after {
+  content: '';
+  position: absolute;
+  bottom: 5px;
+  left: 50%;
+  width: 5px;
+  height: 5px;
+  margin-left: -2.5px;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+
+.ui-cal-cell.is-today.is-range-start .ui-cal-cell-inner::after,
+.ui-cal-cell.is-today.is-range-end .ui-cal-cell-inner::after,
+.ui-cal:not(.ui-cal-range) .ui-cal-cell.is-today.is-selected .ui-cal-cell-inner::after {
+  background: #ffffff;
+}
+
+.ui-cal-cell.is-focus-visible .ui-cal-cell-inner {
+  box-shadow: 0 0 0 2px var(--color-accent);
+}
+
+.ui-cal-cell.is-disabled {
+  color: var(--color-text-muted);
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ui-cal-cell.is-outside {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+@media (max-width: 760px) {
+  .ui-range-popover {
+    flex-direction: column;
+  }
+
+  /* Presets become one swipeable row of chips. */
+  .ui-range-presets {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 6px;
+    width: auto;
+    padding: 12px;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border);
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .ui-range-presets::-webkit-scrollbar {
+    display: none;
+  }
+
+  .ui-range-preset {
+    flex-shrink: 0;
+    padding: 7px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  .ui-range-preset.is-active {
+    border-color: var(--color-accent);
+  }
+
+  .ui-range-main > .ui-cal,
+  .ui-popover > .ui-cal {
+    padding: 14px 12px 6px;
+  }
+
+  .ui-range-footer,
+  .ui-popover > .ui-range-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 12px;
+  }
+
+  .ui-range-inputs {
+    width: 100%;
+  }
+
+  .ui-date-field {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .ui-date-field-input {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .ui-range-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .ui-range-actions .btn,
+  .ui-popover > .ui-range-footer .btn {
+    justify-content: center;
+    min-height: 40px;
+  }
+
+  .ui-cal-weekday,
+  .ui-cal-cell,
+  .ui-cal-cell-inner {
+    width: 36px;
+    height: 36px;
+  }
+}
+
+/* Phone bottom sheet: the calendar fills the width with large tap targets. */
+@media (max-width: 640px) {
+  .ui-popover.is-sheet .ui-cal-months,
+  .ui-popover.is-sheet .ui-cal-month {
+    width: 100%;
+  }
+
+  .ui-popover.is-sheet .ui-cal-grid {
+    width: 100%;
+    table-layout: fixed;
+  }
+
+  .ui-popover.is-sheet .ui-cal-weekday {
+    width: auto;
+  }
+
+  .ui-popover.is-sheet .ui-cal-cell {
+    width: auto;
+    height: 42px;
+  }
+
+  .ui-popover.is-sheet .ui-cal-cell-inner {
+    width: 40px;
+    height: 40px;
+  }
+
+  .ui-popover.is-sheet > .ui-range-footer:not(:has(.ui-range-inputs)) {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Larger tap targets for the dropdown on touch screens. */
+@media (pointer: coarse) {
+  .ui-select__option {
+    padding: 12px 14px;
+  }
+
+  .ui-select__control {
+    min-height: 44px;
+  }
+
+  .ui-date-trigger {
+    min-height: 44px;
+  }
+}
+

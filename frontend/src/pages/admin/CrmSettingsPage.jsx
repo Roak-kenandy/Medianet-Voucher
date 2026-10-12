@@ -12,6 +12,7 @@ import { hasPermission } from '../../constants/permissions';
 import { setServiceTypes } from '../../constants/serviceTags';
 import { setAppSettings } from '../../constants/appSettings';
 import './admin-shared.css';
+import Select from '../../components/ui/Select';
 
 const emptyTypeForm = () => ({
   key: '',
@@ -40,10 +41,10 @@ function EnvironmentField({ value, onChange, locked }) {
   return (
     <div className="form-group">
       <label className="form-label">Environment</label>
-      <select className="form-input" value={value} onChange={(e) => onChange(e.target.value)} disabled={locked}>
+      <Select className="form-input" value={value} onChange={(e) => onChange(e.target.value)} disabled={locked}>
         <option value="live">Live</option>
         <option value="sandbox">Sandbox (testing)</option>
-      </select>
+      </Select>
       <p className="form-hint">
         {locked
           ? 'Set when this was created and cannot be changed.'
@@ -260,7 +261,7 @@ export default function CrmSettingsPage() {
               <div className="form-grid">
                 <div className="form-group">
                   <label className="form-label">Time zone</label>
-                  <select
+                  <Select
                     className="form-input"
                     value={generalForm.timeZone}
                     onChange={(e) => setGeneralForm({ ...generalForm, timeZone: e.target.value })}
@@ -269,7 +270,7 @@ export default function CrmSettingsPage() {
                     {listTimeZones(generalForm.timeZone).map((zone) => (
                       <option key={zone} value={zone}>{zone}</option>
                     ))}
-                  </select>
+                  </Select>
                   <p className="form-hint">Dates and times across the portal and on bills are shown in this zone.</p>
                 </div>
                 <div className="form-group">
@@ -319,7 +320,7 @@ export default function CrmSettingsPage() {
                 </div>
                 <div className="form-group">
                   <label className="form-label">Currency</label>
-                  <select
+                  <Select
                     className="form-input"
                     value={generalForm.currencyCode}
                     onChange={(e) => setGeneralForm({ ...generalForm, currencyCode: e.target.value })}
@@ -327,7 +328,7 @@ export default function CrmSettingsPage() {
                     {(general.supportedCurrencies || ['MVR']).map((code) => (
                       <option key={code} value={code}>{code}</option>
                     ))}
-                  </select>
+                  </Select>
                   <p className="form-hint">Wallets, bank payments and CRM amounts all use this currency.</p>
                 </div>
               </div>
@@ -646,14 +647,14 @@ export default function CrmSettingsPage() {
               {editingType && (
                 <div className="form-group">
                   <label className="form-label">Status</label>
-                  <select
+                  <Select
                     className="form-input"
                     value={typeForm.isActive ? 'active' : 'inactive'}
                     onChange={(e) => setTypeForm({ ...typeForm, isActive: e.target.value === 'active' })}
                   >
                     <option value="active">Active</option>
                     <option value="inactive">Inactive</option>
-                  </select>
+                  </Select>
                   <p className="form-hint">
                     An inactive type cannot be used for lookups, new accounts or new packages. Existing
                     records keep their type.
@@ -690,14 +691,14 @@ export default function CrmSettingsPage() {
               {modal.target && (
                 <div className="form-group">
                   <label className="form-label">Status</label>
-                  <select
+                  <Select
                     className="form-input"
                     value={modelForm.isActive ? 'active' : 'inactive'}
                     onChange={(e) => setModelForm({ ...modelForm, isActive: e.target.value === 'active' })}
                   >
                     <option value="active">Active</option>
                     <option value="inactive">Inactive</option>
-                  </select>
+                  </Select>
                   <p className="form-hint">
                     An inactive sales model cannot be chosen for new packages or operators. Operators that
                     already have it keep selling its packages.
@@ -751,14 +752,14 @@ export default function CrmSettingsPage() {
               {modal.target && (
                 <div className="form-group">
                   <label className="form-label">Status</label>
-                  <select
+                  <Select
                     className="form-input"
                     value={paymentTypeForm.isActive ? 'active' : 'inactive'}
                     onChange={(e) => setPaymentTypeForm({ ...paymentTypeForm, isActive: e.target.value === 'active' })}
                   >
                     <option value="active">Active</option>
                     <option value="inactive">Inactive</option>
-                  </select>
+                  </Select>
                   <p className="form-hint">
                     An inactive payment type cannot be given to operators. It cannot be made inactive
                     while operators still have it.

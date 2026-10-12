@@ -32,6 +32,7 @@ import {
 } from '../../constants/operatorPermissions';
 import './admin-shared.css';
 import { formatDateTime, formatDate } from '../../constants/appSettings';
+import Select from '../../components/ui/Select';
 
 const emptyForm = () => ({
   clientName: '',
@@ -462,7 +463,7 @@ export default function OperatorsTab() {
       </div>
       <div className="form-group">
         <label className="form-label">Environment</label>
-        <select
+        <Select
           className="form-input"
           value={form.environment}
           onChange={(e) => handleEnvironmentChange(form, setForm, e.target.value)}
@@ -472,7 +473,7 @@ export default function OperatorsTab() {
           <option value="sandbox" disabled={!isEdit && !sandboxConfigured}>
             Sandbox (testing){!isEdit && !sandboxConfigured ? ' — not configured' : ''}
           </option>
-        </select>
+        </Select>
         <p className="form-hint">
           {isEdit
             ? 'Set when the operator was created and cannot be changed.'
@@ -551,7 +552,7 @@ export default function OperatorsTab() {
       </div>
       <div className="form-group">
         <label className="form-label">Payment Type</label>
-        <select
+        <Select
           className="form-input"
           value={form.paymentTypeId ?? ''}
           onChange={(e) =>
@@ -564,7 +565,7 @@ export default function OperatorsTab() {
             .map((paymentType) => (
             <option key={paymentType.id} value={paymentType.id}>{paymentType.name}</option>
           ))}
-        </select>
+        </Select>
         <p className="form-hint">
           The CRM payment type recorded on payments for this operator's sales. Payment types are
           configured under CRM Settings.
@@ -902,14 +903,14 @@ export default function OperatorsTab() {
       {isEdit && (
         <div className="form-group">
           <label className="form-label">Status</label>
-          <select
+          <Select
             className="form-input"
             value={form.isActive ? 'active' : 'inactive'}
             onChange={(e) => setForm({ ...form, isActive: e.target.value === 'active' })}
           >
             <option value="active">Active</option>
             <option value="inactive">Inactive</option>
-          </select>
+          </Select>
         </div>
       )}
       <div className="form-group form-group-full">

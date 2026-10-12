@@ -35,6 +35,7 @@ import {
   countPaidAccountCreations,
 } from '../utils/trial.js';
 import { csvEscape, csvRow } from '../utils/csv.js';
+import { sendSms, toLocalMobile } from './smsService.js';
 
 /**
  * Where a sale came from. Portal requests carry nothing; partner API requests carry the key
@@ -579,6 +580,117 @@ export async function listAccounts(
   };
 }
 
+
+function buildLoginSms({ customerName, username, password }) {
+  return [
+    `Hi ${customerName || 'Customer'},`,
+    '',
+    'Thank you for choosing Medianet as your entertainment partner. Please find your login details below:',
+    '',
+    `Username:${username}`,
+    `Password:${password}`,
+    '',
+    'We hope you enjoy your Medianet experience.',
+    '',
+    `Download MTV App: ${config.sms.appDownloadUrl}`,
+  ].join('\n');
+}
+
+/** One Customer History row of this operator, by its list id ("va-12" or "wt-34"). */
+async function loadCustomerHistoryEntry(operatorId, historyId) {
+  const match = /^(va|wt)-(\d+)$/.exec(String(historyId || ''));
+  if (!match) {
+    throw new AppError('Invalid history entry', 400, 'VALIDATION_ERROR');
+  }
+  const [, kind, rawId] = match;
+  const id = Number(rawId);
+
+  if (kind === 'va') {
+    const [row] = await query(
+      `SELECT full_name, phone_number, service_tag, external_ref
+       FROM voucher_accounts WHERE id = ? AND operator_id = ? LIMIT 1`,
+      [id, operatorId]
+    );
+    if (!row) throw new AppError('Customer history entry not found', 404, 'NOT_FOUND');
+    return {
+      customerName: row.full_name,
+      phoneNumber: row.phone_number,
+      serviceTag: row.service_tag || 'OTT',
+      crmContactId: null,
+      externalRef: row.external_ref || null,
+    };
+  }
+
+  const [row] = await query(
+    `SELECT metadata FROM wallet_transactions WHERE id = ? AND operator_id = ? LIMIT 1`,
+    [id, operatorId]
+  );
+  if (!row) throw new AppError('Customer history entry not found', 404, 'NOT_FOUND');
+  let metadata = {};
+  try {
+    metadata = typeof row.metadata === 'object' && row.metadata ? row.metadata : JSON.parse(row.metadata || '{}');
+  } catch {
+    metadata = {};
+  }
+  return {
+    customerName: metadata.customerName || null,
+    phoneNumber: metadata.phoneNumber || null,
+    serviceTag: metadata.serviceTag || 'OTT',
+    crmContactId: metadata.crmContactId || null,
+    externalRef: null,
+  };
+}
+
+/**
+ * Sends the customer their app login by SMS: username is the `code` custom field on their CRM
+ * device, password is their mobile number.
+ */
+export async function resendCustomerLogin(operatorId, historyId, reqMeta = {}) {
+  const entry = await loadCustomerHistoryEntry(operatorId, historyId);
+  if (!entry.phoneNumber) {
+    throw new AppError('This entry has no customer phone number', 400, 'INVALID_PHONE');
+  }
+  const phone = toLocalMobile(entry.phoneNumber);
+
+  const { username, customerName } = await withOperatorCrmReadSlot(operatorId, async () => {
+    if (entry.crmContactId) {
+      const code = await crmService.fetchDeviceCodeForContact(entry.crmContactId);
+      if (code) return { username: code, customerName: entry.customerName };
+    }
+    const lookup = await crmService.searchCustomersByPhone(phone, entry.serviceTag);
+    const candidates = (lookup.customers || []).filter((customer) => customer.deviceCode);
+    const preferred =
+      candidates.find((customer) => String(customer.id) === String(entry.crmContactId || entry.externalRef)) ||
+      candidates[0];
+    const crmName = preferred?.name && preferred.name !== 'Unknown' ? preferred.name : null;
+    return {
+      username: preferred?.deviceCode || null,
+      customerName: entry.customerName || crmName,
+    };
+  });
+
+  if (!username) {
+    throw new AppError(
+      'No login code was found on this customer\'s device in CRM',
+      404,
+      'LOGIN_CODE_NOT_FOUND'
+    );
+  }
+
+  await sendSms(phone, buildLoginSms({ customerName, username, password: phone }));
+
+  await logAudit({
+    actorType: 'operator',
+    actorId: operatorId,
+    action: 'CUSTOMER_LOGIN_SMS_SENT',
+    resourceType: 'customer_history',
+    ipAddress: reqMeta.ipAddress,
+    userAgent: reqMeta.userAgent,
+    metadata: { historyId, phone, serviceTag: entry.serviceTag },
+  });
+
+  return { phone, customerName };
+}
 
 export async function exportAccountsCsv(
   operatorId,

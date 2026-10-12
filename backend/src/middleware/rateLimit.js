@@ -195,6 +195,19 @@ export const customerSearchLimiter = rateLimit({
   },
 });
 
+/** Each SMS costs money and reaches a real phone, so resends are tightly capped. */
+export const smsResendLimiter = rateLimit({
+  ...rateLimitDefaults,
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  keyGenerator: portalRateLimitKey,
+  message: {
+    success: false,
+    code: 'RATE_LIMIT',
+    message: 'Too many login SMS requests. Please try again later.',
+  },
+});
+
 /** Operator dashboard / history reads: plain list queries, but they share the DB pool. */
 export const operatorReadLimiter = rateLimit({
   ...rateLimitDefaults,

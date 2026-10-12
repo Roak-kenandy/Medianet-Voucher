@@ -113,6 +113,15 @@ export const config = {
     allowManualTopupComplete:
       !isProduction && process.env.ALLOW_MANUAL_TOPUP_COMPLETE === 'true',
   },
+  sms: {
+    // Ooredoo Maldives bulk SMS gateway.
+    apiUrl: process.env.SMS_API_URL || 'https://o-papi1-lb01.ooredoo.mv/bulk_sms/v2',
+    username: process.env.SMS_USERNAME || '',
+    accessKey: process.env.SMS_ACCESS_KEY || '',
+    authBearer: process.env.SMS_AUTH_BEARER || '',
+    appDownloadUrl: process.env.SMS_APP_DOWNLOAD_URL || 'https://cuda.medianet.mv',
+    requestTimeoutMs: boundedInt(process.env.SMS_REQUEST_TIMEOUT_MS, 15000, 1000, 60000),
+  },
   bml: {
     enabled: process.env.BML_ENABLED === 'true',
     apiBaseUrl:

@@ -257,6 +257,50 @@
   }
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Secondary action on the left, primary on the right; stacked on phones. */
+.form-actions-split {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+@media (max-width: 480px) {
+  .form-actions-split {
+    flex-direction: column-reverse;
+  }
+
+  .form-actions-split .btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+/* iOS Safari zooms the page when a focused field's text is under 16px. */
+@media (max-width: 768px) and (pointer: coarse) {
+  input:not([type='checkbox']):not([type='radio']),
+  textarea,
+  select,
+  .form-input,
+  .ui-select__input-container,
+  .ui-select__input {
+    font-size: 16px !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .empty-state-action .btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
 /* Small phones */
 @media (max-width: 480px) {
   .page-title {
@@ -274,7 +318,20 @@
   }
 
   .topup-report-summary {
-    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .topup-report-summary-card {
+    padding: 12px 14px;
+  }
+
+  .topup-report-summary-label {
+    font-size: 10px;
+  }
+
+  .topup-report-summary-value {
+    font-size: 16px;
+    overflow-wrap: anywhere;
   }
 
   .wallet-topup-total-value {

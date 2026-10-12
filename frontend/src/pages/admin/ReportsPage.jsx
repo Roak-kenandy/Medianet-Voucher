@@ -24,6 +24,8 @@ import { useAuth } from '../../context/AuthContext';
 import { hasPermission } from '../../constants/permissions';
 import './admin-shared.css';
 import { formatDateTime } from '../../constants/appSettings';
+import Select from '../../components/ui/Select';
+import DateRangePicker from '../../components/ui/DateRangePicker';
 
 const REPORT_PAGE_SIZE = 50;
 
@@ -199,7 +201,7 @@ export default function ReportsPage() {
           <div className="reports-filters">
             <div className="form-group">
               <label className="form-label">Report Type</label>
-              <select
+              <Select
                 className="form-input"
                 value={filters.reportType}
                 onChange={(e) => {
@@ -210,13 +212,13 @@ export default function ReportsPage() {
                 {REPORT_TYPES.map((r) => (
                   <option key={r.value} value={r.value}>{r.label}</option>
                 ))}
-              </select>
+              </Select>
             </div>
 
             {showOperatorFilter && (
               <div className="form-group">
                 <label className="form-label">Operator</label>
-                <select
+                <Select
                   className="form-input"
                   value={filters.operatorId}
                   onChange={(e) => setFilters({ ...filters, operatorId: e.target.value })}
@@ -225,14 +227,14 @@ export default function ReportsPage() {
                   {operators.map((o) => (
                     <option key={o.id} value={o.id}>{o.client_name}</option>
                   ))}
-                </select>
+                </Select>
               </div>
             )}
 
             {showPackageFilter && (
               <div className="form-group">
                 <label className="form-label">Package</label>
-                <select
+                <Select
                   className="form-input"
                   value={filters.packageType}
                   onChange={(e) => setFilters({ ...filters, packageType: e.target.value })}
@@ -241,27 +243,16 @@ export default function ReportsPage() {
                   {packages.map((p) => (
                     <option key={p.id} value={p.label || p.name}>{p.label || p.name}</option>
                   ))}
-                </select>
+                </Select>
               </div>
             )}
 
             <div className="form-group">
-              <label className="form-label">Start Date</label>
-              <input
-                type="date"
-                className="form-input"
-                value={filters.startDate}
-                onChange={(e) => setFilters({ ...filters, startDate: e.target.value })}
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">End Date</label>
-              <input
-                type="date"
-                className="form-input"
-                value={filters.endDate}
-                onChange={(e) => setFilters({ ...filters, endDate: e.target.value })}
+              <label className="form-label">Date range</label>
+              <DateRangePicker
+                startDate={filters.startDate}
+                endDate={filters.endDate}
+                onChange={(range) => setFilters({ ...filters, ...range })}
               />
             </div>
           </div>

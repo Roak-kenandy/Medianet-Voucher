@@ -12,6 +12,7 @@ import {
   customerSearchLimiter,
   reportLimiter,
   operatorReadLimiter,
+  smsResendLimiter,
   limitConcurrentPerUser,
 } from '../middleware/rateLimit.js';
 import { asyncHandler, success } from '../utils/errors.js';
@@ -23,6 +24,7 @@ import {
   getOperatorStats,
   listAccounts,
   exportAccountsCsv,
+  resendCustomerLogin,
   createSingleAccount,
   createBulkAccounts,
   searchCustomers,
@@ -308,6 +310,16 @@ router.post(
     const account = createAccountSchema.parse(req.body);
     const result = await createSingleAccount(req.user.id, account, getClientMeta(req));
     success(res, result, 201);
+  })
+);
+
+router.post(
+  '/accounts/:historyId/resend-login',
+  requireOperatorPermission('accounts'),
+  smsResendLimiter,
+  asyncHandler(async (req, res) => {
+    const result = await resendCustomerLogin(req.user.id, req.params.historyId, getClientMeta(req));
+    success(res, { ...result, message: `Login details sent to ${result.phone}` });
   })
 );
 

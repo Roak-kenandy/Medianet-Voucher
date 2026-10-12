@@ -10,6 +10,7 @@ import { useAuth } from '../../context/AuthContext';
 import { hasPermission } from '../../constants/permissions';
 import { getServiceTypes, getServiceTagLabel } from '../../constants/serviceTags';
 import './admin-shared.css';
+import Select from '../../components/ui/Select';
 
 function StatusBadge({ active }) {
   return (
@@ -95,7 +96,7 @@ function EligibilityFields({ form, onChange, basePackages, families, packageId }
     <>
       <div className="form-group form-group-full">
         <label className="form-label">Package Role</label>
-        <select
+        <Select
           className="form-input"
           value={form.packageRole}
           onChange={(e) => set({ packageRole: e.target.value })}
@@ -103,7 +104,7 @@ function EligibilityFields({ form, onChange, basePackages, families, packageId }
           <option value="standalone">Standalone — can always be sold</option>
           <option value="base">Base — a main plan customers can upgrade from</option>
           <option value="addon">Add-on — only with certain base packages</option>
-        </select>
+        </Select>
       </div>
       {form.packageRole === 'base' && (
         <>
@@ -491,15 +492,15 @@ export default function PackagesTab() {
             </div>
             <div className="form-group">
               <label className="form-label">Environment</label>
-              <select className="form-input" value={editEnvironment} disabled>
+              <Select className="form-input" value={editEnvironment} disabled>
                 <option value="live">Live</option>
                 <option value="sandbox">Sandbox (testing)</option>
-              </select>
+              </Select>
               <p className="form-hint">Chosen when the package was created. It cannot be changed.</p>
             </div>
             <div className="form-group">
               <label className="form-label">Customer Type</label>
-              <select
+              <Select
                 className="form-input"
                 value={editForm.serviceTag}
                 onChange={(e) => setEditForm({ ...editForm, serviceTag: e.target.value })}
@@ -512,11 +513,11 @@ export default function PackagesTab() {
                 {typesInEnvironment(editEnvironment).map((type) => (
                   <option key={type.key} value={type.key}>{type.label}</option>
                 ))}
-              </select>
+              </Select>
             </div>
             <div className="form-group">
               <label className="form-label">Sales Model</label>
-              <select
+              <Select
                 className="form-input"
                 value={editForm.salesModelId}
                 onChange={(e) => setEditForm({ ...editForm, salesModelId: e.target.value })}
@@ -530,7 +531,7 @@ export default function PackagesTab() {
                 {salesModels.map((model) => (
                   <option key={model.id} value={model.id}>{model.name}</option>
                 ))}
-              </select>
+              </Select>
             </div>
             <div className="form-group">
               <label className="form-label">SKU (optional)</label>
@@ -729,7 +730,7 @@ export default function PackagesTab() {
         <div style={{ marginBottom: 20 }}>
           <div className="form-group">
               <label className="form-label">Environment</label>
-              <select
+              <Select
                 className="form-input"
                 value={catalogEnvironment}
                 onChange={(e) =>
@@ -738,7 +739,7 @@ export default function PackagesTab() {
               >
                 <option value="live">Live</option>
                 <option value="sandbox" disabled={!hasSandboxTypes}>Sandbox (testing)</option>
-              </select>
+              </Select>
               <p className="form-hint">
                 {catalogEnvironment === 'sandbox'
                   ? 'The catalog is loaded from the sandbox CRM. Only sandbox operators can sell this package.'
@@ -749,7 +750,7 @@ export default function PackagesTab() {
             </div>
           <div className="form-group">
             <label className="form-label">Package Tag</label>
-            <select
+            <Select
               className="form-input"
               value={catalogServiceTag}
               onChange={(e) => selectCatalogServiceTag(e.target.value)}
@@ -757,11 +758,11 @@ export default function PackagesTab() {
               {typesInEnvironment(catalogEnvironment).map((tag) => (
                 <option key={tag.key} value={tag.key}>{tag.label}</option>
               ))}
-            </select>
+            </Select>
           </div>
           <div className="form-group">
             <label className="form-label">Sales Model</label>
-            <select
+            <Select
               className="form-input"
               value={catalogSalesModelId}
               onChange={(e) => {
@@ -774,7 +775,7 @@ export default function PackagesTab() {
               {salesModels.map((model) => (
                 <option key={model.id} value={model.id}>{model.name}</option>
               ))}
-            </select>
+            </Select>
           </div>
           <button
             type="button"
@@ -796,7 +797,7 @@ export default function PackagesTab() {
           <div className="form-grid">
             <div className="form-group form-group-full">
               <label className="form-label">Service</label>
-              <select
+              <Select
                 className="form-input"
                 value={form.productId}
                 onChange={(e) => handleServiceChange(e.target.value)}
@@ -811,12 +812,12 @@ export default function PackagesTab() {
                     {item.name} {item.sku ? `(${item.sku})` : ''}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
 
             <div className="form-group">
               <label className="form-label">Price Tier</label>
-              <select
+              <Select
                 className="form-input"
                 value={form.priceTermId}
                 onChange={(e) => handlePriceChange(e.target.value)}
@@ -833,7 +834,7 @@ export default function PackagesTab() {
                     {price.isDefault ? ' (default)' : ''}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
 
             <div className="form-group">

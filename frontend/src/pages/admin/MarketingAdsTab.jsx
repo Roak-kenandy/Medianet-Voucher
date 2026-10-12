@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Plus, Pencil, Trash2, ImageIcon } from 'lucide-react';
 import Modal from '../../components/Modal';
+import DateInput from '../../components/ui/DateInput';
 import { adminApi } from '../../api/client';
 import { useToast } from '../../context/ToastContext';
 import './admin-shared.css';
@@ -277,20 +278,19 @@ export default function MarketingAdsTab() {
           </div>
           <div className="form-group">
             <label className="form-label">Display from</label>
-            <input
-              type="date"
-              className="form-input"
+            <DateInput
               value={form.displayStart}
+              max={form.displayEnd || undefined}
               onChange={(e) => setForm({ ...form, displayStart: e.target.value })}
               required
             />
           </div>
           <div className="form-group">
             <label className="form-label">Display until (optional)</label>
-            <input
-              type="date"
-              className="form-input"
+            <DateInput
               value={form.displayEnd}
+              min={form.displayStart || undefined}
+              placeholder="No end date"
               onChange={(e) => setForm({ ...form, displayEnd: e.target.value })}
             />
           </div>
