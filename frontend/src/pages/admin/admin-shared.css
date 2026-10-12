@@ -4,6 +4,39 @@
   margin-bottom: 16px;
 }
 
+.env-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  border: 1px solid currentColor;
+}
+
+.env-badge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.env-badge-live {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.env-badge-sandbox {
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+.table tr.package-row-sandbox td {
+  background: var(--color-warning-soft);
+}
+
+.table tr.package-row-sandbox td:first-child {
+  box-shadow: inset 3px 0 0 var(--color-warning);
+}
+
 .operators-page {
   width: 100%;
   max-width: 100%;

@@ -19,6 +19,19 @@ function StatusBadge({ active }) {
   );
 }
 
+function EnvironmentBadge({ environment }) {
+  const sandbox = environment === 'sandbox';
+  return (
+    <span
+      className={`badge env-badge ${sandbox ? 'env-badge-sandbox' : 'env-badge-live'}`}
+      title={sandbox ? 'Sandbox CRM — only sandbox operators can sell it' : 'Live CRM'}
+    >
+      <span className="env-badge-dot" aria-hidden="true" />
+      {sandbox ? 'Sandbox' : 'Live'}
+    </span>
+  );
+}
+
 const emptyEligibility = () => ({
   packageRole: 'standalone',
   upgradeFamily: '',
@@ -621,6 +634,7 @@ export default function PackagesTab() {
                   <thead>
                     <tr>
                       <th>Name</th>
+                      <th>Environment</th>
                       <th>Service</th>
                       <th>Sales model</th>
                       <th>Role</th>
@@ -634,15 +648,13 @@ export default function PackagesTab() {
                   </thead>
                   <tbody>
                     {packages.map((pkg) => (
-                      <tr key={pkg.id}>
+                      <tr key={pkg.id} className={pkg.environment === 'sandbox' ? 'package-row-sandbox' : undefined}>
                         <td style={{ fontWeight: 500 }}>{pkg.name}</td>
+                        <td><EnvironmentBadge environment={pkg.environment} /></td>
                         <td>
                           <span className="badge badge-info">
                             {getServiceTagLabel(pkg.service_tag || 'OTT', pkg.environment || 'live')}
                           </span>
-                          {pkg.environment === 'sandbox' && (
-                            <span className="badge badge-warning" style={{ marginLeft: 6 }}>Sandbox</span>
-                          )}
                         </td>
                         <td>{pkg.sales_model_name || '—'}</td>
                         <td><RoleSummary pkg={pkg} /></td>
