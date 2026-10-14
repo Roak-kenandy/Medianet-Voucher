@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Plus, MoreVertical, Power, Shield, KeyRound } from 'lucide-react';
+import { Plus, MoreVertical, Power, Shield, KeyRound, UserCog } from 'lucide-react';
 import Modal from '../../components/Modal';
 import ConfirmModal from '../../components/ConfirmModal';
 import ActionMenu from '../../components/ActionMenu';
@@ -42,6 +42,10 @@ export default function AdminsTab() {
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [passwordError, setPasswordError] = useState('');
   const [passwordSubmitting, setPasswordSubmitting] = useState(false);
+  // { admin, role }
+  const [roleModal, setRoleModal] = useState(null);
+  const [roleError, setRoleError] = useState('');
+  const [roleSubmitting, setRoleSubmitting] = useState(false);
 
   const loadAdmins = () => {
     setLoading(true);
@@ -65,6 +69,38 @@ export default function AdminsTab() {
 
   const canCreateAdmin = hasPermission(user?.role, 'createAdmin');
   const canManageAdminStatus = hasPermission(user?.role, 'manageAdminStatus');
+  const canChangeRole = hasPermission(user?.role, 'changeStaffRole');
+
+  const openRoleModal = (admin) => {
+    setRoleModal({ admin, role: admin.role || 'admin' });
+    setRoleError('');
+    setMenuOpen(null);
+  };
+
+  const handleRoleSubmit = async (e) => {
+    e.preventDefault();
+    if (!roleModal) return;
+    if (roleModal.role === roleModal.admin.role) {
+      setRoleModal(null);
+      return;
+    }
+    setRoleError('');
+    setRoleSubmitting(true);
+    try {
+      await adminApi.updateAdminRole(roleModal.admin.id, roleModal.role);
+      toast.success(
+        `${roleModal.admin.name} is now ${ROLE_LABELS[roleModal.role] || roleModal.role}. They must sign in again.`
+      );
+      setRoleModal(null);
+      loadAdmins();
+    } catch (err) {
+      setRoleError(
+        err.errors ? err.errors.map((item) => item.message).join('. ') : err.message || 'Failed to change role'
+      );
+    } finally {
+      setRoleSubmitting(false);
+    }
+  };
 
   const resetForm = () => {
     setForm({ name: '', email: '', password: '', role: 'sales' });
@@ -229,7 +265,7 @@ export default function AdminsTab() {
                       <td><StatusBadge active={admin.is_active} /></td>
                       <td>{formatDate(admin.created_at)}</td>
                       <td>
-                        {user?.id !== admin.id && (canManageAdminStatus || canCreateAdmin) && (
+                        {user?.id !== admin.id && (canManageAdminStatus || canCreateAdmin || canChangeRole) && (
                           <div>
                             <button
                               ref={menuOpen === admin.id ? menuAnchorRef : undefined}
@@ -243,6 +279,14 @@ export default function AdminsTab() {
                               onClose={() => setMenuOpen(null)}
                               anchorRef={menuAnchorRef}
                             >
+                              {canChangeRole && (
+                                <button
+                                  className="header-dropdown-item"
+                                  onClick={() => openRoleModal(admin)}
+                                >
+                                  <UserCog size={16} /> Change Role
+                                </button>
+                              )}
                               {canCreateAdmin && (
                                 <button
                                   className="header-dropdown-item"
@@ -412,6 +456,43 @@ export default function AdminsTab() {
                   : 'This ends all of their sessions. Share the new password with them securely.'}
               </p>
             </div>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        open={!!roleModal}
+        onClose={() => setRoleModal(null)}
+        title={`Change Role — ${roleModal?.admin?.name || ''}`}
+        footer={(
+          <>
+            <button type="button" className="btn btn-secondary" onClick={() => setRoleModal(null)}>
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="staff-role-form"
+              className="btn btn-primary"
+              disabled={roleSubmitting || roleModal?.role === roleModal?.admin?.role}
+            >
+              {roleSubmitting ? 'Saving...' : 'Save Role'}
+            </button>
+          </>
+        )}
+      >
+        {roleError && <div className="alert alert-error">{roleError}</div>}
+        <form id="staff-role-form" onSubmit={handleRoleSubmit}>
+          <div className="form-group">
+            <label className="form-label">Role</label>
+            <RoleSelector
+              name="change-staff-role"
+              value={roleModal?.role}
+              onChange={(role) => setRoleModal((prev) => (prev ? { ...prev, role } : prev))}
+            />
+            <p className="form-hint">
+              Current role: {ROLE_LABELS[roleModal?.admin?.role] || roleModal?.admin?.role || 'Admin'}.
+              Changing it ends their sessions; the new access applies when they sign in again.
+            </p>
           </div>
         </form>
       </Modal>

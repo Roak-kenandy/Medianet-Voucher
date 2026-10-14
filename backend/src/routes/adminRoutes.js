@@ -37,6 +37,7 @@ import {
   listAdmins,
   createAdmin,
   updateAdminStatus,
+  updateAdminRole,
   resetAdminPassword,
   changeOwnAdminPassword,
   listOperators,
@@ -104,6 +105,7 @@ import {
 import { knowledgeDocumentUpload } from '../middleware/uploadKnowledgeDocument.js';
 import {
   createAdminSchema,
+  updateAdminRoleSchema,
   createOperatorSchema,
   createPackageSchema,
   updatePackageSchema,
@@ -429,6 +431,17 @@ router.patch(
     const targetId = parseInt(req.params.id, 10);
     const { isActive } = toggleActiveBodySchema.parse(req.body);
     const result = await updateAdminStatus(req.user.id, targetId, isActive, getClientMeta(req));
+    success(res, result);
+  })
+);
+
+router.patch(
+  '/admins/:id/role',
+  requirePermission('changeStaffRole'),
+  asyncHandler(async (req, res) => {
+    const targetId = parseInt(req.params.id, 10);
+    const { role } = updateAdminRoleSchema.parse(req.body);
+    const result = await updateAdminRole(req.user.id, targetId, role, getClientMeta(req));
     success(res, result);
   })
 );

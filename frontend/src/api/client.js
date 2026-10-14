@@ -131,6 +131,11 @@ export const adminApi = {
       method: 'PATCH',
       body: JSON.stringify({ isActive }),
     }),
+  updateAdminRole: (id, role) =>
+    apiRequest(`/admin/admins/${id}/role`, {
+      method: 'PATCH',
+      body: JSON.stringify({ role }),
+    }),
   getOperators: (params = {}) => apiRequest(`/admin/operators${buildQuery(params)}`),
   getPackages: () => apiRequest('/admin/packages/active').then((data) => data.packages),
   getPackagesList: (params = {}) => apiRequest(`/admin/packages${buildQuery(params)}`),

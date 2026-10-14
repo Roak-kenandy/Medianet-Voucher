@@ -22,6 +22,7 @@ const BACK_OFFICE_PAGES = {
 export const ROLE_PERMISSIONS = {
   admin: {
     ...BACK_OFFICE_PAGES,
+    changeStaffRole: true,
     createAdmin: true,
     manageAdminStatus: true,
     createPackage: true,
@@ -34,6 +35,7 @@ export const ROLE_PERMISSIONS = {
   },
   sales: {
     ...BACK_OFFICE_PAGES,
+    changeStaffRole: false,
     createAdmin: false,
     manageAdminStatus: true,
     createPackage: true,
@@ -46,6 +48,7 @@ export const ROLE_PERMISSIONS = {
   },
   finance: {
     ...BACK_OFFICE_PAGES,
+    changeStaffRole: false,
     createAdmin: true,
     manageAdminStatus: true,
     createPackage: false,

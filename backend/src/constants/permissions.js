@@ -3,6 +3,7 @@ export const STAFF_ROLES = ['admin', 'sales', 'finance', 'front_office'];
 export const ROLE_PERMISSIONS = {
   admin: {
     createAdmin: true,
+    changeStaffRole: true,
     manageAdminStatus: true,
     createPackage: true,
     managePackageStatus: true,
@@ -18,6 +19,7 @@ export const ROLE_PERMISSIONS = {
   },
   sales: {
     createAdmin: false,
+    changeStaffRole: false,
     manageAdminStatus: false,
     createPackage: true,
     managePackageStatus: true,
@@ -33,6 +35,7 @@ export const ROLE_PERMISSIONS = {
   },
   finance: {
     createAdmin: false,
+    changeStaffRole: false,
     manageAdminStatus: false,
     createPackage: false,
     managePackageStatus: false,
@@ -49,6 +52,7 @@ export const ROLE_PERMISSIONS = {
   // Counter staff: dashboard, operator wallet top-ups (activate / adjust) and reports only.
   front_office: {
     createAdmin: false,
+    changeStaffRole: false,
     manageAdminStatus: false,
     createPackage: false,
     managePackageStatus: false,

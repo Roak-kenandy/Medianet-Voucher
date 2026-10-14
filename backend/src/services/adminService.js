@@ -314,6 +314,68 @@ export async function updateAdminStatus(actorAdminId, targetAdminId, isActive, r
   return { id: targetAdminId, isActive };
 }
 
+/**
+ * Changes another staff member's role. Their sessions end so the new role (carried in the
+ * access token) applies from their next sign-in. The last active Admin cannot be demoted.
+ */
+export async function updateAdminRole(actorAdminId, targetAdminId, role, reqMeta = {}) {
+  if (actorAdminId === targetAdminId) {
+    throw new AppError('You cannot change your own role', 400, 'SELF_ROLE_CHANGE');
+  }
+
+  const connection = await getConnection();
+  let previousRole;
+  try {
+    await connection.beginTransaction();
+    const [rows] = await connection.execute(
+      'SELECT id, role, is_active FROM admins WHERE id = ? LIMIT 1 FOR UPDATE',
+      [targetAdminId]
+    );
+    const target = rows[0];
+    if (!target) {
+      throw new AppError('Staff member not found', 404, 'NOT_FOUND');
+    }
+    previousRole = target.role;
+    if (previousRole === role) {
+      await connection.rollback();
+      return { id: targetAdminId, role, changed: false };
+    }
+
+    if (previousRole === 'admin' && target.is_active) {
+      const [admins] = await connection.execute(
+        `SELECT COUNT(*) AS total FROM admins
+         WHERE role = 'admin' AND is_active = 1 AND id <> ? FOR UPDATE`,
+        [targetAdminId]
+      );
+      if (!Number(admins[0]?.total)) {
+        throw new AppError('At least one active Admin must remain', 400, 'LAST_ADMIN');
+      }
+    }
+
+    await connection.execute('UPDATE admins SET role = ? WHERE id = ?', [role, targetAdminId]);
+    await endAdminSessions(connection, targetAdminId, 'role_changed');
+    await connection.commit();
+  } catch (err) {
+    await connection.rollback().catch(() => {});
+    throw err;
+  } finally {
+    connection.release();
+  }
+
+  await logAudit({
+    actorType: 'admin',
+    actorId: actorAdminId,
+    action: 'ADMIN_ROLE_CHANGED',
+    resourceType: 'admin',
+    resourceId: targetAdminId,
+    ipAddress: reqMeta.ipAddress,
+    userAgent: reqMeta.userAgent,
+    metadata: { from: previousRole, to: role },
+  });
+
+  return { id: targetAdminId, role, changed: true };
+}
+
 /** Staff reset of another staff member's password (ends that member's sessions). */
 export async function resetAdminPassword(actorAdminId, targetAdminId, newPassword, reqMeta = {}) {
   const [admin] = await query('SELECT id FROM admins WHERE id = ? LIMIT 1', [targetAdminId]);

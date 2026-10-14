@@ -167,11 +167,17 @@ export const loginSchema = z.object({
     ),
 });
 
+const staffRoleSchema = z.enum(['admin', 'sales', 'finance', 'front_office']);
+
 export const createAdminSchema = z.object({
   name: z.string().trim().min(2, 'Name is required').max(120),
   email: emailSchema,
   password: passwordSchema,
-  role: z.enum(['admin', 'sales', 'finance', 'front_office']).optional().default('admin'),
+  role: staffRoleSchema.optional().default('admin'),
+});
+
+export const updateAdminRoleSchema = z.object({
+  role: staffRoleSchema,
 });
 
 export const resetAdminPasswordSchema = z.object({
