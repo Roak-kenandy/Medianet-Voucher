@@ -755,6 +755,20 @@ export const partnerSubscribeSchema = z
   .strict()
   .superRefine(requireOneCustomerRef);
 
+/**
+ * A new customer: a CRM contact with one device, sold the given packages. There is no
+ * customerId yet; it comes back in the response.
+ */
+export const partnerCreateCustomerSchema = z
+  .object({
+    serviceType: serviceTagSchema,
+    name: z.string().trim().min(2, 'Name is required').max(200),
+    phone: phoneSchema,
+    packageIds: packageIdsSchema,
+    amount: customerAmountSchema.optional(),
+  })
+  .strict();
+
 /** Renew the listed packages, or everything renewable on the device with `all: true`. */
 export const partnerRenewSchema = z
   .object({

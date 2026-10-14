@@ -421,7 +421,12 @@ export async function getOperatorPackageIds(operatorId, { activeOnly = true, con
   return filtered.map((pkg) => pkg.id);
 }
 
-export async function sumPackagePrices(packageIds = [], { connection = null } = {}) {
+/**
+ * Totals the packages being sold. With `environment`, every package must belong to that CRM:
+ * this runs before the wallet is charged, so a package from the other CRM is refused here
+ * instead of failing at CRM after the money has been reserved.
+ */
+export async function sumPackagePrices(packageIds = [], { connection = null, environment = null } = {}) {
   const uniqueIds = [...new Set(packageIds.map((id) => Number(id)).filter(Boolean))];
   if (!uniqueIds.length) {
     return { total: 0, currencyCode: 'MVR', packages: [] };
@@ -433,7 +438,7 @@ export async function sumPackagePrices(packageIds = [], { connection = null } = 
 
   const placeholders = uniqueIds.map(() => '?').join(', ');
   const rows = await runner(
-    `SELECT id, name, price_amount, currency_code, is_active
+    `SELECT id, name, price_amount, currency_code, is_active, environment
      FROM packages
      WHERE id IN (${placeholders})`,
     uniqueIds
@@ -446,6 +451,17 @@ export async function sumPackagePrices(packageIds = [], { connection = null } = 
   const inactive = rows.filter((row) => !row.is_active);
   if (inactive.length) {
     throw new AppError('One or more packages are inactive', 400, 'PACKAGE_INACTIVE');
+  }
+
+  if (environment) {
+    const mismatched = rows.find((row) => (row.environment || 'live') !== environment);
+    if (mismatched) {
+      throw new AppError(
+        `Package "${mismatched.name}" is not available in the ${environment} CRM`,
+        400,
+        'CRM_ENVIRONMENT_MISMATCH'
+      );
+    }
   }
 
   const total = rows.reduce((sum, row) => sum + Number(row.price_amount), 0);

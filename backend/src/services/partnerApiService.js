@@ -12,7 +12,7 @@ import { getServiceTypeLabel } from '../constants/serviceTags.js';
 import { getOperatorCrmEnvironment, getOperatorServiceTypeKeys } from './crmConfigService.js';
 import { getOperatorPackages, getPackageCatalog } from './packageService.js';
 import { getOperatorWallet, listWalletTransactions } from './walletService.js';
-import { searchCustomers, crmTopupCustomer, subscribeCustomer } from './operatorService.js';
+import { searchCustomers, crmTopupCustomer, subscribeCustomer, createSingleAccount } from './operatorService.js';
 
 const money = (value) => (value == null ? null : Math.round(Number(value) * 100) / 100);
 
@@ -306,6 +306,42 @@ export async function topUpCustomer(apiClient, customerId, body, reqMeta, idempo
     name: result.fullName,
     amount: money(result.amountCharged),
     currency: result.currencyCode,
+    wallet: { balanceBefore: money(result.balanceBefore), balanceAfter: money(result.balanceAfter) },
+  };
+}
+
+/**
+ * A new customer in CRM: contact, account and one device, with the packages started on it.
+ * It always creates a new contact, so callers search by phone first to avoid a duplicate.
+ */
+export async function createCustomer(apiClient, body, reqMeta, idempotencyKey) {
+  const result = await createSingleAccount(
+    apiClient.operatorId,
+    {
+      fullName: body.name,
+      phoneNumber: body.phone,
+      serviceTag: body.serviceType,
+      packageIds: body.packageIds,
+      amount: body.amount,
+    },
+    channelMeta(apiClient, reqMeta, idempotencyKey)
+  );
+  return {
+    reference: result.reference,
+    status: 'completed',
+    action: 'create',
+    customerId: result.crmContactId,
+    deviceId: result.deviceId,
+    // Can be null if CRM has not assigned it yet; look the customer up by phone instead.
+    serviceCode: result.serviceCode,
+    name: result.fullName,
+    phone: result.phoneNumber,
+    serviceType: result.serviceTag,
+    packages: result.packageIds.map((id, index) => ({ id, name: result.packageNames[index] })),
+    amountCharged: money(result.amountCharged),
+    listPrice: money(result.unitCost),
+    currency: result.currencyCode,
+    usedFreeAccount: result.chargeType === 'trial',
     wallet: { balanceBefore: money(result.balanceBefore), balanceAfter: money(result.balanceAfter) },
   };
 }

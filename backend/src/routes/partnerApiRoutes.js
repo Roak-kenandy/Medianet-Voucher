@@ -20,6 +20,7 @@ import {
   getPackageEligibility,
   getAllowedPackages,
   topUpCustomer,
+  createCustomer,
   purchase,
   listTransactions,
   getTransaction,
@@ -33,6 +34,7 @@ import {
   partnerCustomerDeviceSchema,
   partnerPackagesSchema,
   partnerTopupSchema,
+  partnerCreateCustomerSchema,
   partnerSubscribeSchema,
   partnerRenewSchema,
   partnerUpgradeSchema,
@@ -139,6 +141,15 @@ router.post(
   apiCustomerLimiter,
   readRoute(partnerCustomerDeviceSchema, (req, { customerId, ...ref }) =>
     getAllowedPackages(req.apiClient, customerId, ref)
+  )
+);
+
+router.post(
+  '/customers/create',
+  apiWriteLimiter,
+  // There is no customerId yet: moneyRoute passes it through as undefined.
+  moneyRoute('create', partnerCreateCustomerSchema, (req, _customerId, body, key) =>
+    createCustomer(req.apiClient, body, getClientMeta(req), key)
   )
 );
 

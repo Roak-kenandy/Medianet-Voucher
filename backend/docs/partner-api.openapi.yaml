@@ -3,7 +3,7 @@ info:
   title: Medianet Operator API
   version: "1.0"
   description: >
-    Find customers, read balances and subscriptions, and top up, sell, renew or upgrade
+    Find or create customers, read balances and subscriptions, and top up, sell, renew or upgrade
     packages on behalf of an operator. Anything that takes input is a POST with a JSON body,
     including lookups; nothing is passed in the URL query string. See partner-api.md for the full guide, including how
     the Idempotency-Key makes money requests safe to retry.
@@ -216,6 +216,41 @@ paths:
                           packages:
                             type: array
                             items: { $ref: "#/components/schemas/PackageEligibility" }
+        default: { $ref: "#/components/responses/Error" }
+  /customers/create:
+    post:
+      tags: [Sales]
+      summary: Create a new customer and sell them packages
+      description: >
+        Always creates a new customer (contact, account and one device), even if the phone
+        number is already registered. Search by phone first and use /customers/subscribe for a
+        customer who already exists.
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [serviceType, name, phone, packageIds]
+              properties:
+                serviceType: { type: string, example: OTT }
+                name: { type: string, minLength: 2, maxLength: 200 }
+                phone: { type: string, description: 7-digit mobile number }
+                packageIds: { type: array, minItems: 1, maxItems: 20, items: { type: integer } }
+                amount: { type: number, description: Optional. Must equal the package total if sent. }
+      responses:
+        "201":
+          description: Customer created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/CreateCustomerResult" }
         default: { $ref: "#/components/responses/Error" }
   /customers/topup:
     post:
@@ -608,6 +643,28 @@ components:
         name: { type: string }
         amount: { type: number }
         currency: { type: string }
+        wallet: { $ref: "#/components/schemas/WalletMove" }
+    CreateCustomerResult:
+      type: object
+      properties:
+        reference: { type: string }
+        status: { type: string, enum: [completed] }
+        action: { type: string, enum: [create] }
+        customerId: { type: string, format: uuid }
+        deviceId: { type: string, format: uuid, nullable: true }
+        serviceCode: { type: string, nullable: true, description: Null if not yet assigned; use phone meanwhile. }
+        name: { type: string }
+        phone: { type: string }
+        serviceType: { type: string }
+        packages:
+          type: array
+          items:
+            type: object
+            properties: { id: { type: integer }, name: { type: string } }
+        amountCharged: { type: number }
+        listPrice: { type: number }
+        currency: { type: string }
+        usedFreeAccount: { type: boolean }
         wallet: { $ref: "#/components/schemas/WalletMove" }
     PurchaseResult:
       type: object

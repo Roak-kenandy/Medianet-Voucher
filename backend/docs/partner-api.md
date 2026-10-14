@@ -1,8 +1,8 @@
 # Medianet Operator API (v1)
 
 The Operator API lets an operator's own systems do what the operator portal does: find a
-customer, read their balance and subscriptions, see what they can buy, top up their account,
-and sell, renew or upgrade packages.
+customer or create a new one, read their balance and subscriptions, see what they can buy,
+top up their account, and sell, renew or upgrade packages.
 
 Everything is scoped to the operator that owns the API key. The customer types, sales models
 and packages enabled for the operator by Medianet apply to the API exactly as they do in the
@@ -98,7 +98,7 @@ request is refused with `DEVICE_REQUIRED`.
 
 ## Safe retries: the Idempotency-Key
 
-Every request that moves money (`/customers/topup`, `/customers/subscribe`,
+Every request that moves money (`/customers/create`, `/customers/topup`, `/customers/subscribe`,
 `/customers/renew`, `/customers/upgrade`) **must** carry an `Idempotency-Key` header: a unique string you generate for that
 one business operation, 8 to 100 characters from `A-Z a-z 0-9 . _ : -`. A UUID is ideal.
 
@@ -146,6 +146,7 @@ Keys are remembered for 30 days.
 | POST | `/customers/subscriptions` | Current subscriptions on a device | |
 | POST | `/customers/allowed-packages` | Only the packages that can be sold to a device now | |
 | POST | `/customers/package-eligibility` | Every package, including those not available and why | |
+| POST | `/customers/create` | Create a new customer and sell them packages | required |
 | POST | `/customers/topup` | Add credit to the customer's account | required |
 | POST | `/customers/subscribe` | Sell one or more new packages | required |
 | POST | `/customers/renew` | Renew one, several or all of the customer's packages | required |
@@ -405,6 +406,51 @@ next. Fetch the packages shortly before you sell.
 
 The name "offers" is deliberately not used here: it is reserved for promotional offers.
 
+### POST /customers/create
+
+Creates a **new** customer in the billing system (customer record, account and one device) and
+starts the given packages on that device. Your wallet is charged the package total. Requires
+`Idempotency-Key`.
+
+This always creates a new customer, even if one with this phone number already exists. Search
+by `phone` first: if the customer is found, sell to them with `/customers/subscribe` instead.
+
+```json
+{ "serviceType": "OTT", "name": "Aishath Ali", "phone": "7712345", "packageIds": [4], "amount": 150 }
+```
+
+| Field | |
+|---|---|
+| `serviceType` | Required. One of the customer types enabled for you. |
+| `name` | Required. The customer's full name, 2 to 200 characters. |
+| `phone` | Required. The customer's 7-digit mobile number. |
+| `packageIds` | 1 to 20 ids from `/packages/list`, all of this `serviceType`. |
+| `amount` | Optional. If sent, it must equal the package total or the request is refused with `AMOUNT_MISMATCH`. |
+
+Response `201`:
+
+```json
+{
+  "success": true,
+  "data": {
+    "reference": "DBT-MB2KC1Q8-77A0B1C2",
+    "status": "completed",
+    "action": "create",
+    "customerId": "5c2e9b7d-…", "deviceId": "1f7a3c55-…", "serviceCode": "512804",
+    "name": "Aishath Ali", "phone": "7712345", "serviceType": "OTT",
+    "packages": [ { "id": 4, "name": "FAMILY" } ],
+    "amountCharged": 150, "listPrice": 150, "currency": "MVR",
+    "usedFreeAccount": false,
+    "wallet": { "balanceBefore": 14900.5, "balanceAfter": 14750.5 }
+  }
+}
+```
+
+Use `customerId` with `phone` (or `serviceCode`) for every later request about this customer.
+`serviceCode` can be `null` if the billing system has not assigned it yet; `phone` works in the
+meantime. If `usedFreeAccount` is `true`, a free-account slot paid for the sale and
+`amountCharged` is 0.
+
 ### POST /customers/topup
 
 Adds credit to the customer's account. Your wallet is charged the same amount.
@@ -621,6 +667,7 @@ What happened to a money request you sent.
 | 400 | `PACKAGE_NOT_ELIGIBLE` | The package cannot be sold to this device. The message says why. |
 | 400 | `PACKAGE_NOT_ALLOWED`, `PACKAGE_NOT_ASSIGNED` | The package is not one of yours. |
 | 400 | `AMOUNT_MISMATCH` | `amount` differs from the current price. |
+| 400 | `CRM_ENVIRONMENT_MISMATCH` | The package belongs to the other billing system (live or sandbox) than your account. |
 | 400 | `NOTHING_TO_RENEW` | `all: true` was sent but the device has no package to renew. |
 | 401 | `UNAUTHORIZED` | Missing, wrong or revoked API key. |
 | 403 | `OPERATOR_INACTIVE` | The operator account is disabled. |
@@ -646,7 +693,7 @@ Limits are per API key, per minute:
 |---|---|
 | `/account`, `/wallet`, `/packages/list`, `/transactions/…`, `/requests/…` | 300 |
 | `/customers` lookups (search, balance, subscriptions, allowed packages, eligibility) | 120 |
-| Money requests (top-up, subscribe, renew, upgrade) | 60 |
+| Money requests (create, top-up, subscribe, renew, upgrade) | 60 |
 
 A `429` response carries the standard `RateLimit-*` headers. Customer lookups are the
 expensive ones: each reads live data from the billing system and typically takes one to three
@@ -664,6 +711,14 @@ Requests for one operator are processed a few at a time; under a burst you may s
    `balance` to confirm.
 2. `POST /customers/topup` with a new `Idempotency-Key`.
 3. On a timeout, repeat step 2 with the same key.
+
+**Sign up a new customer**
+
+1. `POST /customers/search` with `phone`. If a customer comes back, sell to them with
+   `/customers/subscribe` instead.
+2. `POST /packages/list` for the customer type, and show the packages with `price`.
+3. `POST /customers/create` with a new `Idempotency-Key`, sending the `price` total as `amount`.
+4. Keep the returned `customerId` and `serviceCode` for later top-ups, renewals and upgrades.
 
 **Renew everything a customer has**
 

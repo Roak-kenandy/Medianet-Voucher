@@ -27,7 +27,7 @@ import {
   getOperatorCrmPaymentTypeId,
   getOperatorServiceTypeKeys,
 } from './crmConfigService.js';
-import { runInCrmEnvironment } from '../utils/crmEnvironment.js';
+import { runInCrmEnvironment, currentCrmEnvironment } from '../utils/crmEnvironment.js';
 import { evaluatePackageOptions, resolvePurchase } from '../utils/packageEligibility.js';
 import {
   formatTrialForResponse,
@@ -941,6 +941,8 @@ async function markReservationCreated(reservation, crmResult, fallbackRef = null
   );
   if (reservation.chargeType === 'wallet') {
     await mergeTransactionMetadata(null, reservation.paymentReference, {
+      // A new customer only gets its CRM id here, once CRM has created it.
+      ...(crmResult?.contactId ? { crmContactId: crmResult.contactId } : {}),
       crmState: 'completed',
       crmPaymentId: crmResult?.paymentId || null,
       crmSubscriptionId: crmResult?.subscriptionId || null,
@@ -1046,7 +1048,13 @@ async function provisionReservation(operatorId, reservation, runCrm, reqMeta, co
     } catch (dbErr) {
       console.error('[Provision] CRM succeeded but local update failed:', reservation.voucherAccountId, dbErr.message);
     }
-    return { status: 'created', externalRef, amountCharged: reservation.amountCharged };
+    return {
+      status: 'created',
+      externalRef,
+      amountCharged: reservation.amountCharged,
+      crmContactId: crmResult?.contactId || null,
+      crmDeviceId: crmResult?.deviceId || null,
+    };
   } catch (err) {
     const outcome = classifyCrmFailure(err);
     const message = err?.message || 'Activation failed';
@@ -1465,7 +1473,7 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
       data.serviceTag,
       connection
     );
-    pricing = await sumPackagePrices(resolvedPackageIds, { connection });
+    pricing = await sumPackagePrices(resolvedPackageIds, { connection, environment: currentCrmEnvironment() });
     if (upgradeEstimate) {
       // Packages keep their list price in the sale record; the charge is the CRM estimate.
       pricing = { ...pricing, listTotal: pricing.total, total: upgradeEstimate.amount };
@@ -1626,7 +1634,7 @@ async function assertPackagesMatchServiceTag(packageIds, serviceTag, connection)
       );
     }
   }
-  return sumPackagePrices(packageIds, { connection });
+  return sumPackagePrices(packageIds, { connection, environment: currentCrmEnvironment() });
 }
 
 function amountsMatch(expected, provided) {
@@ -1680,6 +1688,7 @@ async function createAndProvisionAccounts(operatorId, accounts, packageIds, pric
       pricing,
       serviceTag,
       activity,
+      metadataExtra: channelMetadata(reqMeta),
     });
     await connection.commit();
   } catch (err) {
@@ -1711,6 +1720,10 @@ async function createAndProvisionAccounts(operatorId, accounts, packageIds, pric
       trialFree: reservation.chargeType === 'trial' && outcome.status === 'created',
       status: outcome.status,
       externalRef: outcome.externalRef || null,
+      crmContactId: outcome.crmContactId || null,
+      crmDeviceId: outcome.crmDeviceId || null,
+      reference: reservation.paymentReference,
+      chargeType: reservation.chargeType,
       errorMessage: outcome.errorMessage || null,
       errorCode: outcome.errorCode || null,
       errorStatus: outcome.errorStatus || null,
@@ -1764,6 +1777,14 @@ async function createSingleAccountInner(operatorId, account, reqMeta) {
     requestedTag
   );
   const packageNames = pricing.packages.map((pkg) => pkg.name);
+  // API callers may send the price they quoted; the sale is refused if it has moved.
+  if (account.amount != null && !amountsMatch(pricing.total, account.amount)) {
+    throw new AppError(
+      `Amount must exactly match the selected package total (${pricing.total} ${pricing.currencyCode}).`,
+      400,
+      'AMOUNT_MISMATCH'
+    );
+  }
   const balanceBefore = await readWalletBalance(operatorId);
 
   const [result] = await createAndProvisionAccounts(
@@ -1799,12 +1820,22 @@ async function createSingleAccountInner(operatorId, account, reqMeta) {
       packageIds,
       packageNames,
       amountCharged: result.amountCharged,
+      crmContactId: result.crmContactId,
+      paymentReference: result.reference,
+      ...channelMetadata(reqMeta),
     },
   });
 
+  // CRM gives the new device its service code; read it so the customer can be addressed by it.
+  const serviceCode = result.crmContactId ? await crmService.fetchDeviceCodeForContact(result.crmContactId) : null;
   const walletBalance = await readWalletBalance(operatorId);
   return {
     id: result.id,
+    reference: result.reference,
+    chargeType: result.chargeType,
+    crmContactId: result.crmContactId,
+    deviceId: result.crmDeviceId,
+    serviceCode,
     fullName: result.fullName,
     phoneNumber: result.phoneNumber,
     serviceTag,
