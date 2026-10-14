@@ -171,7 +171,7 @@ export const createAdminSchema = z.object({
   name: z.string().trim().min(2, 'Name is required').max(120),
   email: emailSchema,
   password: passwordSchema,
-  role: z.enum(['admin', 'sales', 'finance']).optional().default('admin'),
+  role: z.enum(['admin', 'sales', 'finance', 'front_office']).optional().default('admin'),
 });
 
 export const resetAdminPasswordSchema = z.object({

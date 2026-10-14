@@ -404,6 +404,7 @@ router.get(
 
 router.get(
   '/admins',
+  requirePermission('viewStaff'),
   asyncHandler(async (req, res) => {
     const queryParams = listQuerySchema.parse(req.query);
     const result = await listAdmins(queryParams);
@@ -582,9 +583,10 @@ router.put(
   })
 );
 
-/** Operator API documentation, for any signed-in staff member. */
+/** Operator API documentation, for staff roles that work with operators. */
 router.get(
   '/developer-docs',
+  requirePermission('viewDeveloperDocs'),
   asyncHandler(async (_req, res) => {
     res.setHeader('Cache-Control', 'private, no-store');
     success(res, await getDeveloperDocs());

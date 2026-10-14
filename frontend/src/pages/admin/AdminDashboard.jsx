@@ -20,7 +20,7 @@ import BarChart from '../../components/charts/BarChart';
 import HorizontalBarChart from '../../components/charts/HorizontalBarChart';
 import { adminApi } from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
-import { ROLE_LABELS } from '../../constants/permissions';
+import { ROLE_LABELS, hasPermission } from '../../constants/permissions';
 import { formatMoney } from '../../utils/money';
 
 const STATUS_ORDER = ['created', 'pending', 'processing', 'failed'];
@@ -95,9 +95,14 @@ export default function AdminDashboard() {
       ) : (
         <>
           <div className="quick-actions">
-            {user?.role !== 'finance' && (
+            {hasPermission(user?.role, 'manageOperators') && (
               <Link to="/admin/operators" className="btn btn-primary">
                 <Plus size={18} /> Manage Operators
+              </Link>
+            )}
+            {!hasPermission(user?.role, 'manageOperators') && hasPermission(user?.role, 'adjustWallet') && (
+              <Link to="/admin/operator-topup" className="btn btn-primary">
+                <Wallet size={18} /> Operator Topup
               </Link>
             )}
             <Link

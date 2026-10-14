@@ -26,15 +26,15 @@ import './Sidebar.css';
 
 const adminNav = [
   { to: '/admin', label: 'Dashboard', icon: LayoutDashboard, end: true },
-  { to: '/admin/operators', label: 'Operators', icon: Users },
-  { to: '/admin/operator-topup', label: 'Operator Topup', icon: Wallet },
-  { to: '/admin/packages', label: 'Packages', icon: Package },
+  { to: '/admin/operators', label: 'Operators', icon: Users, permission: 'viewOperators' },
+  { to: '/admin/operator-topup', label: 'Operator Topup', icon: Wallet, permission: 'adjustWallet' },
+  { to: '/admin/packages', label: 'Packages', icon: Package, permission: 'viewPackages' },
   { to: '/admin/crm-settings', label: 'System Settings', icon: SlidersHorizontal, permission: 'manageCrmSettings' },
-  { to: '/admin/admins', label: 'Staff', icon: Shield },
-  { to: '/admin/reports', label: 'Reports', icon: FileBarChart },
+  { to: '/admin/admins', label: 'Staff', icon: Shield, permission: 'viewStaff' },
+  { to: '/admin/reports', label: 'Reports', icon: FileBarChart, permission: 'viewReports' },
   { to: '/admin/marketing-ads', label: 'Marketing Ads', icon: Megaphone, permission: 'manageMarketingAds' },
   { to: '/admin/knowledge-base', label: 'Knowledge Base', icon: BookMarked, permission: 'manageKnowledgeBase' },
-  { to: '/admin/developer', label: 'Developer API', icon: Code2 },
+  { to: '/admin/developer', label: 'Developer API', icon: Code2, permission: 'viewDeveloperDocs' },
 ];
 
 const operatorNav = [

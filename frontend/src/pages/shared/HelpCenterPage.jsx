@@ -10,7 +10,7 @@ import { isStaffRole, hasPermission } from '../../constants/permissions';
 const ADMIN_FAQ = [
   {
     q: 'What are the staff roles?',
-    a: 'Admin has full access. Sales can manage operators, packages, and reports but cannot create staff accounts. Finance can manage operators, staff, and reports but cannot create or change packages.',
+    a: 'Admin has full access. Sales can manage operators, packages, and reports but cannot create staff accounts. Finance can manage operators, staff, and reports but cannot create or change packages. Front Office sees only the Dashboard, Operator Topup (activate and adjust operator wallets) and Reports.',
   },
   {
     q: 'How do I create a package?',

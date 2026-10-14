@@ -1,12 +1,12 @@
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { getHomePathForRole, getHomePathForUser } from '../constants/permissions';
+import { getHomePathForRole, getHomePathForUser, hasPermission } from '../constants/permissions';
 import {
   operatorHasPermission,
   permissionForOperatorPath,
 } from '../constants/operatorPermissions';
 
-export default function ProtectedRoute({ children, allowedRoles }) {
+export default function ProtectedRoute({ children, allowedRoles, staffPermission }) {
   const { user, loading } = useAuth();
   const location = useLocation();
 
@@ -24,6 +24,10 @@ export default function ProtectedRoute({ children, allowedRoles }) {
   }
 
   if (allowedRoles && !allowedRoles.includes(user.role)) {
+    return <Navigate to={getHomePathForUser(user)} replace />;
+  }
+
+  if (staffPermission && !hasPermission(user.role, staffPermission)) {
     return <Navigate to={getHomePathForUser(user)} replace />;
   }
 

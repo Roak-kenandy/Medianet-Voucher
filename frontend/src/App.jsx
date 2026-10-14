@@ -28,8 +28,8 @@ import KnowledgeBasePage from './pages/admin/KnowledgeBasePage';
 import DeveloperDocsPage from './pages/shared/DeveloperDocsPage';
 import { STAFF_ROLES } from './constants/permissions';
 
-const staffRoute = (element) => (
-  <ProtectedRoute allowedRoles={STAFF_ROLES}>{element}</ProtectedRoute>
+const staffRoute = (element, permission) => (
+  <ProtectedRoute allowedRoles={STAFF_ROLES} staffPermission={permission}>{element}</ProtectedRoute>
 );
 
 export default function App() {
@@ -43,15 +43,15 @@ export default function App() {
           <Route path="/login" element={<LoginPage />} />
 
           <Route path="/admin" element={staffRoute(<AdminDashboard />)} />
-          <Route path="/admin/operators" element={staffRoute(<OperatorsPage />)} />
-          <Route path="/admin/packages" element={staffRoute(<PackagesPage />)} />
-          <Route path="/admin/admins" element={staffRoute(<AdminsPage />)} />
-          <Route path="/admin/reports" element={staffRoute(<ReportsPage />)} />
-          <Route path="/admin/operator-topup" element={staffRoute(<OperatorTopupPage />)} />
-          <Route path="/admin/marketing-ads" element={staffRoute(<MarketingAdsPage />)} />
-          <Route path="/admin/knowledge-base" element={staffRoute(<KnowledgeBasePage />)} />
-          <Route path="/admin/crm-settings" element={staffRoute(<CrmSettingsPage />)} />
-          <Route path="/admin/developer" element={staffRoute(<DeveloperDocsPage />)} />
+          <Route path="/admin/operators" element={staffRoute(<OperatorsPage />, 'viewOperators')} />
+          <Route path="/admin/packages" element={staffRoute(<PackagesPage />, 'viewPackages')} />
+          <Route path="/admin/admins" element={staffRoute(<AdminsPage />, 'viewStaff')} />
+          <Route path="/admin/reports" element={staffRoute(<ReportsPage />, 'viewReports')} />
+          <Route path="/admin/operator-topup" element={staffRoute(<OperatorTopupPage />, 'adjustWallet')} />
+          <Route path="/admin/marketing-ads" element={staffRoute(<MarketingAdsPage />, 'manageMarketingAds')} />
+          <Route path="/admin/knowledge-base" element={staffRoute(<KnowledgeBasePage />, 'manageKnowledgeBase')} />
+          <Route path="/admin/crm-settings" element={staffRoute(<CrmSettingsPage />, 'manageCrmSettings')} />
+          <Route path="/admin/developer" element={staffRoute(<DeveloperDocsPage />, 'viewDeveloperDocs')} />
           <Route path="/admin/help" element={staffRoute(<HelpCenterPage />)} />
           <Route path="/admin/settings" element={staffRoute(<SettingsPage />)} />
           <Route path="/admin/users" element={<Navigate to="/admin/operators" replace />} />

@@ -1,16 +1,27 @@
 import { getOperatorHomePath } from './operatorPermissions.js';
 
-export const STAFF_ROLES = ['admin', 'sales', 'finance'];
+export const STAFF_ROLES = ['admin', 'sales', 'finance', 'front_office'];
 
 export const ROLE_LABELS = {
   admin: 'Admin',
   sales: 'Sales',
   finance: 'Finance',
+  front_office: 'Front Office',
   operator: 'Operator',
+};
+
+/** Page access shared by the back-office roles (everything except Front Office). */
+const BACK_OFFICE_PAGES = {
+  viewOperators: true,
+  viewPackages: true,
+  viewStaff: true,
+  viewDeveloperDocs: true,
+  viewReports: true,
 };
 
 export const ROLE_PERMISSIONS = {
   admin: {
+    ...BACK_OFFICE_PAGES,
     createAdmin: true,
     manageAdminStatus: true,
     createPackage: true,
@@ -22,6 +33,7 @@ export const ROLE_PERMISSIONS = {
     manageCrmSettings: true,
   },
   sales: {
+    ...BACK_OFFICE_PAGES,
     createAdmin: false,
     manageAdminStatus: true,
     createPackage: true,
@@ -33,6 +45,7 @@ export const ROLE_PERMISSIONS = {
     manageCrmSettings: false,
   },
   finance: {
+    ...BACK_OFFICE_PAGES,
     createAdmin: true,
     manageAdminStatus: true,
     createPackage: false,
@@ -42,6 +55,10 @@ export const ROLE_PERMISSIONS = {
     manageMarketingAds: false,
     manageKnowledgeBase: false,
     manageCrmSettings: false,
+  },
+  front_office: {
+    viewReports: true,
+    adjustWallet: true,
   },
 };
 

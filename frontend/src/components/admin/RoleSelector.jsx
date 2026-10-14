@@ -16,6 +16,11 @@ const ROLES = [
     label: 'Finance',
     description: 'Add and edit operators, activate wallets, view reports. Cannot create packages.',
   },
+  {
+    value: 'front_office',
+    label: 'Front Office',
+    description: 'Dashboard, operator top-ups (activate and adjust wallets) and reports only.',
+  },
 ];
 
 export default function RoleSelector({ value, onChange, name = 'staff-role' }) {

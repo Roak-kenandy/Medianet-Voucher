@@ -1,4 +1,4 @@
-export const STAFF_ROLES = ['admin', 'sales', 'finance'];
+export const STAFF_ROLES = ['admin', 'sales', 'finance', 'front_office'];
 
 export const ROLE_PERMISSIONS = {
   admin: {
@@ -13,6 +13,8 @@ export const ROLE_PERMISSIONS = {
     manageMarketingAds: true,
     manageKnowledgeBase: true,
     manageCrmSettings: true,
+    viewStaff: true,
+    viewDeveloperDocs: true,
   },
   sales: {
     createAdmin: false,
@@ -26,6 +28,8 @@ export const ROLE_PERMISSIONS = {
     manageMarketingAds: true,
     manageKnowledgeBase: true,
     manageCrmSettings: false,
+    viewStaff: true,
+    viewDeveloperDocs: true,
   },
   finance: {
     createAdmin: false,
@@ -39,6 +43,24 @@ export const ROLE_PERMISSIONS = {
     manageMarketingAds: false,
     manageKnowledgeBase: false,
     manageCrmSettings: false,
+    viewStaff: true,
+    viewDeveloperDocs: true,
+  },
+  // Counter staff: dashboard, operator wallet top-ups (activate / adjust) and reports only.
+  front_office: {
+    createAdmin: false,
+    manageAdminStatus: false,
+    createPackage: false,
+    managePackageStatus: false,
+    manageOperators: false,
+    adjustWallet: true,
+    completeTopup: false,
+    viewReports: true,
+    manageMarketingAds: false,
+    manageKnowledgeBase: false,
+    manageCrmSettings: false,
+    viewStaff: false,
+    viewDeveloperDocs: false,
   },
 };
 
