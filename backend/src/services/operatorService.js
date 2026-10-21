@@ -1461,6 +1461,7 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
   let resolvedPackageIds;
   let pricing;
   let balanceBefore;
+  let customerCreditUsed = 0;
   const connection = await getConnection();
   try {
     await connection.beginTransaction();
@@ -1479,13 +1480,40 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
       pricing = { ...pricing, listTotal: pricing.total, total: upgradeEstimate.amount };
     }
 
+    // Credit the customer already holds in CRM can pay for the sale: the wallet is charged only
+    // the rest, and CRM's invoice takes the credit from their account. Not when a free-account
+    // slot pays for it, so the customer keeps their credit then.
+    const freeSlotPays =
+      purchase.action === 'subscribe' &&
+      getTrialQuotaInfo(operator.trial_account_limit, operator.trial_accounts_used).trialAccountsRemaining > 0;
+    if (data.useCustomerCredit && !freeSlotPays) {
+      const account = binding.customer.account;
+      if (!account) {
+        throw new AppError(
+          'Could not read the customer\'s balance from CRM. Please try again.',
+          502,
+          'CRM_ERROR'
+        );
+      }
+      customerCreditUsed = roundMoney(Math.min(Number(account.creditAmount) || 0, pricing.total));
+      if (customerCreditUsed > 0) {
+        pricing = {
+          ...pricing,
+          listTotal: pricing.listTotal ?? pricing.total,
+          total: roundMoney(pricing.total - customerCreditUsed),
+        };
+      }
+    }
+
     // The portal always sends the amount it showed; API callers may leave it out to accept
     // the current price.
     if (data.amount != null && !amountsMatch(pricing.total, data.amount)) {
       throw new AppError(
-        upgradeEstimate
-          ? `The upgrade price is now ${pricing.total} ${pricing.currencyCode}. Search the customer again to refresh it.`
-          : `Amount must exactly match the selected package total (${pricing.total} ${pricing.currencyCode}).`,
+        customerCreditUsed > 0
+          ? `After the customer's credit of ${customerCreditUsed}, the amount to pay is ${pricing.total} ${pricing.currencyCode}. Search the customer again to refresh it.`
+          : upgradeEstimate
+            ? `The upgrade price is now ${pricing.total} ${pricing.currencyCode}. Search the customer again to refresh it.`
+            : `Amount must exactly match the selected package total (${pricing.total} ${pricing.currencyCode}).`,
         400,
         'AMOUNT_MISMATCH'
       );
@@ -1519,6 +1547,9 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
         ...(upgradeEstimate
           ? { listPrice: pricing.listTotal, crmNewCharge: upgradeEstimate.newCharge, crmCredit: upgradeEstimate.credit }
           : {}),
+        ...(customerCreditUsed > 0
+          ? { customerCreditUsed, priceBeforeCredit: roundMoney(pricing.total + customerCreditUsed) }
+          : {}),
       },
     });
     await connection.commit();
@@ -1529,6 +1560,8 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
     connection.release();
   }
 
+  // With the customer's credit used, CRM is paid only what the wallet was charged.
+  const paymentAmount = customerCreditUsed > 0 ? pricing.total : null;
   const outcome = await provisionReservation(
     operatorId,
     reservation,
@@ -1537,7 +1570,7 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
         return crmService.renewServicesForContact(
           data.crmContactId,
           purchase.options.map((item) => ({ serviceId: item.serviceId, packageId: item.packageId })),
-          { paymentReference, paymentTypeId }
+          { paymentReference, paymentTypeId, paymentAmount }
         );
       }
       if (upgradeMode === 'replace') {
@@ -1545,7 +1578,7 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
           data.crmContactId,
           { serviceId: option.serviceId, cancelServiceIds: option.cancels.map((item) => item.serviceId) },
           option.packageId,
-          { paymentReference, paymentTypeId, deviceId }
+          { paymentReference, paymentTypeId, deviceId, paymentAmount }
         );
       }
       if (purchase.action === 'upgrade') {
@@ -1553,13 +1586,14 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
           data.crmContactId,
           { serviceId: option.serviceId, cancelServiceIds: option.cancels.map((item) => item.serviceId) },
           option.packageId,
-          { paymentReference, paymentTypeId, amount: upgradeEstimate.amount, deviceId }
+          { paymentReference, paymentTypeId, amount: paymentAmount ?? upgradeEstimate.amount, deviceId }
         );
       }
       return crmService.activatePackagesForContact(data.crmContactId, resolvedPackageIds, {
         paymentReference,
         paymentTypeId,
         deviceId,
+        paymentAmount,
       });
     },
     reqMeta,
@@ -1590,6 +1624,7 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
       crmServiceIds: purchase.options.map((item) => item.serviceId).filter(Boolean),
       replacedPackage: option.replaces?.name || null,
       cancelledAddons: option.cancels.map((item) => item.name),
+      customerCreditUsed,
     },
   });
 
@@ -1604,6 +1639,7 @@ async function subscribeCustomerInner(operatorId, rawData, reqMeta) {
     serviceCode: binding.customer.deviceCode || null,
     listPrice: pricing.listTotal ?? pricing.total,
     creditApplied: upgradeEstimate?.credit ?? 0,
+    customerCreditUsed,
     replacedPackage: option.replaces?.name || null,
     cancelledAddons: option.cancels.map((item) => item.name),
     id: reservation.voucherAccountId,

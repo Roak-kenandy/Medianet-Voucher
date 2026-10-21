@@ -719,6 +719,8 @@ function requireOneCustomerRef(data, ctx) {
 }
 
 const partnerDeviceIdSchema = z.string().uuid('Invalid deviceId');
+/** On by default: credit the customer holds in CRM pays first, the wallet pays the rest. */
+const partnerUseCustomerCreditSchema = z.boolean().optional();
 const partnerDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
 
 export const partnerIdempotencyKeySchema = z
@@ -751,6 +753,7 @@ export const partnerSubscribeSchema = z
     deviceId: partnerDeviceIdSchema.optional(),
     packageIds: packageIdsSchema,
     amount: customerAmountSchema.optional(),
+    useCustomerCredit: partnerUseCustomerCreditSchema,
   })
   .strict()
   .superRefine(requireOneCustomerRef);
@@ -777,6 +780,7 @@ export const partnerRenewSchema = z
     packageIds: packageIdsSchema.optional(),
     all: z.literal(true).optional(),
     amount: customerAmountSchema.optional(),
+    useCustomerCredit: partnerUseCustomerCreditSchema,
   })
   .strict()
   .superRefine(requireOneCustomerRef)
@@ -807,6 +811,7 @@ export const partnerUpgradeSchema = z
       .max(100_000, 'Amount cannot exceed 100000 MVR')
       .refine((value) => Math.abs(Math.round(value * 100) - value * 100) < 1e-6, 'Amount can have at most 2 decimal places')
       .optional(),
+    useCustomerCredit: partnerUseCustomerCreditSchema,
   })
   .strict()
   .superRefine(requireOneCustomerRef);

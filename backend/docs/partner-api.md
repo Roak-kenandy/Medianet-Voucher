@@ -16,10 +16,11 @@ A machine-readable description is in [`partner-api.openapi.yaml`](partner-api.op
 2. [Authentication](#authentication)
 3. [How customers and devices are addressed](#how-customers-and-devices-are-addressed)
 4. [Safe retries: the Idempotency-Key](#safe-retries-the-idempotency-key)
-5. [Endpoints](#endpoints)
-6. [Errors](#errors)
-7. [Rate limits](#rate-limits)
-8. [Typical flows](#typical-flows)
+5. [Customer credit pays first](#customer-credit-pays-first)
+6. [Endpoints](#endpoints)
+7. [Errors](#errors)
+8. [Rate limits](#rate-limits)
+9. [Typical flows](#typical-flows)
 
 ## Basics
 
@@ -133,6 +134,35 @@ Keys are remembered for 30 days.
   contact Medianet with the idempotency key.
 - No response at all, or `500`: send the same request with the same key, or call
   `GET /requests/{key}`, to learn what was recorded.
+
+## Customer credit pays first
+
+A customer can already hold credit on their account, for example from an earlier top-up
+(`balance.balance` in the search result). When you subscribe, renew or upgrade, that credit is
+used first and **your wallet is charged only the rest**:
+
+| Price | Customer credit | Your wallet is charged | Customer credit after |
+|---|---|---|---|
+| 324 | 0 | 324 | 0 |
+| 324 | 100 | 224 | 0 |
+| 324 | 324 | 0 | 0 |
+| 324 | 500 | 0 | 176 |
+
+To charge the full price and leave the customer's credit untouched, send
+`"useCustomerCredit": false` in the request.
+
+- The response says how it was paid: `customerCreditUsed` from the customer's credit and
+  `amountCharged` from your wallet. Together they make the price.
+- `priceAfterCredit` on each package in `customers/search`, `allowed-packages` and
+  `package-eligibility` is what your wallet would be charged with the credit used. Show that to
+  your customer, and send it as `amount` if you send `amount`.
+- With `amount` sent, it is checked against what your wallet will be charged after the credit.
+  If the customer's credit changed since you looked (for example they bought something
+  elsewhere), the sale is refused with `AMOUNT_MISMATCH` and nothing is charged.
+- When a free-account slot pays for a new subscription, the credit is not used and the
+  customer keeps it.
+- `/customers/create` is for new customers, who have no credit, and `/customers/topup` adds
+  credit; neither uses it.
 
 ## Endpoints
 
@@ -251,7 +281,7 @@ Response:
         "phone": "7771234",
         "serviceType": "OTT",
         "deviceCount": 1,
-        "balance": { "balance": -50, "credit": 50, "due": 0, "currency": "MVR", "accountState": "ACTIVE" },
+        "balance": { "balance": 50, "due": 0, "currency": "MVR", "accountState": "ACTIVE" },
         "subscriptions": [ ],
         "eligibility": [ ]
       }
@@ -282,14 +312,17 @@ Response:
   "data": {
     "customerId": "2b1f6c0a-5a0e-4f0b-9a57-0d7c0a1e3f11",
     "name": "Aishath Ali",
-    "balance": -50, "credit": 50, "due": 0, "currency": "MVR", "accountState": "ACTIVE"
+    "balance": 50, "due": 0, "currency": "MVR", "accountState": "ACTIVE"
   }
 }
 ```
 
-`balance` is the customer's running account balance: **negative means the customer has
-credit, positive means they owe money**. `credit` and `due` are the same number split into two
-non-negative fields for convenience. The balance belongs to the customer, not to a device.
+| Field | |
+|---|---|
+| `balance` | The customer's available balance (credit), for example from top-ups. Never negative. This is what pays first when you sell to them. |
+| `due` | What the customer owes, if anything. Never negative. |
+
+At most one of the two is above 0. The balance belongs to the customer, not to a device.
 
 ### POST /customers/subscriptions
 
@@ -343,11 +376,11 @@ on what it already has. This is the list to show a customer.
     "hasActivePackages": true,
     "packages": [
       { "packageId": 4, "name": "FAMILY", "role": "base", "action": "renew",
-        "price": 200, "listPrice": 200, "currency": "MVR", "upgrade": null, "requiresOneOf": [] },
+        "price": 200, "priceAfterCredit": 200, "listPrice": 200, "currency": "MVR", "upgrade": null, "requiresOneOf": [] },
       { "packageId": 9, "name": "SPORTS", "role": "addon", "action": "renew",
-        "price": 50, "listPrice": 50, "currency": "MVR", "upgrade": null, "requiresOneOf": [] },
+        "price": 50, "priceAfterCredit": 50, "listPrice": 50, "currency": "MVR", "upgrade": null, "requiresOneOf": [] },
       { "packageId": 5, "name": "WANTITALL", "role": "base", "action": "upgrade",
-        "price": 96.4, "listPrice": 300, "currency": "MVR",
+        "price": 96.4, "priceAfterCredit": 96.4, "listPrice": 300, "currency": "MVR",
         "upgrade": { "mode": "change", "replaces": { "packageId": 4, "name": "FAMILY" },
                      "credit": 187.2, "cancelsAddons": [ { "packageId": 9, "name": "SPORTS" } ] },
         "requiresOneOf": [] }
@@ -358,7 +391,8 @@ on what it already has. This is the list to show a customer.
 
 Each entry's `action` tells you which endpoint sells it: `renew` → `/customers/renew`,
 `upgrade` → `/customers/upgrade`, `subscribe` → `/customers/subscribe`. `price` is what your
-wallet is charged. If `requiresOneOf` is not empty, the package is an add-on that must be
+wallet is charged with `"useCustomerCredit": false`; `priceAfterCredit` is what it is charged by
+default, after the customer's credit (see [Customer credit pays first](#customer-credit-pays-first)). If `requiresOneOf` is not empty, the package is an add-on that must be
 bought in the same `subscribe` request as one of those base packages.
 
 The fields are explained under package eligibility below.
@@ -395,7 +429,8 @@ is unavailable; otherwise `allowed-packages` is simpler.
 |---|---|
 | `action` | `subscribe` (new), `renew` (they already have it), `upgrade`, or `null` when it cannot be sold. It tells you which purchase endpoint to use. |
 | `available` | Whether it can be sold now. When `false`, `reason` says why. |
-| `price` | What your wallet is charged if you buy it now. |
+| `price` | The price of buying it now, before the customer's credit. |
+| `priceAfterCredit` | What your wallet is charged after the customer's credit is used (the default). Equal to `price` when the customer has no credit. |
 | `listPrice` | The package's normal price. |
 | `upgrade.mode` | `change`: switched in place; the due date stays the same and `price` is the new package for the remaining days less `credit` for the unused days of the old one. `replace`: the billing system cannot switch it in place, so the old package is cancelled and the new one starts as a new subscription at `listPrice`. |
 | `upgrade.cancelsAddons` | Add-ons the device has that are not valid with the new package. They are cancelled as part of the upgrade. |
@@ -492,7 +527,8 @@ Sells one or more **new** packages to a device. Requires `Idempotency-Key`.
 | `customerId`, `serviceType`, `serviceCode` or `phone` | Required, as everywhere. |
 | `deviceId` | Required only when the customer has several devices and you used `phone`. |
 | `packageIds` | 1 to 20 package ids. Each must have `action: "subscribe"` in `allowed-packages`, except an add-on bought together with a base it needs. |
-| `amount` | Optional. If sent, it must equal the total price or the request is refused with `AMOUNT_MISMATCH`. Send it to be sure you charge what you showed your customer. |
+| `amount` | Optional. If sent, it must equal what your wallet will be charged (after the customer's credit, unless `useCustomerCredit` is `false`) or the request is refused with `AMOUNT_MISMATCH`. Send it to be sure you charge what you showed your customer. |
+| `useCustomerCredit` | Optional, default `true`: the customer's credit pays first and your wallet pays the rest. `false` charges your wallet the full price. |
 
 Response `201`:
 
@@ -506,14 +542,15 @@ Response `201`:
     "customerId": "2b1f6c0a-…", "deviceId": "8a4d2f10-…", "serviceCode": "483920",
     "name": "Aishath Ali",
     "packages": [ { "id": 4, "name": "FAMILY" }, { "id": 9, "name": "SPORTS" } ],
-    "amountCharged": 250, "listPrice": 250, "currency": "MVR",
+    "amountCharged": 150, "listPrice": 250, "customerCreditUsed": 100, "currency": "MVR",
     "usedFreeAccount": false,
     "upgrade": null,
-    "wallet": { "balanceBefore": 15150.5, "balanceAfter": 14900.5 }
+    "wallet": { "balanceBefore": 15150.5, "balanceAfter": 15000.5 }
   }
 }
 ```
 
+Here the customer had 100 in credit: it paid part of the 250 and your wallet paid 150.
 If `usedFreeAccount` is `true`, a free-account slot paid for the sale and `amountCharged` is 0.
 
 ### POST /customers/renew
@@ -537,7 +574,8 @@ Or only some packages:
 |---|---|
 | `all` | `true` renews every package on the device that you sell. Send this **or** `packageIds`. |
 | `packageIds` | The packages to renew. Each must be one the device has (`action: "renew"`). |
-| `amount` | Optional. If sent, it must equal the total or the request is refused with `AMOUNT_MISMATCH`. |
+| `amount` | Optional. If sent, it must equal what your wallet will be charged (after the customer's credit) or the request is refused with `AMOUNT_MISMATCH`. |
+| `useCustomerCredit` | Optional, default `true`. `false` charges your wallet the full price. |
 
 The response has the same shape as subscribe, with `"action": "renew"` and every renewed
 package listed in `packages`. With `all`, a device that has nothing to renew gets
@@ -561,6 +599,9 @@ done and what was charged.
 you saw earlier. If you quoted a price to your customer, send it as `amount` and the upgrade is
 refused with `AMOUNT_MISMATCH` (nothing charged) when the price has moved; fetch the packages
 again and retry with the same idempotency key. Without `amount`, the current price is charged.
+
+The customer's credit is used here too: the wallet pays the upgrade price less their credit.
+Send `"useCustomerCredit": false` to charge the full upgrade price.
 
 Response `201` has the same shape as subscribe, with:
 
@@ -666,7 +707,7 @@ What happened to a money request you sent.
 | 400 | `DEVICE_REQUIRED` | The customer has several devices; send `deviceId`. |
 | 400 | `PACKAGE_NOT_ELIGIBLE` | The package cannot be sold to this device. The message says why. |
 | 400 | `PACKAGE_NOT_ALLOWED`, `PACKAGE_NOT_ASSIGNED` | The package is not one of yours. |
-| 400 | `AMOUNT_MISMATCH` | `amount` differs from the current price. |
+| 400 | `AMOUNT_MISMATCH` | `amount` differs from what would be charged now (price after the customer's credit). |
 | 400 | `CRM_ENVIRONMENT_MISMATCH` | The package belongs to the other billing system (live or sandbox) than your account. |
 | 400 | `NOTHING_TO_RENEW` | `all: true` was sent but the device has no package to renew. |
 | 401 | `UNAUTHORIZED` | Missing, wrong or revoked API key. |
@@ -729,11 +770,11 @@ Requests for one operator are processed a few at a time; under a burst you may s
 
 1. `POST /customers/search`, then `POST /customers/allowed-packages` (or read from
    the search result's `eligibility`).
-2. Show the list with `price`.
+2. Show the list with `priceAfterCredit` (or `price` if you will send `"useCustomerCredit": false`).
 3. Call the endpoint matching the chosen package's `action`:
    `subscribe` → `/customers/subscribe` with `packageIds`,
    `upgrade` → `/customers/upgrade` with `packageId`.
-   Send the `price` you showed as `amount` if you want the sale refused when it has changed.
+   Send the amount you showed as `amount` if you want the sale refused when it has changed.
 
 **Reconcile at end of day**
 

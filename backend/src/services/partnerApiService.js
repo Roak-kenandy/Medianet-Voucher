@@ -93,9 +93,9 @@ export async function listPackages(apiClient, { serviceType } = {}) {
 function mapBalance(account) {
   if (!account) return null;
   return {
-    // Positive `balance` is money the customer owes; negative is credit they hold.
-    balance: money(account.balance),
-    credit: money(account.creditAmount),
+    // Never negative. CRM keeps one signed number (negative = credit); it is split here into
+    // what the customer has available and what they owe, so callers never see a minus sign.
+    balance: money(account.creditAmount),
     due: money(account.dueAmount),
     currency: account.currencyCode,
     accountState: account.state,
@@ -120,12 +120,14 @@ function mapSubscription(service) {
 
 function mapEligibility(customer, packagesById) {
   if (customer.packageOptions == null) return null;
+  const credit = Number(customer.account?.creditAmount) || 0;
   return customer.packageOptions
     .filter((option) => packagesById.has(option.packageId))
     .map((option) => {
       const pkg = packagesById.get(option.packageId);
       const listPrice = money(pkg.price_amount);
       const isChange = option.action === 'upgrade' && option.upgradeMode === 'change';
+      const price = option.eligible ? (isChange ? money(option.charge.amount) : listPrice) : null;
       return {
         packageId: option.packageId,
         name: pkg.name,
@@ -134,8 +136,10 @@ function mapEligibility(customer, packagesById) {
         action: option.action,
         available: option.eligible,
         reason: option.eligible ? null : option.reason,
-        // What the operator wallet is charged if bought now.
-        price: option.eligible ? (isChange ? money(option.charge.amount) : listPrice) : null,
+        // The price if bought now, before the customer's credit (charged with useCustomerCredit: false).
+        price,
+        // What the wallet is charged when the customer's credit is used (the default for sales).
+        priceAfterCredit: price == null ? null : money(Math.max(0, price - credit)),
         listPrice,
         currency: pkg.currency_code,
         upgrade:
@@ -264,6 +268,7 @@ export async function getAllowedPackages(apiClient, customerId, { deviceId, ...r
       ...item,
       action: item.action || 'subscribe',
       price: item.price ?? item.listPrice,
+      priceAfterCredit: item.priceAfterCredit ?? money(Math.max(0, item.listPrice - (entry.balance?.balance || 0))),
       // Not empty: sell it together with one of these base packages.
       requiresOneOf,
     }));
@@ -356,6 +361,7 @@ export async function purchase(apiClient, customerId, body, expectedAction, reqM
       packageIds: body.packageIds || (body.packageId ? [body.packageId] : []),
       renewAll: body.all === true,
       amount: body.amount,
+      useCustomerCredit: body.useCustomerCredit !== false,
       expectedAction,
     },
     channelMeta(apiClient, reqMeta, idempotencyKey)
@@ -371,6 +377,8 @@ export async function purchase(apiClient, customerId, body, expectedAction, reqM
     packages: result.packageIds.map((id, index) => ({ id, name: result.packageNames[index] })),
     amountCharged: money(result.amountCharged),
     listPrice: money(result.listPrice),
+    // Paid from the customer's own CRM credit; amountCharged is what the wallet paid on top.
+    customerCreditUsed: money(result.customerCreditUsed),
     currency: result.currencyCode,
     // True when a free-account slot paid for a new subscription instead of the wallet.
     usedFreeAccount: result.chargeType === 'trial',

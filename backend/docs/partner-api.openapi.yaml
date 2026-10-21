@@ -297,7 +297,8 @@ paths:
                 - required: [packageIds]
                   properties:
                     packageIds: { type: array, minItems: 1, maxItems: 20, items: { type: integer } }
-                    amount: { type: number, description: Optional. Must equal the total price if sent. }
+                    amount: { type: number, description: Optional. Must equal what the wallet will be charged (after customer credit) if sent. }
+                    useCustomerCredit: { type: boolean, default: true, description: Customer's CRM credit pays first and the wallet pays the rest. false charges the full price. }
       responses:
         "201":
           description: Subscribed
@@ -326,7 +327,8 @@ paths:
                   properties:
                     all: { type: boolean, enum: [true], description: Renew every package on the device. }
                     packageIds: { type: array, minItems: 1, maxItems: 20, items: { type: integer } }
-                    amount: { type: number, description: Optional. Must equal the total if sent. }
+                    amount: { type: number, description: Optional. Must equal what the wallet will be charged (after customer credit) if sent. }
+                    useCustomerCredit: { type: boolean, default: true, description: Customer's CRM credit pays first and the wallet pays the rest. false charges the full price. }
       responses:
         "201":
           description: Renewed
@@ -354,7 +356,8 @@ paths:
                 - required: [packageId]
                   properties:
                     packageId: { type: integer }
-                    amount: { type: number, minimum: 0, description: Optional. The price you quoted; refused with AMOUNT_MISMATCH if it has changed. Without it the current price is charged. }
+                    amount: { type: number, minimum: 0, description: Optional. The price you quoted (after customer credit); refused with AMOUNT_MISMATCH if it has changed. Without it the current price is charged. }
+                    useCustomerCredit: { type: boolean, default: true, description: Customer's CRM credit pays first and the wallet pays the rest. false charges the full price. }
       responses:
         "201":
           description: Upgraded
@@ -544,9 +547,8 @@ components:
     Balance:
       type: object
       properties:
-        balance: { type: number, description: Negative is credit the customer holds; positive is owed. }
-        credit: { type: number }
-        due: { type: number }
+        balance: { type: number, minimum: 0, description: The customer's available balance (credit). Never negative. }
+        due: { type: number, minimum: 0, description: What the customer owes. Never negative. }
         currency: { type: string }
         accountState: { type: string, nullable: true }
     Subscription:
@@ -575,7 +577,8 @@ components:
         action: { type: string, enum: [subscribe, renew, upgrade], nullable: true }
         available: { type: boolean }
         reason: { type: string, nullable: true }
-        price: { type: number, nullable: true, description: What the operator wallet is charged now. }
+        price: { type: number, nullable: true, description: Price if bought now, before the customer's credit. }
+        priceAfterCredit: { type: number, nullable: true, description: What the wallet is charged after the customer's credit (the default). }
         listPrice: { type: number }
         currency: { type: string }
         upgrade:
@@ -602,7 +605,8 @@ components:
         name: { type: string }
         role: { type: string, enum: [base, addon, standalone] }
         action: { type: string, enum: [subscribe, renew, upgrade] }
-        price: { type: number, description: What the operator wallet is charged now. }
+        price: { type: number, description: Price if bought now, before the customer's credit. }
+        priceAfterCredit: { type: number, description: What the wallet is charged after the customer's credit (the default). }
         listPrice: { type: number }
         currency: { type: string }
         upgrade: { type: object, nullable: true, description: Same shape as PackageEligibility.upgrade. }
@@ -683,6 +687,7 @@ components:
             properties: { id: { type: integer }, name: { type: string } }
         amountCharged: { type: number }
         listPrice: { type: number }
+        customerCreditUsed: { type: number, description: Paid from the customer's CRM credit; amountCharged is what the wallet paid. }
         currency: { type: string }
         usedFreeAccount: { type: boolean }
         upgrade:

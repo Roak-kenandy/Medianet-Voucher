@@ -1135,10 +1135,18 @@ class CRMService {
     accountId,
     plans,
     preferredDeviceId = null,
-    { paymentReference, paymentTypeId = null, beforeActivation = null, targetDeviceId = null } = {}
+    {
+      paymentReference,
+      paymentTypeId = null,
+      beforeActivation = null,
+      targetDeviceId = null,
+      paymentAmount = null,
+    } = {}
   ) {
+    // `paymentAmount` is less than the price when the customer's own credit pays the rest:
+    // CRM's invoice takes that part from the account balance.
     const totalAmount = Math.round(
-      plans.reduce((sum, plan) => sum + (Number(plan.priceAmount) || 0), 0) * 100
+      (paymentAmount ?? plans.reduce((sum, plan) => sum + (Number(plan.priceAmount) || 0), 0)) * 100
     ) / 100;
 
     let paymentResult = { paymentId: null };
@@ -1305,7 +1313,7 @@ class CRMService {
     contactId,
     accountId,
     packageIds,
-    { paymentReference, paymentTypeId = null, beforeActivation = null, deviceId = null } = {}
+    { paymentReference, paymentTypeId = null, beforeActivation = null, deviceId = null, paymentAmount = null } = {}
   ) {
     const plans = await this.resolvePlans(packageIds);
     const subscription = await this.setupSubscription(contactId, accountId, plans, null, {
@@ -1313,6 +1321,7 @@ class CRMService {
       paymentTypeId,
       beforeActivation,
       targetDeviceId: deviceId,
+      paymentAmount,
     });
 
     return {
@@ -1658,9 +1667,14 @@ class CRMService {
    * Continue existing packages: one payment for the total, then each of the customer's
    * current services is renewed for another period. `renewals` is [{ serviceId, packageId }].
    */
-  async renewServicesForContact(contactId, renewals, { paymentReference, paymentTypeId = null } = {}) {
+  async renewServicesForContact(
+    contactId,
+    renewals,
+    { paymentReference, paymentTypeId = null, paymentAmount = null } = {}
+  ) {
     const plans = await this.resolvePlans(renewals.map((item) => item.packageId));
-    const total = plans.reduce((sum, plan) => sum + (Number(plan.priceAmount) || 0), 0);
+    // Less than the price when the customer's credit pays the rest.
+    const total = paymentAmount ?? plans.reduce((sum, plan) => sum + (Number(plan.priceAmount) || 0), 0);
     return this.payThenUpdateService(contactId, total, { paymentReference, paymentTypeId }, async () => {
       const renewed = [];
       for (const { serviceId } of renewals) {
@@ -1717,12 +1731,13 @@ class CRMService {
     contactId,
     { serviceId, cancelServiceIds = [] },
     packageId,
-    { paymentReference, paymentTypeId = null, deviceId = null } = {}
+    { paymentReference, paymentTypeId = null, deviceId = null, paymentAmount = null } = {}
   ) {
     const result = await this.activatePackagesForContact(contactId, [packageId], {
       paymentReference,
       paymentTypeId,
       deviceId,
+      paymentAmount,
       beforeActivation: async () => {
         for (const addonServiceId of cancelServiceIds) {
           await this.updateService(addonServiceId, { action: 'CANCEL' }, `Cancel add-on ${addonServiceId}`);
@@ -1892,7 +1907,7 @@ class CRMService {
   async activatePackagesForContact(
     contactId,
     packageIds,
-    { paymentReference, paymentTypeId = null, beforeActivation = null, deviceId = null } = {}
+    { paymentReference, paymentTypeId = null, beforeActivation = null, deviceId = null, paymentAmount = null } = {}
   ) {
     this.assertConfigured();
     const serviceTag = await this.resolveServiceTagFromPackageIds(packageIds);
@@ -1912,6 +1927,7 @@ class CRMService {
       paymentTypeId,
       beforeActivation,
       deviceId,
+      paymentAmount,
     });
   }
 
