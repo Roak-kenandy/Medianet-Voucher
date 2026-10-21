@@ -747,12 +747,24 @@ export const partnerTopupSchema = z
   .strict()
   .superRefine(requireOneCustomerRef);
 
+/**
+ * What the caller expects their wallet to be charged. Zero is valid: the customer's credit,
+ * or on an upgrade the credit for the old package, can cover the whole price.
+ */
+const partnerChargeAmountSchema = z.coerce
+  .number()
+  .finite('Amount must be a valid number')
+  .min(0, 'Amount cannot be negative')
+  .max(100_000, 'Amount cannot exceed 100000 MVR')
+  .refine((value) => Math.abs(Math.round(value * 100) - value * 100) < 1e-6, 'Amount can have at most 2 decimal places')
+  .optional();
+
 export const partnerSubscribeSchema = z
   .object({
     ...partnerCustomerRef,
     deviceId: partnerDeviceIdSchema.optional(),
     packageIds: packageIdsSchema,
-    amount: customerAmountSchema.optional(),
+    amount: partnerChargeAmountSchema,
     useCustomerCredit: partnerUseCustomerCreditSchema,
   })
   .strict()
@@ -779,7 +791,7 @@ export const partnerRenewSchema = z
     deviceId: partnerDeviceIdSchema.optional(),
     packageIds: packageIdsSchema.optional(),
     all: z.literal(true).optional(),
-    amount: customerAmountSchema.optional(),
+    amount: partnerChargeAmountSchema,
     useCustomerCredit: partnerUseCustomerCreditSchema,
   })
   .strict()
@@ -803,14 +815,7 @@ export const partnerUpgradeSchema = z
     ...partnerCustomerRef,
     deviceId: partnerDeviceIdSchema.optional(),
     packageId: packageIdSchema,
-    // Zero is valid: the credit for the old package can cover the whole upgrade.
-    amount: z.coerce
-      .number()
-      .finite('Amount must be a valid number')
-      .min(0, 'Amount cannot be negative')
-      .max(100_000, 'Amount cannot exceed 100000 MVR')
-      .refine((value) => Math.abs(Math.round(value * 100) - value * 100) < 1e-6, 'Amount can have at most 2 decimal places')
-      .optional(),
+    amount: partnerChargeAmountSchema,
     useCustomerCredit: partnerUseCustomerCreditSchema,
   })
   .strict()
