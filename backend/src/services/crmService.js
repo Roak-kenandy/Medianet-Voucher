@@ -908,6 +908,8 @@ class CRMService {
   }
 
   extractServicesFromPayload(data = {}, plans = []) {
+    // Called with null when there is no create response (upgrades); the default only covers undefined.
+    if (!data || typeof data !== 'object') return [];
     const productIds = new Set(plans.map((plan) => plan.product_id));
     const candidates = [];
 
